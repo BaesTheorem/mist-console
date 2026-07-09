@@ -65,6 +65,13 @@ if(_fid)_d.dataset.font=_fid;}catch(e){}</script>
 <aside id="capPanel" hidden>
   <div class="capHead">settings <button id="capClose">×</button></div>
   <div class="capBody">
+    <h4>watchers <span class="count" id="nWatchers"></span></h4>
+    <div id="watchersSection">
+      <div id="watchersBody"></div>
+      <div class="routines-foot">
+        <div class="watchers-note routines-note">Ad-hoc "ping me when X changes" launchd jobs living in <code>watchers/</code> in the harness. Each polls on its own schedule and alerts via Discord DM + a spoken notification. To add one, just ask MIST in chat and she'll build it.</div>
+      </div>
+    </div>
     <h4>theme</h4><div id="themeList"></div>
     <h4>font</h4><div id="fontList"></div>
     <h4>quick access</h4>

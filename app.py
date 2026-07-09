@@ -1345,6 +1345,229 @@ def routines_delete():
     return jsonify({"ok": True})
 
 
+# ---- watchers ----------------------------------------------------------------
+# The harness watchers/ dir holds ad-hoc "ping me when X changes" launchd jobs
+# (restock, price, tour dates). Each is a self-contained subdir with a watch.py,
+# config.json, a com.exobrain.*.plist, and a watch.log. The Console only manages
+# them (launchd state, expiry, logs); building a new one stays a chat task.
+from datetime import datetime, timezone
+
+WATCHERS_DIR = os.path.join(HARNESS, "watchers")
+WATCHER_LOG_TAIL = 40
+
+
+def _watcher_dir(name):
+    """Validate a watcher name and return its directory, or None."""
+    if not re.fullmatch(r"[a-z0-9-]+", name or ""):
+        return None
+    d = os.path.join(WATCHERS_DIR, name)
+    return d if os.path.isdir(d) else None
+
+
+def _watcher_plist(d):
+    try:
+        for fn in sorted(os.listdir(d)):
+            if fn.startswith("com.exobrain.") and fn.endswith(".plist"):
+                return os.path.join(d, fn)
+    except Exception:
+        pass
+    return None
+
+
+def _watcher_label(d):
+    plist = _watcher_plist(d)
+    if not plist:
+        return None
+    try:
+        with open(plist, "rb") as f:
+            return plistlib.load(f).get("Label")
+    except Exception:
+        return None
+
+
+def _tail_lines(path, n):
+    try:
+        with open(path, errors="replace") as f:
+            return f.readlines()[-n:]
+    except Exception:
+        return []
+
+
+def _watcher_info(name):
+    d = _watcher_dir(name)
+    plist_path = d and _watcher_plist(d)
+    if not plist_path:
+        return None
+    try:
+        with open(plist_path, "rb") as f:
+            spec = plistlib.load(f)
+    except Exception:
+        return None
+    label = spec.get("Label") or ("com.exobrain.%s-watch" % name)
+    interval = spec.get("StartInterval")
+    if isinstance(interval, int) and interval > 0:
+        every = ("%dh" % (interval // 3600)) if interval >= 3600 else ("%dm" % (interval // 60))
+    elif spec.get("StartCalendarInterval"):
+        every = "calendar"
+    else:
+        every = ""
+    cfg = {}
+    try:
+        with open(os.path.join(d, "config.json")) as f:
+            cfg = json.load(f) or {}
+    except Exception:
+        pass
+    # The subject line comes from whichever config key the watcher type uses.
+    subject = cfg.get("product") or cfg.get("artist") or cfg.get("host") or cfg.get("event_url") or ""
+    desc = ""
+    try:
+        with open(os.path.join(d, "watch.py")) as f:
+            m = re.search(r'"""(.*?)"""', f.read(4000), re.S)
+        if m:
+            for line in m.group(1).splitlines():
+                if line.strip():
+                    desc = line.strip()
+                    break
+    except Exception:
+        pass
+    expires = cfg.get("expires_utc") or ""
+    expired = False
+    if expires:
+        try:
+            dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+            expired = dt <= datetime.now(timezone.utc)
+        except Exception:
+            pass
+    r = _launchctl(["print", "gui/%d/%s" % (os.getuid(), label)])
+    loaded = bool(r and r.returncode == 0)
+    last = _tail_lines(os.path.join(d, "watch.log"), 1)
+    return {
+        "name": name, "label": label, "every": every,
+        "subject": subject, "description": desc,
+        "expires": expires[:10], "expired": expired, "loaded": loaded,
+        "last_poll": (last[-1].strip()[:200] if last else ""),
+    }
+
+
+@app.route("/watchers")
+def watchers_list():
+    out = []
+    try:
+        for name in sorted(os.listdir(WATCHERS_DIR)):
+            info = _watcher_info(name)
+            if info:
+                out.append(info)
+    except Exception:
+        pass
+    return jsonify({"watchers": out})
+
+
+@app.route("/watchers/log/<name>")
+def watchers_log(name):
+    d = _watcher_dir(name)
+    if not d:
+        return jsonify({"ok": False, "error": "watcher not found"}), 404
+    lines = _tail_lines(os.path.join(d, "watch.log"), WATCHER_LOG_TAIL)
+    return jsonify({"ok": True, "log": "".join(lines) or "(no watch.log yet)"})
+
+
+@app.route("/watchers/toggle", methods=["POST"])
+def watchers_toggle():
+    """Enable (bootstrap) or disable (bootout) a watcher's launchd job."""
+    b = request.get_json(silent=True) or {}
+    name = (b.get("name") or "").strip()
+    enable = bool(b.get("enabled"))
+    d = _watcher_dir(name)
+    plist_src = d and _watcher_plist(d)
+    label = d and _watcher_label(d)
+    if not plist_src or not label:
+        return jsonify({"ok": False, "error": "watcher not found"}), 404
+    domain = "gui/%d" % os.getuid()
+    installed = os.path.join(LAUNCH_AGENTS, label + ".plist")
+    _launchctl(["bootout", "%s/%s" % (domain, label)])   # always clear the old job first
+    if not enable:
+        try:
+            if os.path.exists(installed):
+                os.remove(installed)
+        except Exception:
+            pass
+        return jsonify({"ok": True})
+    # launchd needs a real file in LaunchAgents, never a symlink into ~/Documents
+    # (TCC denies launchd through the symlink; same rule as the watchers README).
+    os.makedirs(LAUNCH_AGENTS, exist_ok=True)
+    try:
+        shutil.copyfile(plist_src, installed)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    r = _launchctl(["bootstrap", domain, installed])
+    if r is not None and r.returncode != 0:
+        return jsonify({"ok": False, "error": (r.stderr or "").strip() or "bootstrap failed"})
+    return jsonify({"ok": True})
+
+
+@app.route("/watchers/run", methods=["POST"])
+def watchers_run():
+    """Kickstart a loaded watcher so it polls right now."""
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    info = _watcher_info(name)
+    if not info:
+        return jsonify({"ok": False, "error": "watcher not found"}), 404
+    if not info["loaded"]:
+        return jsonify({"ok": False, "error": "enable it first"}), 400
+    r = _launchctl(["kickstart", "-k", "gui/%d/%s" % (os.getuid(), info["label"])])
+    if r is not None and r.returncode != 0:
+        return jsonify({"ok": False, "error": (r.stderr or "").strip() or "kickstart failed"})
+    return jsonify({"ok": True})
+
+
+@app.route("/watchers/expiry", methods=["POST"])
+def watchers_expiry():
+    """Set or clear a watcher's self-disarm date (config.json expires_utc).
+    watch.py re-reads config each poll, so no reload is needed."""
+    b = request.get_json(silent=True) or {}
+    name = (b.get("name") or "").strip()
+    raw = (b.get("expires") or "").strip()
+    d = _watcher_dir(name)
+    if not d:
+        return jsonify({"ok": False, "error": "watcher not found"}), 404
+    if raw and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return jsonify({"ok": False, "error": "date must be YYYY-MM-DD (blank = never)"}), 400
+    cfg_path = os.path.join(d, "config.json")
+    try:
+        with open(cfg_path) as f:
+            cfg = json.load(f) or {}
+        cfg["expires_utc"] = (raw + "T00:00:00+00:00") if raw else None
+        with open(cfg_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
+@app.route("/watchers/delete", methods=["POST"])
+def watchers_delete():
+    """Retire a watcher for good: launchd job, LaunchAgents plist, and its dir."""
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    d = _watcher_dir(name)
+    if not d:
+        return jsonify({"ok": False, "error": "watcher not found"}), 404
+    label = _watcher_label(d)
+    if label:
+        _launchctl(["bootout", "gui/%d/%s" % (os.getuid(), label)])
+        try:
+            p = os.path.join(LAUNCH_AGENTS, label + ".plist")
+            if os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
+    try:
+        shutil.rmtree(d)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
 def _sse(obj):
     return "data: " + json.dumps(obj) + "\n\n"
 

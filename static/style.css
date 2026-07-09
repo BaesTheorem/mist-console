@@ -357,6 +357,10 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .rt-status { font-size: 10px; color: var(--dim); min-height: 12px; }
 .rt-status.ok { color: var(--ok); }
 .rt-status.err { color: var(--err); }
+/* watchers section reuses the routine card styles; these two are its own */
+.wt-poll { color: var(--dim); font-size: 10px; font-family: var(--mono); line-height: 1.4; }
+.wt-log { border: 1px solid var(--line); padding: 6px 8px; margin: 0; max-height: 180px; overflow: auto;
+  font-size: 10px; line-height: 1.5; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
 .capHead { display: flex; padding: 10px 12px; border-bottom: 1px solid var(--line); color: var(--teal); }
 .capHead button { margin-left: auto; border: 0; font-size: 16px; }
 .capBody { overflow-y: auto; padding: 10px 12px; }
