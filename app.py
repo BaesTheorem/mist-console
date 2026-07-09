@@ -156,6 +156,64 @@ def _save_meta():
             pass
 
 
+def _recover_orphan_meta(sid):
+    """Self-heal an 'eaten' chat. A conversation could end up in sessions.json with
+    a null claude_session_id AND no title — showing as an unfindable blank 'New chat'
+    the user reads as lost — via two older paths: a window close before the id was
+    flushed, or a --resume start dying before init (bridge._watch clears the id).
+    The console's own per-session event log (data/<sid>.jsonl) survives both and
+    embeds the claude session_id, so recover the link and a readable title from it.
+    Returns (claude_session_id | None, title | None); either may stay None.
+
+    On its own this only relabels/relinks on the next launch; it does not resurrect
+    a Claude transcript that has since aged out of ~/.claude/projects (those chats
+    stay viewable via the console's replay but can't --resume)."""
+    path = os.path.join(DATA_DIR, f"{sid}.jsonl")
+    if not os.path.exists(path):
+        return None, None
+    csid = None
+    first_ts = None
+    text_title = None
+    try:
+        with open(path) as f:
+            for line in f:
+                if csid and text_title:
+                    break
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not csid and obj.get("session_id"):
+                    csid = obj["session_id"]
+                if first_ts is None and isinstance(obj.get("ts"), (int, float)):
+                    first_ts = obj["ts"]
+                # First readable assistant line makes a far better label than "New
+                # chat"; compaction may have stubbed it, hence the best-effort walk.
+                if not text_title and obj.get("type") == "assistant":
+                    msg = obj.get("message") or {}
+                    for block in (msg.get("content") or []):
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            t = (block.get("text") or "").strip().replace("\n", " ")
+                            if t:
+                                text_title = (t[:40] + "…") if len(t) > 40 else t
+                                break
+    except Exception:
+        return csid, None
+    title = text_title
+    if not title:
+        # No usable text (empty or fully compacted transcript): a dated placeholder
+        # still beats a blank 'New chat' — the user can at least see it's a real,
+        # recovered conversation and roughly when it happened.
+        stamp = ""
+        if first_ts:
+            try:
+                stamp = " · " + time.strftime("%b %-d", time.localtime(first_ts))
+            except Exception:
+                stamp = ""
+        title = "Recovered chat" + stamp
+    return csid, title
+
+
 def _load_meta():
     global _counter
     if not os.path.exists(SESSIONS_META):
@@ -165,14 +223,24 @@ def _load_meta():
             data = json.load(f)
     except Exception:
         return
+    healed = False
     for m in data:
         sid = m.get("id")
         if not sid:
             continue
+        title = m.get("title")
+        csid = m.get("claude_session_id")
+        # Orphaned 'eaten' chat: no link and no title, but a transcript on disk.
+        # Recover both so it reappears findable instead of as a blank 'New chat'.
+        if not csid and not title:
+            r_csid, r_title = _recover_orphan_meta(sid)
+            if r_csid or r_title:
+                csid, title = r_csid or csid, r_title or title
+                healed = True
         _sessions[sid] = ClaudeSession(
-            id=sid, title=m.get("title"), pinned=m.get("pinned", False),
+            id=sid, title=title, pinned=m.get("pinned", False),
             pin_order=m.get("pin_order", 0),
-            claude_session_id=m.get("claude_session_id"), model=m.get("model"),
+            claude_session_id=csid, model=m.get("model"),
             permission_mode=m.get("permission_mode") or DEFAULT_PERMISSION_MODE,
             import_path=m.get("import_path"), cwd=m.get("cwd") or _workspace,
             last_activity=m.get("last_activity"), autostart=False)  # dormant
@@ -182,6 +250,8 @@ def _load_meta():
             _counter = max(_counter, n)
         except ValueError:
             pass
+    if healed:
+        _save_meta()   # persist the recovered links/titles so the heal is one-time
 
 
 def _new_session():
