@@ -295,6 +295,8 @@ class ClaudeSession:
         self._ctx_override = False    # one-shot hard-cap override (next send passes)
         self._ctl_seq = 0            # control_request id counter (stop_task)
         self._pending_stops = {}     # control request_id -> task_id awaiting ack
+        self._pending_perms = {}     # can_use_tool request_id -> {input, suggestions}
+        self._init_sent = False      # control-protocol initialize handshake sent?
 
         # History loads lazily on first open (snapshot_history), NOT here. At
         # startup app.py constructs a ClaudeSession for every saved chat; eagerly
@@ -376,6 +378,12 @@ class ClaudeSession:
             cmd.append("--dangerously-skip-permissions")
         elif self.permission_mode:
             cmd += ["--permission-mode", self.permission_mode]
+            # Route every "ask" permission decision back to us over the control
+            # protocol as a can_use_tool control_request (see _handle_control_request
+            # + respond_permission), so default/acceptEdits/plan modes surface real
+            # Allow/Deny cards in the UI instead of silently auto-running (as
+            # bypassPermissions does — which stays untouched, no prompt tool).
+            cmd += ["--permission-prompt-tool", "stdio"]
         # AskUserQuestion is an interactive picker the CLI resolves itself; in this
         # headless stream-json process there's no TTY, so it auto-dismisses with no
         # answer. Disable it so the model asks in plain text, which the user can
@@ -423,9 +431,42 @@ class ClaudeSession:
             self.alive = True
             self._started_at = time.time()
             self._saw_init = False
+            self._init_sent = False
+            self._pending_perms = {}
             threading.Thread(target=self._read_stdout, daemon=True).start()
             threading.Thread(target=self._read_stderr, daemon=True).start()
             threading.Thread(target=self._watch, daemon=True).start()
+        # Enable the SDK control protocol so the CLI will route permission
+        # decisions to us as can_use_tool control_requests. Only needed when a
+        # prompt tool is in play (non-bypass modes); bypassPermissions never asks.
+        self._maybe_init_control()
+
+    def _maybe_init_control(self):
+        if self._init_sent or not self.alive:
+            return
+        if not self.permission_mode or self.permission_mode == "bypassPermissions":
+            return
+        self._init_sent = True
+        req = {"type": "control_request", "request_id": self._next_ctl_id("init"),
+               "request": {"subtype": "initialize", "hooks": None}}
+        self._write_stdin(req)
+
+    def _next_ctl_id(self, prefix):
+        with self._lock:
+            self._ctl_seq += 1
+            return f"console-{prefix}-{self._ctl_seq}"
+
+    def _write_stdin(self, obj):
+        """Write one JSON line to the claude process stdin. Returns True on success."""
+        if not self.alive or not self.proc or self.proc.stdin is None:
+            return False
+        try:
+            self.proc.stdin.write(json.dumps(obj) + "\n")
+            self.proc.stdin.flush()
+            return True
+        except (BrokenPipeError, ValueError, OSError):
+            self.alive = False
+            return False
 
     def _watch(self):
         code = self.proc.wait()
@@ -549,7 +590,42 @@ class ClaudeSession:
                         self._broadcast({"type": "system", "subtype": "task_stop_failed",
                                          "task_id": task_id,
                                          "error": str(resp.get("error") or "stop failed")})
+            elif obj.get("type") == "control_request":
+                # The CLI is asking US something over the control protocol. The
+                # one we care about is can_use_tool (a permission "ask"); surface
+                # it as a card. Anything else blocking, we decline so the CLI
+                # falls back to its default and never hangs waiting on us.
+                if self._handle_control_request(obj):
+                    continue   # handled + will emit its own UI event; don't raw-broadcast
             self._broadcast(obj)
+
+    def _handle_control_request(self, obj):
+        """Inbound control_request from the CLI. Returns True if consumed."""
+        req = obj.get("request") or {}
+        sub = req.get("subtype")
+        req_id = obj.get("request_id")
+        if sub == "can_use_tool":
+            self._pending_perms[req_id] = {
+                "input": req.get("input") or {},
+                "suggestions": req.get("permission_suggestions") or [],
+            }
+            self._broadcast({
+                "type": "permission_request",
+                "request_id": req_id,
+                "tool_name": req.get("tool_name"),
+                "input": req.get("input") or {},
+                "suggestions": req.get("permission_suggestions") or [],
+                "blocked_path": req.get("blocked_path"),
+            })
+            return True
+        # Unknown blocking request (e.g. request_user_dialog): decline politely so
+        # the CLI applies its default and the turn keeps moving.
+        if req_id:
+            self._write_stdin({"type": "control_response", "response": {
+                "subtype": "error", "request_id": req_id,
+                "error": f"unsupported control_request: {sub}"}})
+            return True
+        return False
 
     def _read_stderr(self):
         for line in self.proc.stderr:
@@ -706,6 +782,40 @@ class ClaudeSession:
             self._pending_stops.pop(req_id, None)
             self.alive = False
             return False
+
+    def respond_permission(self, request_id, decision, remember=False,
+                           updated_input=None, message=None):
+        """Answer a can_use_tool permission request the UI surfaced. `decision`
+        is "allow" or "deny". `remember=True` returns the CLI's own suggestions
+        as updatedPermissions (the "don't ask again this session" affordance).
+        Sends the control_response the CLI is blocked waiting on."""
+        pend = self._pending_perms.pop(request_id, None)
+        if pend is None:
+            return False   # stale / already answered
+        if decision == "allow":
+            result = {"behavior": "allow",
+                      "updatedInput": updated_input if updated_input is not None
+                      else pend.get("input", {})}
+            if remember and pend.get("suggestions"):
+                result["updatedPermissions"] = pend["suggestions"]
+        else:
+            result = {"behavior": "deny",
+                      "message": message or "Denied by the user.",
+                      "interrupt": True}
+        return self._write_stdin({"type": "control_response", "response": {
+            "subtype": "success", "request_id": request_id, "response": result}})
+
+    def interrupt(self):
+        """Stop the in-flight turn via the control protocol (the Esc the TUI has),
+        without killing the process — context is preserved and the next send just
+        continues. The CLI ends the turn and emits a result, which clears
+        _turn_active. Any permission cards still pending are moot, so drop them."""
+        if not self.alive or not self.proc or self.proc.stdin is None:
+            return False
+        self._pending_perms.clear()
+        req = {"type": "control_request", "request_id": self._next_ctl_id("interrupt"),
+               "request": {"subtype": "interrupt"}}
+        return self._write_stdin(req)
 
     # ---- auth slash commands ----------------------------------------------
     # The headless `claude -p` stream-json process does NOT execute interactive
