@@ -81,9 +81,19 @@ Backend: `/sessions` GET/POST, `/sessions/<id>` DELETE, `/sessions/<id>/pin` POS
 - **File picker** — the `file` button opens the native open dialog (`window.pywebview.api.pick_file`) and inserts the chosen absolute path(s) into the input, so MIST can `Read` them. Browser dev mode falls back to a hidden file input (filenames only).
 - **Spoken boot greeting** — on launch MIST speaks one of several in-character greetings (`GREETINGS` in `app.py`) in her cloned voice, and shows it in the log. The greetings are **pre-rendered** to `greetings/greet_N.wav` so playback is instant (no ~28s TTS cold start). To change them: edit `GREETINGS`, start the voice service, and re-render the WAVs (index-aligned).
 
-## Permissions (v1 caveat)
+## Permissions (interactive cards)
 
-v1 runs the session with `--dangerously-skip-permissions` (same as the harness already runs headless) so tools execute without a permission round-trip the UI doesn't render yet. **Phase 2** replaces this with interactive permission cards + a mode switcher (default / acceptEdits / plan / bypass). See the roadmap.
+New chats default to **bypassPermissions** (`--dangerously-skip-permissions`), so MIST runs unprompted — the autonomous routines and quick-entry flows depend on that, and it stays byte-for-byte the old behavior.
+
+Switch a chat to **default / acceptEdits / plan** via the perm badge and the Console now renders real **Allow / Allow-for-session / Deny** cards, just like the TUI. Mechanism (all confirmed against the live `claude` binary):
+
+- In a non-bypass mode the session spawns with `--permission-prompt-tool stdio` and sends an `initialize` control_request at start. That makes the CLI route every "ask" decision back over the control protocol as a `can_use_tool` control_request.
+- `bridge.py` catches it (`_handle_control_request`), re-broadcasts it as a `permission_request` event, and the UI renders a card showing **what** the tool will do — a red/green **diff** for Edit/Write/MultiEdit, the **plan** for ExitPlanMode, the **command** for Bash, a **checklist** for TodoWrite.
+- The answer is relayed via `POST /sessions/<id>/permission-response` → `respond_permission()` → a `control_response` (`{behavior:"allow", updatedInput}` or `{behavior:"deny"}`). "Allow, don't ask again" returns the CLI's own `permission_suggestions` as `updatedPermissions` (e.g. auto-accept edits for the session).
+
+### Interrupt
+
+Press **Esc** (or click the send button, which becomes **stop** while a turn runs and the composer is empty) to cancel an in-flight turn. This sends an `interrupt` control_request — the process is **not** killed, so context is preserved and the next message just continues (unlike the old kill/restart).
 
 ## MCP parity with the CLI
 
@@ -104,13 +114,15 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 
 ## Roadmap (bolt-on order)
 
-1. **Interactive permissions** — render permission requests as Allow/Deny cards; mode switcher in the top bar.
-2. **Slash-command palette** — `/` autocomplete from the init `slash_commands` list.
-3. **Interrupt / stop** — cancel an in-flight turn.
-4. **Diff viewer** — pretty Edit/Write tool inputs as diffs.
-5. **Image paste + @-file mentions.**
-6. **MIST voice** — speak responses via `mist-voice`; reactive avatar.
-7. **Session list / resume** via `--resume <session_id>`.
+- [x] **Interactive permissions** — Allow/Deny/Allow-for-session cards over the control protocol (see above).
+- [x] **Slash-command palette** — `/` autocomplete from the init `slash_commands` list.
+- [x] **Interrupt / stop** — Esc / stop button cancels an in-flight turn (`interrupt` control_request, no restart).
+- [x] **Diff viewer** — Edit/Write/MultiEdit render as red/green diffs; TodoWrite as a checklist.
+- [x] **Image paste** — clipboard + drag-drop attachments.
+- [x] **Session list / resume** — dormant revival via `--resume <session_id>`.
+- [ ] **@-file mentions** — `@` path autocomplete in the composer.
+- [ ] **MIST voice** — speak responses via `mist-voice`; reactive avatar.
+- [ ] **Runtime model/mode switch** — `set_model` / `set_permission_mode` control_requests instead of kill/restart (the control channel already supports both).
 
 ## Dependencies
 

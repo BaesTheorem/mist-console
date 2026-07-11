@@ -758,6 +758,35 @@ def set_permission(sid):
     return jsonify({"ok": True, "mode": mode})
 
 
+@app.route("/sessions/<sid>/permission-response", methods=["POST"])
+def permission_response(sid):
+    """Answer a can_use_tool permission card (Allow / Allow-for-session / Deny).
+    Body: {request_id, decision:"allow"|"deny", remember?:bool, message?:str}.
+    Relays the control_response the CLI is blocked waiting on."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    ok = s.respond_permission(
+        d.get("request_id"),
+        d.get("decision", "deny"),
+        remember=bool(d.get("remember")),
+        message=d.get("message"))
+    return jsonify({"ok": ok})
+
+
+@app.route("/sessions/<sid>/interrupt", methods=["POST"])
+def interrupt_turn(sid):
+    """Stop the in-flight turn (the Esc/stop button) without killing the process,
+    via the control protocol — context is kept and the next send continues."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    if not s.interrupt():
+        return jsonify({"ok": False, "error": "backend not running"}), 409
+    return jsonify({"ok": True})
+
+
 @app.route("/sessions/<sid>/tasks/<task_id>/stop", methods=["POST"])
 def stop_bg_task(sid, task_id):
     """Kill one background task on a session (the ✕ in the task monitor).

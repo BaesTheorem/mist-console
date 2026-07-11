@@ -985,3 +985,56 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 }
 /* tab-rail dot: an active background task pulses teal like a working turn */
 .tab .dot.bg { background: var(--teal); animation: dot-breathe 1.15s ease-in-out infinite; }
+
+/* ---------- rich tool input: diffs + todo lists ---------- */
+.tool .toolrich { margin: 0; padding: 0; font-size: 12px; }
+.diff { font-family: var(--mono); white-space: pre; overflow-x: auto; }
+.diff + .diff { border-top: 1px dashed var(--line); }
+.difffile {
+  font-family: var(--mono); font-size: 11px; color: var(--dim);
+  padding: 4px 10px; border-bottom: 1px solid var(--line); background: #0b1722;
+}
+.dl { padding: 0 10px; }
+.dl .dg { display: inline-block; width: 1ch; margin-right: 8px; color: var(--dim); user-select: none; }
+.dl.add { background: rgba(60, 180, 110, 0.12); color: #b6e3c6; }
+.dl.add .dg { color: var(--ok); }
+.dl.del { background: rgba(210, 80, 80, 0.12); color: #e8b6b6; }
+.dl.del .dg { color: var(--err); }
+.dl.ctx { color: #8ba0b2; }
+.todos { padding: 6px 10px; display: flex; flex-direction: column; gap: 3px; }
+.todo { display: flex; gap: 8px; align-items: baseline; color: #b9ccdb; }
+.todo .tg { width: 1ch; color: var(--dim); }
+.todo.completed { color: var(--dim); text-decoration: line-through; }
+.todo.completed .tg { color: var(--ok); }
+.todo.in_progress { color: var(--gold); }
+.todo.in_progress .tg { color: var(--gold); }
+
+/* ---------- interactive permission cards ---------- */
+.perm-card { border: 1px solid var(--teal); margin: 10px 0; background: #0f2030; }
+.perm-card.plan { border-color: var(--violet); }
+.perm-card.answered { border-color: var(--line); opacity: 0.72; }
+.perm-head { padding: 7px 11px; color: var(--teal); font-size: 13px; border-bottom: 1px solid var(--line); }
+.perm-card.plan .perm-head { color: var(--violet); }
+.perm-head b { color: var(--text); }
+.perm-icon { color: var(--gold); margin-right: 4px; }
+.perm-verdict { margin-left: 8px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+.perm-body { padding: 4px 0; max-height: 340px; overflow: auto; border-bottom: 1px solid var(--line); }
+.perm-body .perm-plan { padding: 8px 11px; max-height: none; }
+.perm-body .perm-sum { padding: 8px 11px; font-family: var(--mono); font-size: 12px; color: #b9ccdb; }
+.perm-cmd { margin: 0; padding: 8px 11px; font-family: var(--mono); font-size: 12px; color: #b9ccdb; white-space: pre-wrap; overflow-x: auto; }
+.perm-actions { display: flex; gap: 8px; padding: 8px 11px; }
+.perm-btn {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+  background: #0b1722; color: var(--text); border: 1px solid var(--line);
+  padding: 5px 12px; cursor: pointer;
+}
+.perm-btn:hover { border-color: var(--teal); }
+.perm-btn.allow { color: var(--ok); }
+.perm-btn.allow:hover { border-color: var(--ok); }
+.perm-btn.always { color: var(--teal); }
+.perm-btn.deny { color: var(--err); }
+.perm-btn.deny:hover { border-color: var(--err); }
+.perm-btn:focus { outline: 1px solid var(--focus); outline-offset: 1px; }
+
+/* the send button doubles as an interrupt while a turn runs */
+#sendBtn[data-mode="stop"] { color: var(--err); border-color: var(--err); }
