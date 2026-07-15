@@ -16,12 +16,15 @@
 	<string>/Users/alexhedtke/Documents/mist-console/routine-runs.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/alexhedtke/Documents/mist-console/routine-runs.log</string>
+	<!-- 23:30 local — moved off 22:00 so it no longer races evening-winddown's own
+	     git commit+push (both hit the harness repo → non-fast-forward failures).
+	     Now runs after winddown finishes, as a true end-of-day safety-net commit. -->
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>
-		<integer>22</integer>
+		<integer>23</integer>
 		<key>Minute</key>
-		<integer>0</integer>
+		<integer>30</integer>
 	</dict>
 </dict>
 </plist>
