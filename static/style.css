@@ -933,10 +933,34 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
   font-size: 12px; color: var(--text);
 }
 #bgMonitor .bgm-head {
+  display: flex; align-items: center; gap: 8px;
   padding: 6px 10px; border-bottom: 1px solid var(--line);
   color: var(--teal); letter-spacing: .3px;
-  position: sticky; top: 0; background: var(--bg);
+  position: sticky; top: 0; background: var(--bg); z-index: 1;
 }
+#bgMonitor .bgm-title { flex: 1 1 auto; min-width: 0; }
+#bgMonitor .bgm-collapse {
+  flex: 0 0 auto; background: none; border: 1px solid var(--line);
+  color: var(--dim); font: inherit; font-size: 13px; line-height: 1;
+  padding: 1px 8px; cursor: pointer;
+}
+#bgMonitor .bgm-collapse:hover { border-color: var(--teal); color: var(--teal); }
+/* collapsed: shed the panel chrome and show only the pill on the right edge */
+#bgMonitor.collapsed {
+  width: auto; max-height: none; overflow: visible;
+  border: 0; background: none;
+}
+#bgMonitor .bgm-pill {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 11px; font: inherit; font-size: 12px; letter-spacing: .3px;
+  background: var(--bg); border: 1px solid var(--teal); color: var(--teal);
+  cursor: pointer;
+}
+#bgMonitor .bgm-pill:hover { background: #16374f; }
+#bgMonitor .bgm-pill.running .bgm-pill-glyph {
+  animation: dot-breathe 1.15s ease-in-out infinite;
+}
+#bgMonitor .bgm-pill-count { font-weight: 600; }
 #bgMonitor .bgm-row {
   display: flex; gap: 8px; padding: 8px 10px;
   border-bottom: 1px solid var(--line-soft);
