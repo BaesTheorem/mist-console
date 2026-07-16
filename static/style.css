@@ -662,6 +662,16 @@ html[data-theme="solarpunk"] .msg.user .body,
 html[data-theme="solarpunk"] #modelCard,
 html[data-theme="solarpunk"] #permCard,
 html[data-theme="solarpunk"] .scratch-item { box-shadow: 0 1px 4px rgba(74,60,30,.10); }
+
+/* --- interactive permission cards (base is hard-coded dark; re-theme for cream) --- */
+html[data-theme="solarpunk"] .perm-card {
+  background: var(--surface);
+  border-radius: 10px; box-shadow: 0 1px 4px rgba(74,60,30,.10);
+}
+html[data-theme="solarpunk"] .perm-body .perm-sum,
+html[data-theme="solarpunk"] .perm-cmd { color: #5E6B4B; }
+html[data-theme="solarpunk"] .perm-btn { background: var(--hover); border-radius: var(--radius); }
+html[data-theme="solarpunk"] .perm-btn:hover { background: var(--active); }
 html[data-theme="solarpunk"] #capPanel,
 html[data-theme="solarpunk"] #notesPanel { box-shadow: -2px 0 16px rgba(74,60,30,.10); }
 
