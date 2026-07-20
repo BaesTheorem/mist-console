@@ -37,29 +37,58 @@ cd "$HARNESS"
 # for days — and for weekly jobs (local-events-scan) up to a week. So capture
 # the exit, tee the output, and classify: genuine config errors still fail
 # loudly (keep the EX_CONFIG 78 / not-logged-in guard meaningful); known
-# transient failures exit 0 so they don't leave a stale FAIL flag lit.
-set +e
-OUT="$("$CLAUDE" -p --dangerously-skip-permissions "$PROMPT" 2>&1)"
-RC=$?
-printf '%s\n' "$OUT"
+# transient failures don't leave a stale FAIL flag lit.
+#
+# But "don't flag it" isn't the same as "don't produce the briefing". A dropped
+# connection mid-response (the 2026-07-20 morning-briefing incident) left the day
+# with NO briefing at all. So first RETRY transient failures in-process a few
+# times with backoff — a momentary blip almost always clears within a minute or
+# two, which recovers the run on the same morning. Only if every attempt hits a
+# transient error do we give up, and then:
+#   - default: exit 0 (quiet, no stale FAIL) — preserves behavior for routines
+#     that call this script directly (afternoon-email-scan, weekly-review,
+#     local-events-scan).
+#   - if ROUTINE_SIGNAL_TRANSIENT=1 (set by run-routine-catchup.sh): exit 75
+#     (EX_TEMPFAIL) so the catch-up wrapper knows the run is INCOMPLETE and can
+#     leave its per-day marker unstamped, letting the next fire re-attempt.
+MAX_ATTEMPTS="${ROUTINE_MAX_ATTEMPTS:-3}"
+TRANSIENT_RE='connection closed|failedtoopensocket|unable to connect|session limit|rate limit|overloaded|timed out|econnreset|api error'
+attempt=0
+while :; do
+	attempt=$((attempt + 1))
+	set +e
+	OUT="$("$CLAUDE" -p --dangerously-skip-permissions "$PROMPT" 2>&1)"
+	RC=$?
+	set -e
+	printf '%s\n' "$OUT"
 
-if [ "$RC" -eq 0 ]; then
-	exit 0
-fi
+	if [ "$RC" -eq 0 ]; then
+		exit 0
+	fi
 
-# Genuine config/auth failures — these SHOULD stick as FAIL so they get fixed.
-if [ "$RC" -eq 78 ] || printf '%s' "$OUT" | grep -qiE 'not logged in|invalid api key|authentication_error|please run .*login'; then
-	echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — genuine config/auth failure (rc=$RC); leaving FAIL flag for investigation."
+	# Genuine config/auth failures — these SHOULD stick as FAIL so they get fixed.
+	# Never retry these; retrying a bad credential just wastes minutes.
+	if [ "$RC" -eq 78 ] || printf '%s' "$OUT" | grep -qiE 'not logged in|invalid api key|authentication_error|please run .*login'; then
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — genuine config/auth failure (rc=$RC); leaving FAIL flag for investigation."
+		exit "$RC"
+	fi
+
+	# Known-transient API/network/usage failure — retry before giving up.
+	if printf '%s' "$OUT" | grep -qiE "$TRANSIENT_RE"; then
+		if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+			backoff=$((attempt * 30))
+			echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — transient failure (rc=$RC), attempt $attempt/$MAX_ATTEMPTS; retrying in ${backoff}s."
+			sleep "$backoff"
+			continue
+		fi
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — transient failure persisted after $MAX_ATTEMPTS attempts (rc=$RC); not flagging as FAIL."
+		if [ "${ROUTINE_SIGNAL_TRANSIENT:-0}" = "1" ]; then
+			exit 75   # EX_TEMPFAIL — tell the catch-up wrapper to retry later.
+		fi
+		exit 0
+	fi
+
+	# Unknown nonzero — surface it (better a rare false alarm than a silent break).
+	echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — unclassified nonzero exit (rc=$RC); flagging."
 	exit "$RC"
-fi
-
-# Known-transient API/network/usage failures — real work may have completed;
-# don't let a one-off blip pose as a broken routine. Exit 0 so the flag clears.
-if printf '%s' "$OUT" | grep -qiE 'connection closed|failedtoopensocket|unable to connect|session limit|rate limit|overloaded|timed out|econnreset|api error'; then
-	echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — transient API/network failure (rc=$RC); not flagging as FAIL."
-	exit 0
-fi
-
-# Unknown nonzero — surface it (better a rare false alarm than a silent break).
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — unclassified nonzero exit (rc=$RC); flagging."
-exit "$RC"
+done
