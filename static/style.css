@@ -2,20 +2,25 @@
    This sheet IS the default "Terminal" theme. To add another theme: register it
    in THEMES (app.js) and override what you need under html[data-theme="<id>"]
    below. The active theme lives in <html data-theme> (set pre-paint in index.html
-   and persisted to localStorage as "theme"). */
+   and persisted to localStorage as "theme").
+   Colors ride on the Material Design 3 token layer (md-tokens.css, loaded
+   first): the legacy vars below are now aliases onto --md-sys-color-* roles, so
+   both themes share one system — surfaces step up the surface-container ladder,
+   hairlines are outline-variant, accents are primary. The flat/sharp skin is
+   the shape scale (all 0 in terminal), not a departure from MD3. */
 :root {
-  --bg:        #0E1C2B;   /* deep Cloud night */
-  --bg-2:      #11233440; /* translucent panel */
-  --line:      #1f3b53;   /* hairline */
-  --line-soft: #173044;
-  --text:      #d7e6ef;
-  --dim:       #6f8ba0;
-  --teal:      #2bd4d4;   /* MIST accent (statusline 256-44) */
-  --violet:    #9b8cff;
-  --user:      #cfe8ff;
-  --warn:      #ffb454;
-  --err:       #ff6b6b;
-  --ok:        #4ade80;   /* usage headroom (green) */
+  --bg:        var(--md-sys-color-surface);            /* deep Cloud night */
+  --bg-2:      #11233440;                              /* translucent panel */
+  --line:      var(--md-sys-color-outline-variant);    /* hairline */
+  --line-soft: color-mix(in srgb, var(--md-sys-color-outline-variant) 55%, transparent);
+  --text:      var(--md-sys-color-on-surface);
+  --dim:       var(--md-sys-color-outline);
+  --teal:      var(--md-sys-color-primary);   /* MIST accent */
+  --violet:    var(--mist-ext-thinking);
+  --user:      var(--mist-ext-user);
+  --warn:      var(--mist-ext-warn);
+  --err:       var(--md-sys-color-error);
+  --ok:        var(--mist-ext-ok);            /* usage headroom (green) */
   --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; }
@@ -75,7 +80,7 @@ html[data-theme="solarpunk"] #logs::after {
 #topbar {
   display: flex; align-items: center; gap: 14px;
   padding: 8px 14px; border-bottom: 1px solid var(--line);
-  background: #0c1825;
+  background: var(--md-sys-color-surface-container-low);
   /* above the side panels so their trigger buttons stay clickable (toggle-to-close) */
   position: relative; z-index: 40;
 }
@@ -96,12 +101,12 @@ html[data-theme="solarpunk"] #logs::after {
 /* badges that open a picker on click */
 .badge.clickable, #repo.clickable { cursor: pointer; }
 .badge.clickable:hover, #repo.clickable:hover { border-color: var(--teal); color: var(--teal); }
-.badge.usage { color: #8fb0c4; }
+.badge.usage { color: var(--md-sys-color-on-surface-variant); }
 /* color-coded usage levels: green headroom → yellow → red near limit */
 .badge.usage.lvl-ok   { color: var(--ok);   border-color: var(--ok); }
 .badge.usage.lvl-warn { color: var(--warn); border-color: var(--warn); }
 .badge.usage.lvl-crit { color: var(--err);  border-color: var(--err); font-weight: 600; }
-.badge.repo { color: #8fb0c4; }
+.badge.repo { color: var(--md-sys-color-on-surface-variant); }
 #repo[data-state="ok"]      { color: var(--ok);  border-color: var(--ok); }
 #repo[data-state="warn"]    { color: var(--err); border-color: var(--err); font-weight: 600; }
 #repo[data-state="unknown"] { color: var(--dim); }
@@ -121,7 +126,7 @@ button:hover { border-color: var(--teal); color: var(--teal); }
 #mid { display: flex; min-height: 0; overflow: hidden; }
 #tabrail {
   width: var(--rail-w, 196px); flex: 0 0 var(--rail-w, 196px);
-  border-right: 1px solid var(--line); background: #0b1826;
+  border-right: 1px solid var(--line); background: var(--md-sys-color-surface-container-low);
   display: flex; flex-direction: column; min-width: 0;
 }
 #railResize {
@@ -146,26 +151,26 @@ body.col-resizing { cursor: col-resize; user-select: none; }
   user-select: none;   /* so click-drag reordering doesn't select the title text */
   transition: background .12s ease, color .12s ease, border-left-color .12s ease;
 }
-.tab:hover { background: #102a3e; color: #b3c9db; border-left-color: var(--line); }
+.tab:hover { background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant); border-left-color: var(--line); }
 /* lifted, follows the pointer; the no-transition rule keeps it glued to the cursor
    while the OTHER pinned tabs slide out of the way (their transition is set inline) */
 .tab.dragging { opacity: .92; z-index: 10; position: relative;
   box-shadow: 0 4px 14px rgba(0,0,0,.35); cursor: grabbing; }
 body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab.drag-over { box-shadow: inset 0 2px 0 0 var(--teal); }   /* legacy insertion line (unused) */
-.tab.active { background: #14324c; color: var(--text); border-left-color: var(--teal); }
+.tab.active { background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container-high)); color: var(--text); border-left-color: var(--teal); }
 .tab .dot { width: 7px; height: 7px; flex: 0 0 7px; background: var(--dim); border-radius: 0; }
-.tab .dot.idle { background: #3a566e; }
+.tab .dot.idle { background: var(--md-sys-color-outline-variant); }
 /* thinking/working dots breathe so you can spot which chats are live at a glance */
 .tab .dot.thinking { background: var(--violet); animation: dot-breathe 1.15s ease-in-out infinite; }
 .tab .dot.working { background: var(--teal); animation: dot-breathe 1.15s ease-in-out infinite; }
 .tab .dot.error { background: var(--err); }
 @keyframes dot-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 .tab .ttitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab .trename { flex: 1; min-width: 0; background: #0b1722; border: 1px solid var(--teal);
+.tab .trename { flex: 1; min-width: 0; background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--teal);
   color: var(--text); font-family: var(--mono); font-size: 12px; padding: 1px 4px; }
 .tab .trename:focus { outline: none; }
-.tab .tpin { color: #2f4a60; padding: 0 3px; opacity: 0;
+.tab .tpin { color: var(--md-sys-color-outline-variant); padding: 0 3px; opacity: 0;
   display: inline-flex; align-items: center; justify-content: center; }
 .tab:hover .tpin { opacity: 1; }
 .tab .tpin.on { color: var(--teal); opacity: 1; }
@@ -185,9 +190,9 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tabsection.pinned { color: var(--teal); }
 
 /* pinned conversations get a tinted band + a teal edge so they read as a group */
-.tab.pinned { background: #0e2435; border-left-color: var(--teal); }
-.tab.pinned:hover { background: #13314a; }
-.tab.pinned.active { background: #16374f; }
+.tab.pinned { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container-low)); border-left-color: var(--teal); }
+.tab.pinned:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container-high)); }
+.tab.pinned.active { background: color-mix(in srgb, var(--md-sys-color-primary) 16%, var(--md-sys-color-surface-container-high)); }
 .tab.pinned .tpin { opacity: 1; }
 .tab.pinned .ttitle { color: var(--text); }
 
@@ -197,17 +202,17 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 /* floating "jump to present" pill — only shown when scrolled up off the bottom */
 #jumpBtn {
   position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
-  z-index: 6; background: #102536; border: 1px solid var(--teal); color: var(--teal);
+  z-index: 6; background: var(--md-sys-color-surface-container-high); border: 1px solid var(--teal); color: var(--teal);
   padding: 5px 12px; font-size: 12px; letter-spacing: .3px;
 }
-#jumpBtn:hover { background: #16374f; }
+#jumpBtn:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 16%, var(--md-sys-color-surface-container-high)); }
 #jumpBtn[hidden] { display: none; }
 
 /* collapse/expand toggle for the tab rail — pinned to the logs' top-left corner */
 #railToggle {
   position: absolute; top: 8px; left: 8px; z-index: 6;
   width: 22px; height: 22px; line-height: 1; text-align: center;
-  padding: 0; background: #0c1825; color: var(--dim); border: 1px solid var(--line);
+  padding: 0; background: var(--md-sys-color-surface-container-low); color: var(--dim); border: 1px solid var(--line);
 }
 #railToggle:hover { border-color: var(--teal); color: var(--teal); }
 #mid.rail-collapsed #tabrail { width: 0; flex-basis: 0; overflow: hidden; border-right: 0; }
@@ -231,7 +236,7 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
   text-transform: none; font-size: 10px; }
 .msg.user .body  {
   color: var(--user); white-space: pre-wrap;
-  background: #102a44; border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--md-sys-color-tertiary) 14%, var(--md-sys-color-surface)); border: 1px solid var(--line);
   border-left: 3px solid var(--user); padding: 9px 12px;
 }
 .msg.mist .body  { color: var(--text); }
@@ -240,7 +245,7 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
   -webkit-user-select: text; user-select: text;
 }
 .msg .body { cursor: text; }
-::selection { background: rgba(43, 212, 212, .30); color: var(--text); }
+::selection { background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent); color: var(--text); }
 
 /* thinking */
 .think {
@@ -252,22 +257,22 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
   padding: 4px 8px; list-style: none; text-transform: uppercase; letter-spacing: 1px;
 }
 .think > summary::-webkit-details-marker { display: none; }
-.think .think-body { padding: 6px 10px; color: #9db3c6; white-space: pre-wrap; font-size: 12px; }
+.think .think-body { padding: 6px 10px; color: var(--md-sys-color-on-surface-variant); white-space: pre-wrap; font-size: 12px; }
 
 /* tool cards — collapsed by default (click the header to expand the code) */
 .tool { border: 1px solid var(--line); margin: 8px 0; }
 details.tool > summary.tool-head {
   display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
-  background: #0f2030; padding: 5px 9px; color: var(--teal); font-size: 12px;
+  background: var(--md-sys-color-surface-container); padding: 5px 9px; color: var(--teal); font-size: 12px;
 }
 details.tool > summary.tool-head::-webkit-details-marker { display: none; }
 details.tool > summary.tool-head::before { content: "▸"; color: var(--dim); }
 details.tool[open] > summary.tool-head::before { content: "▾"; }
 .tool .tname { font-weight: 700; }
-.tool .tsummary { flex: 1; min-width: 0; color: #9db3c6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool .tsummary { flex: 1; min-width: 0; color: var(--md-sys-color-on-surface-variant); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool .tstate { color: var(--dim); font-size: 11px; }
-.tool pre { margin: 0; padding: 8px 10px; overflow-x: auto; font-size: 12px; color: #b9ccdb; }
-.tool .tool-result { border-top: 1px dashed var(--line); color: #9db3c6; max-height: 280px; overflow: auto; }
+.tool pre { margin: 0; padding: 8px 10px; overflow-x: auto; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
+.tool .tool-result { border-top: 1px dashed var(--line); color: var(--md-sys-color-on-surface-variant); max-height: 280px; overflow: auto; }
 
 /* inline "thinking" spinner in the chat — full-width, MIST verb */
 .spinner { display: flex; align-items: center; gap: 8px; padding: 8px 2px; color: var(--violet); font-style: italic; font-size: 13px; }
@@ -277,10 +282,10 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 /* markdown body */
 .body p { margin: 0 0 9px; }
 .body pre {
-  background: #0b1722; border: 1px solid var(--line);
+  background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--line);
   padding: 9px 11px; overflow-x: auto; margin: 8px 0;
 }
-.body code { background: #0b1722; border: 1px solid var(--line-soft); padding: 0 4px; }
+.body code { background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--line-soft); padding: 0 4px; }
 .body pre code { border: 0; padding: 0; background: none; }
 
 /* code block with a hover "Copy" button */
@@ -289,7 +294,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .body .copy-btn {
   position: absolute; top: 6px; right: 6px;
   font-family: var(--mono); font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
-  background: #0b1722; color: var(--dim);
+  background: var(--md-sys-color-surface-container-lowest); color: var(--dim);
   border: 1px solid var(--line); padding: 2px 8px; cursor: pointer;
   opacity: 0; transition: opacity .12s;
 }
@@ -303,9 +308,9 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 /* GFM tables — flat/sharp: hairline grid, square corners, no shadow */
 .body .md-table { border-collapse: collapse; margin: 9px 0; width: auto; max-width: 100%; display: block; overflow-x: auto; font-size: 12px; }
 .body .md-table th, .body .md-table td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; }
-.body .md-table th { background: #0b1722; color: var(--teal); font-weight: 600; white-space: nowrap; }
-.body .md-table tbody tr:nth-child(even) td { background: #0c1c2b; }
-.body .md-table code { background: #0b1722; }
+.body .md-table th { background: var(--md-sys-color-surface-container-lowest); color: var(--teal); font-weight: 600; white-space: nowrap; }
+.body .md-table tbody tr:nth-child(even) td { background: var(--md-sys-color-surface-container-low); }
+.body .md-table code { background: var(--md-sys-color-surface-container-lowest); }
 .cursor { display: inline-block; width: 7px; background: var(--teal); animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
@@ -316,15 +321,15 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 /* start below the top bar so the trigger buttons stay visible + clickable */
 #capPanel {
   position: fixed; top: var(--topbar-h, 0px); right: 0; width: 340px; height: calc(100% - var(--topbar-h, 0px));
-  background: #0c1825; border-left: 1px solid var(--line);
+  background: var(--md-sys-color-surface-container-low); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; z-index: 20;
 }
 #capPanel[hidden] { display: none; }   /* id selector beats UA [hidden]; restore it */
 .routines-foot { border-top: 1px solid var(--line); padding: 8px 0 2px; margin-top: 8px; }
 .routines-note { color: var(--dim); font-size: 10px; line-height: 1.5; }
-.routines-note code { color: #9db3c6; }
+.routines-note code { color: var(--md-sys-color-on-surface-variant); }
 .rt-new { width: 100%; font-family: var(--mono); font-size: 12px; padding: 6px;
-  border: 1px solid var(--line); background: #0b1722; color: var(--teal); cursor: pointer; margin-bottom: 8px; }
+  border: 1px solid var(--line); background: var(--md-sys-color-surface-container-lowest); color: var(--teal); cursor: pointer; margin-bottom: 8px; }
 .rt-new:hover { border-color: var(--teal); }
 .routine { border: 1px solid var(--line); margin-bottom: 6px; }
 .routine > summary { padding: 7px 9px; cursor: pointer; list-style: none; }
@@ -341,7 +346,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .rt-field { display: flex; flex-direction: column; gap: 3px; }
 .rt-field label { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
 .rt-field input, .rt-field textarea {
-  background: #0b1722; border: 1px solid var(--line); color: var(--text);
+  background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--line); color: var(--text);
   font-family: var(--mono); font-size: 12px; padding: 5px 7px; width: 100%; }
 .rt-field input:focus, .rt-field textarea:focus { outline: none; border-color: var(--teal); }
 .rt-field textarea { min-height: 84px; resize: vertical; line-height: 1.45; }
@@ -349,11 +354,11 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .rt-enabled { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 12px; cursor: pointer; }
 .rt-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .rt-actions button { font-family: var(--mono); font-size: 12px; padding: 5px 10px;
-  border: 1px solid var(--line); background: #0b1722; color: var(--teal); cursor: pointer; }
+  border: 1px solid var(--line); background: var(--md-sys-color-surface-container-lowest); color: var(--teal); cursor: pointer; }
 .rt-actions button:hover { border-color: var(--teal); }
 .rt-actions .rt-del { color: var(--err); }
 .rt-actions .rt-del:hover, .rt-actions .rt-del.armed { border-color: var(--err); }
-.rt-actions .rt-del.armed { background: var(--err); color: #0c1825; }
+.rt-actions .rt-del.armed { background: var(--err); color: var(--md-sys-color-surface-container-low); }
 .rt-status { font-size: 10px; color: var(--dim); min-height: 12px; }
 .rt-status.ok { color: var(--ok); }
 .rt-status.err { color: var(--err); }
@@ -377,7 +382,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .qa-toggle { color: var(--text); font-size: 12px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .qa-rec {
   font-family: var(--mono); font-size: 13px; min-width: 88px;
-  border: 1px solid var(--line); background: #0b1722; color: var(--teal);
+  border: 1px solid var(--line); background: var(--md-sys-color-surface-container-lowest); color: var(--teal);
   padding: 5px 12px; cursor: pointer;
 }
 .qa-rec:hover { border-color: var(--teal); }
@@ -386,7 +391,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .qa-warn { color: var(--warn); font-size: 12px; flex: 1; }
 .qa-note { color: var(--dim); font-size: 11px; margin-top: 6px; line-height: 1.4; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.chips span { border: 1px solid var(--line); padding: 1px 6px; font-size: 11px; color: #9db3c6; }
+.chips span { border: 1px solid var(--line); padding: 1px 6px; font-size: 11px; color: var(--md-sys-color-on-surface-variant); }
 .chips span.pending { color: var(--warn); border-color: var(--warn); }
 
 /* ---- model / permission card ---- */
@@ -394,7 +399,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
    that opened it (anchorCard), instead of floating detached in the corner. */
 #modelCard, #permCard {
   position: fixed; top: 44px; left: auto; right: 14px; width: 240px; z-index: 30;
-  background: #0c1825; border: 1px solid var(--line);
+  background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line);
 }
 #permCard { width: 268px; }
 #modelCard[hidden], #permCard[hidden] { display: none; }
@@ -403,7 +408,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
   padding: 7px 12px; cursor: pointer; color: var(--text); font-size: 12px;
   display: flex; align-items: center; gap: 8px;
 }
-.modelrow:hover { background: #102536; color: var(--teal); }
+.modelrow:hover { background: var(--md-sys-color-surface-container-high); color: var(--teal); }
 .modelrow.sel { color: var(--teal); }
 .modelrow.sel::before { content: "▸"; color: var(--teal); }
 .modelrow:not(.sel)::before { content: "\00a0\00a0"; }
@@ -412,7 +417,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 /* ---- composer ---- */
 #composer {
   display: flex; gap: 8px; padding: 10px 14px;
-  border-top: 1px solid var(--line); background: #0c1825;
+  border-top: 1px solid var(--line); background: var(--md-sys-color-surface-container-low);
   position: relative;
 }
 
@@ -420,7 +425,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 #slashMenu {
   position: absolute; left: 14px; right: 14px; bottom: calc(100% + 0px);
   max-height: 280px; overflow-y: auto; z-index: 40;
-  background: #0c1825; border: 1px solid var(--line); border-bottom: 0;
+  background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line); border-bottom: 0;
 }
 #slashMenu[hidden] { display: none; }
 .slash-head {
@@ -433,12 +438,12 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
   border-bottom: 1px solid var(--line-soft);
 }
 .slash-item:last-child { border-bottom: 0; }
-.slash-item.sel { background: #102536; }
+.slash-item.sel { background: var(--md-sys-color-surface-container-high); }
 .slash-name { color: var(--teal); font-weight: 700; }
 #input {
   flex: 1; resize: none; max-height: 200px; overflow-y: hidden;
   box-sizing: border-box;
-  background: #0b1722; color: var(--text); border: 1px solid var(--line);
+  background: var(--md-sys-color-surface-container-lowest); color: var(--text); border: 1px solid var(--line);
   font-family: var(--mono); font-size: 13px; padding: 9px 11px; outline: none;
 }
 #input:focus { border-color: var(--teal); }
@@ -456,7 +461,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 #scratchBtn.has { color: var(--teal); border-color: var(--teal); }
 #notesPanel {
   position: fixed; top: var(--topbar-h, 0px); right: 0; width: 340px; height: calc(100% - var(--topbar-h, 0px));
-  background: #0c1825; border-left: 1px solid var(--line);
+  background: var(--md-sys-color-surface-container-low); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; z-index: 20;
 }
 #notesPanel[hidden] { display: none; }   /* id selector beats UA [hidden] */
@@ -469,7 +474,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .notes-foot { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); }
 #notesInput {
   flex: 1; resize: none; max-height: 160px; outline: none;
-  background: #0b1722; color: var(--text); border: 1px solid var(--line);
+  background: var(--md-sys-color-surface-container-lowest); color: var(--text); border: 1px solid var(--line);
   font-family: var(--mono); font-size: 12px; padding: 7px 9px;
 }
 #notesInput:focus { border-color: var(--teal); }
@@ -477,7 +482,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .scratch-empty { color: var(--dim); font-size: 11px; padding: 2px 0; line-height: 1.5; }
 .scratch-item {
   display: flex; align-items: flex-start; gap: 8px;
-  border: 1px solid var(--line); background: #0b1722; padding: 6px 8px;
+  border: 1px solid var(--line); background: var(--md-sys-color-surface-container-lowest); padding: 6px 8px;
 }
 .scratch-text { flex: 1; color: var(--text); font-size: 12px; line-height: 1.45;
   white-space: pre-wrap; word-break: break-word; }
@@ -485,14 +490,14 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .scratch-edit-btn { flex: 0 0 auto; color: var(--dim); padding: 3px 8px; font-size: 11px; }
 .scratch-edit-btn:hover { color: var(--teal); }
 .scratch-edit { flex: 1; min-width: 0; resize: none; outline: none;
-  background: #0b1722; border: 1px solid var(--teal); color: var(--text);
+  background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--teal); color: var(--text);
   font-family: var(--mono); font-size: 12px; padding: 4px 6px; line-height: 1.45; }
 .scratch-del { flex: 0 0 auto; border: 0; background: none; color: var(--dim); font-size: 14px; padding: 0 2px; }
 .scratch-del:hover { color: var(--err); border-color: transparent; }
 
 /* scrollbars */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: #1d3a52; }
+::-webkit-scrollbar-thumb { background: var(--md-sys-color-surface-variant); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ============================================================
@@ -507,30 +512,31 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
    phthalo night + blue neon sigils — and has been fully replaced.)
    ============================================================ */
 html[data-theme="solarpunk"] {
-  --bg:        #F3EEDD;   /* warm cream daylight */
+  /* legacy vars re-aliased onto the theme's own MD3 scheme (md-tokens.css) */
+  --bg:        var(--md-sys-color-surface-container);       /* warm cream daylight */
   --bg-2:      #FBF8EFcc;
-  --line:      #CBD8C2;   /* soft sage hairline */
-  --line-soft: #E3DECB;
-  --text:      #2E2A22;   /* deep bark — warm near-black, never cold */
-  --dim:       #7B7A5C;   /* sage-olive secondary text */
-  --teal:      #2F6B3C;   /* PRIMARY accent = forest green (was cyber-teal) */
-  --violet:    #BE8C12;   /* thinking = warm gold (was amethyst) */
-  --user:      #B5562F;   /* the human = terracotta */
-  --warn:      #C97A1C;   /* amber */
-  --err:       #B5402A;   /* warm brick */
-  --ok:        #2F6B3C;   /* forest green */
-  /* theme-local surfaces — all light/warm, never dark */
-  --surface:   #EFE8D3;   /* bars & panels: wheat */
-  --surface-2: #FFFFFF;   /* fields / raised chips */
-  --code-bg:   #ECE5D0;   /* parchment code blocks */
-  --hover:     #E7DEC4;   /* deeper wheat */
+  --line:      var(--md-sys-color-outline-variant);         /* soft hairline */
+  --line-soft: color-mix(in srgb, var(--md-sys-color-outline-variant) 50%, transparent);
+  --text:      var(--md-sys-color-on-surface);              /* deep bark, never cold */
+  --dim:       var(--md-sys-color-on-surface-variant);      /* olive secondary text */
+  --teal:      var(--md-sys-color-primary);                 /* PRIMARY = forest green */
+  --violet:    var(--mist-ext-thinking);                    /* thinking = warm gold */
+  --user:      var(--mist-ext-user);                        /* the human = terracotta */
+  --warn:      var(--mist-ext-warn);                        /* amber */
+  --err:       var(--md-sys-color-error);                   /* warm brick */
+  --ok:        var(--mist-ext-ok);                          /* forest green */
+  /* theme-local surfaces — the MD3 surface-container ladder, warm */
+  --surface:   var(--md-sys-color-surface-container-high);     /* bars & panels: wheat */
+  --surface-2: var(--md-sys-color-surface-container-lowest);   /* fields / raised chips */
+  --code-bg:   var(--md-sys-color-surface-container-high);     /* parchment code blocks */
+  --hover:     var(--md-sys-color-surface-container-highest);  /* deeper wheat */
   --active:    #DCEBCF;   /* pale leaf-green selection */
   --user-bg:   #F8EBD2;   /* pale terracotta-cream bubble */
   --leaf:      #5BB247;   /* bright foliage — the "working" pulse */
   --gold:      #E0B100;   /* sunbeam gold */
   --amber:     #F4A93B;
   --focus:     0 0 0 3px rgba(224,177,0,.22);   /* warm gold focus ring (NOT neon) */
-  --radius:    14px;
+  --radius:    var(--md-sys-shape-corner-large);
   /* humanist + Art-Nouveau-warm, system fonts so no web-font load.
      Optima/Avenir read as elegant "normal text", not a terminal. */
   --mono: "Optima", "Avenir Next", "Seravek", system-ui, -apple-system, sans-serif;
@@ -629,7 +635,7 @@ html[data-theme="solarpunk"] .badge.usage,
 html[data-theme="solarpunk"] .badge.repo { color: #5E6B4B; }
 
 /* --- soft organic edges everywhere (the opposite of sharp) --- */
-html[data-theme="solarpunk"] .badge { border-radius: 999px; padding: 2px 10px; }
+html[data-theme="solarpunk"] .badge { border-radius: var(--md-sys-shape-corner-full); padding: 2px 10px; }
 html[data-theme="solarpunk"] button,
 html[data-theme="solarpunk"] #input,
 html[data-theme="solarpunk"] #notesInput,
@@ -652,10 +658,10 @@ html[data-theme="solarpunk"] #slashMenu,
 html[data-theme="solarpunk"] #railToggle,
 html[data-theme="solarpunk"] #jumpBtn { border-radius: var(--radius); }
 html[data-theme="solarpunk"] .tool,
-html[data-theme="solarpunk"] details.tool > summary.tool-head { border-radius: 10px; }
-html[data-theme="solarpunk"] details.tool[open] > summary.tool-head { border-radius: 10px 10px 0 0; }
+html[data-theme="solarpunk"] details.tool > summary.tool-head { border-radius: var(--md-sys-shape-corner-medium); }
+html[data-theme="solarpunk"] details.tool[open] > summary.tool-head { border-radius: var(--md-sys-shape-corner-medium) var(--md-sys-shape-corner-medium) 0 0; }
 html[data-theme="solarpunk"] .body pre,
-html[data-theme="solarpunk"] .body code { border-radius: 8px; }
+html[data-theme="solarpunk"] .body code { border-radius: var(--md-sys-shape-corner-small); }
 /* gentle warm depth instead of hard hairlines */
 html[data-theme="solarpunk"] .tool,
 html[data-theme="solarpunk"] .msg.user .body,
@@ -666,7 +672,7 @@ html[data-theme="solarpunk"] .scratch-item { box-shadow: 0 1px 4px rgba(74,60,30
 /* --- interactive permission cards (base is hard-coded dark; re-theme for cream) --- */
 html[data-theme="solarpunk"] .perm-card {
   background: var(--surface);
-  border-radius: 10px; box-shadow: 0 1px 4px rgba(74,60,30,.10);
+  border-radius: var(--md-sys-shape-corner-medium); box-shadow: 0 1px 4px rgba(74,60,30,.10);
 }
 html[data-theme="solarpunk"] .perm-body .perm-sum,
 html[data-theme="solarpunk"] .perm-cmd { color: #5E6B4B; }
@@ -692,7 +698,7 @@ html[data-theme="solarpunk"] .tab.active { box-shadow: inset 2px 0 0 0 var(--tea
 
 /* selection + scrollbar: warm gold + sage */
 html[data-theme="solarpunk"] ::selection { background: rgba(224,177,0,.26); color: var(--text); }
-html[data-theme="solarpunk"] ::-webkit-scrollbar-thumb { background: #B6C795; border-radius: 999px; }
+html[data-theme="solarpunk"] ::-webkit-scrollbar-thumb { background: #B6C795; border-radius: var(--md-sys-shape-corner-full); }
 
 /* --- living vines creeping along the margins & borders --- */
 /* anchor the pseudo-elements, and lift real content above the decoration */
@@ -774,7 +780,7 @@ html[data-theme="solarpunk"] #sendBtn:not(:disabled):hover {
 }
 /* each tab is a distinct rounded chip with its own ground */
 html[data-theme="solarpunk"] .tab {
-  margin: 4px 8px; padding: 7px 10px; border-radius: 10px;
+  margin: 4px 8px; padding: 7px 10px; border-radius: var(--md-sys-shape-corner-medium);
   border: 1px solid var(--line); background: var(--surface-2);
   box-shadow: 0 1px 2px rgba(74,60,30,.08);
   color: #4A4636;   /* bark-on-cream, easy to read on the light chip */
@@ -795,7 +801,7 @@ html[data-theme="solarpunk"] .tab.pinned.active { border: 1px solid var(--teal);
    rules) so it reads as a square, not the squished pill that padding+line-height
    produced. */
 html[data-theme="solarpunk"] .tab .tpin {
-  color: var(--dim); border: 1px solid var(--line); border-radius: 4px;
+  color: var(--dim); border: 1px solid var(--line); border-radius: var(--md-sys-shape-corner-extra-small);
   width: 18px; height: 18px; padding: 0; box-sizing: border-box;
   background: var(--surface);
 }
@@ -870,12 +876,12 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 #attachPreview {
   position: absolute; left: 14px; bottom: calc(100% + 0px); z-index: 41;
   display: flex; align-items: flex-start; gap: 6px; padding: 8px;
-  background: #0c1825; border: 1px solid var(--line); border-bottom: 0;
+  background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line); border-bottom: 0;
 }
 #attachPreview[hidden] { display: none; }
 .attach-thumb { display: block; max-width: 120px; max-height: 90px; border: 1px solid var(--line); }
 .attach-x {
-  background: #0b1722; color: var(--dim); border: 1px solid var(--line);
+  background: var(--md-sys-color-surface-container-lowest); color: var(--dim); border: 1px solid var(--line);
   cursor: pointer; font-size: 11px; line-height: 1; padding: 4px 7px;
 }
 .attach-x:hover { color: var(--text); }
@@ -966,7 +972,7 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
   background: var(--bg); border: 1px solid var(--teal); color: var(--teal);
   cursor: pointer;
 }
-#bgMonitor .bgm-pill:hover { background: #16374f; }
+#bgMonitor .bgm-pill:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 16%, var(--md-sys-color-surface-container-high)); }
 #bgMonitor .bgm-pill.running .bgm-pill-glyph {
   animation: dot-breathe 1.15s ease-in-out infinite;
 }
@@ -990,7 +996,7 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
   margin-top: 2px; color: var(--dim); line-height: 1.4;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-#bgMonitor .bgm-live { color: #9db3c6; }
+#bgMonitor .bgm-live { color: var(--md-sys-color-on-surface-variant); }
 #bgMonitor .bgm-meta { color: var(--dim); }
 /* kill + expand controls */
 #bgMonitor .bgm-row { cursor: pointer; }
@@ -1013,7 +1019,7 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 }
 #bgMonitor .bgm-trail { max-height: 130px; overflow-y: auto; }
 #bgMonitor .bgm-trail-line { color: var(--dim); line-height: 1.5; white-space: normal; }
-#bgMonitor .bgm-trail-line:last-child { color: #9db3c6; }
+#bgMonitor .bgm-trail-line:last-child { color: var(--md-sys-color-on-surface-variant); }
 #bgMonitor .bgm-id {
   margin-top: 4px; color: var(--dim); font-size: 10px; user-select: text;
 }
@@ -1026,7 +1032,7 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 .diff + .diff { border-top: 1px dashed var(--line); }
 .difffile {
   font-family: var(--mono); font-size: 11px; color: var(--dim);
-  padding: 4px 10px; border-bottom: 1px solid var(--line); background: #0b1722;
+  padding: 4px 10px; border-bottom: 1px solid var(--line); background: var(--md-sys-color-surface-container-lowest);
 }
 .dl { padding: 0 10px; }
 .dl .dg { display: inline-block; width: 1ch; margin-right: 8px; color: var(--dim); user-select: none; }
@@ -1034,9 +1040,9 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 .dl.add .dg { color: var(--ok); }
 .dl.del { background: rgba(210, 80, 80, 0.12); color: #e8b6b6; }
 .dl.del .dg { color: var(--err); }
-.dl.ctx { color: #8ba0b2; }
+.dl.ctx { color: var(--md-sys-color-outline); }
 .todos { padding: 6px 10px; display: flex; flex-direction: column; gap: 3px; }
-.todo { display: flex; gap: 8px; align-items: baseline; color: #b9ccdb; }
+.todo { display: flex; gap: 8px; align-items: baseline; color: var(--md-sys-color-on-surface-variant); }
 .todo .tg { width: 1ch; color: var(--dim); }
 .todo.completed { color: var(--dim); text-decoration: line-through; }
 .todo.completed .tg { color: var(--ok); }
@@ -1044,7 +1050,7 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 .todo.in_progress .tg { color: var(--gold); }
 
 /* ---------- interactive permission cards ---------- */
-.perm-card { border: 1px solid var(--teal); margin: 10px 0; background: #0f2030; }
+.perm-card { border: 1px solid var(--teal); margin: 10px 0; background: var(--md-sys-color-surface-container); }
 .perm-card.plan { border-color: var(--violet); }
 .perm-card.answered { border-color: var(--line); opacity: 0.72; }
 .perm-head { padding: 7px 11px; color: var(--teal); font-size: 13px; border-bottom: 1px solid var(--line); }
@@ -1054,12 +1060,12 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 .perm-verdict { margin-left: 8px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
 .perm-body { padding: 4px 0; max-height: 340px; overflow: auto; border-bottom: 1px solid var(--line); }
 .perm-body .perm-plan { padding: 8px 11px; max-height: none; }
-.perm-body .perm-sum { padding: 8px 11px; font-family: var(--mono); font-size: 12px; color: #b9ccdb; }
-.perm-cmd { margin: 0; padding: 8px 11px; font-family: var(--mono); font-size: 12px; color: #b9ccdb; white-space: pre-wrap; overflow-x: auto; }
+.perm-body .perm-sum { padding: 8px 11px; font-family: var(--mono); font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
+.perm-cmd { margin: 0; padding: 8px 11px; font-family: var(--mono); font-size: 12px; color: var(--md-sys-color-on-surface-variant); white-space: pre-wrap; overflow-x: auto; }
 .perm-actions { display: flex; gap: 8px; padding: 8px 11px; }
 .perm-btn {
   font-family: var(--mono); font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
-  background: #0b1722; color: var(--text); border: 1px solid var(--line);
+  background: var(--md-sys-color-surface-container-lowest); color: var(--text); border: 1px solid var(--line);
   padding: 5px 12px; cursor: pointer;
 }
 .perm-btn:hover { border-color: var(--teal); }
