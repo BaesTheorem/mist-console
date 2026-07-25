@@ -10,13 +10,13 @@ A terminal-style desktop app for talking to Claude, built **from the ground up**
 claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose
 ```
 
-So we run Claude as a long-lived subprocess that emits structured JSON events (init/capabilities, token-level text + thinking deltas, tool calls, tool results, usage, rate limits) and we render them however we want. The **brain stays Anthropic's** — we never reimplement it — so capability and correctness come for free, and we get total control of the surface.
+So we run Claude as a long-lived subprocess that emits structured JSON events (init/capabilities, token-level text + thinking deltas, tool calls, tool results, usage, rate limits) and we render them however we want. The **brain stays Anthropic's** (we never reimplement it), so capability and correctness come for free, and we get total control of the surface.
 
 This hits the design criteria:
-- **Fewest catastrophic errors** — leans on the official engine; one runtime; pure Python + web.
-- **All the CLI capabilities** — tools, MCP servers, skills, slash commands, `/resume`, persona — all flow through the subprocess.
-- **Easy to bolt features on** — Flask + plain web UI.
-- **Low RAM** — one Python process + the system WebView (WKWebView). No Chromium, no Node. ~60–100MB vs Electron's 250MB+.
+- **Fewest catastrophic errors**: leans on the official engine; one runtime; pure Python + web.
+- **All the CLI capabilities**: tools, MCP servers, skills, slash commands, `/resume`, persona, all flow through the subprocess.
+- **Easy to bolt features on**: Flask + plain web UI.
+- **Low RAM**: one Python process + the system WebView (WKWebView). No Chromium, no Node. ~60–100MB vs Electron's 250MB+.
 
 ## Architecture
 
@@ -28,11 +28,11 @@ This hits the design criteria:
                                             └──────────┘
 ```
 
-- `bridge.py` — `ClaudeSession`: spawns/owns one headless `claude` process (cwd = Exobrain harness, MIST persona appended via `--append-system-prompt-file`), parses its stdout JSON, fans events out to subscribers. Robust subprocess lifecycle, fails loudly.
-- `app.py` — Flask. `POST /send` writes a user turn to claude's stdin; `GET /stream` is Server-Sent Events of the live event stream; `POST /new` restarts the session.
-- `static/` — the UI we fully control: `index.html`, `style.css` (flat/sharp MIST Cloud theme), `app.js` (renders streaming text, collapsible thinking, tool cards + results, capabilities panel, usage).
-- `desktop.py` — native macOS window via pywebview/WKWebView. `uv run --script desktop.py`.
-- `make-app.sh` — builds `~/Desktop/Apps/MIST Console.app`.
+- `bridge.py`, holding `ClaudeSession`: spawns and owns one headless `claude` process (cwd = Exobrain harness, MIST persona appended via `--append-system-prompt-file`), parses its stdout JSON, fans events out to subscribers. Owns the subprocess lifecycle and fails loudly.
+- `app.py`: Flask. `POST /send` writes a user turn to claude's stdin; `GET /stream` is Server-Sent Events of the live event stream; `POST /new` restarts the session.
+- `static/`: the UI we fully control: `index.html`, `style.css` (flat/sharp MIST Cloud theme), `app.js` (renders streaming text, collapsible thinking, tool cards + results, capabilities panel, usage).
+- `desktop.py`: native macOS window via pywebview/WKWebView. `uv run --script desktop.py`.
+- `make-app.sh`: builds `~/Desktop/Apps/MIST Console.app`.
 
 ## Run
 
@@ -57,7 +57,7 @@ Windows SmartScreen warns on unsigned exes: choose "More info", then
 
 ## Auth: subscription, not API
 
-The Console spawns the official `claude` binary, which authenticates with the **Claude subscription via OAuth** (`apiKeySource: none`, no `ANTHROPIC_API_KEY`, API overage disabled). No Anthropic API key, no per-token API billing. The usage numbers below are the subscription's own rate-limit windows — the same data the statusline shows — so displaying them costs nothing.
+The Console spawns the official `claude` binary, which authenticates with the **Claude subscription via OAuth** (`apiKeySource: none`, no `ANTHROPIC_API_KEY`, API overage disabled). No Anthropic API key, no per-token API billing. The usage numbers below are the subscription's own rate-limit windows, the same data the statusline shows, so displaying them costs nothing.
 
 ## Tabs (multi-session) + persistence
 
@@ -72,40 +72,40 @@ Backend: `/sessions` GET/POST, `/sessions/<id>` DELETE, `/sessions/<id>/pin` POS
 
 ## Usage metrics (top bar)
 
-- **ctx %** — context window used for the *active* tab, computed live in `bridge.py` from the latest assistant message's usage (`input + cache_read + cache_creation`) ÷ the model's `contextWindow`, broadcast as a `context` event. Uses the per-message usage (a single API call = current context occupancy), not the `result` event's turn-cumulative total, which sums every internal tool-call round trip and reads past 100%. Subagent (sidechain) messages — those with a `parent_tool_use_id` — are skipped: they carry the subagent's context, not the session's.
-- **5h %** and **7d %** — the **%** comes from `~/.claude/usage-cache.json` via `/usage` (polled every 45s), written by the CLI statusline (`~/.claude/statusline-command.sh` tees its payload; registered under `statusLine` in `~/.claude/settings.json`), so it refreshes whenever an interactive CLI session renders. The **reset countdown + blocked status** come live from `rate_limit_event`s in the claude stream (these no longer carry `utilization`, so the % can't be live, and only `five_hour` events are emitted in practice). Cache entries whose `resets_at` has passed belong to an expired window and are dropped rather than shown. The badge tooltip says where the % came from and how old the cache is. No API cost.
+- **ctx %**: context window used for the *active* tab, computed live in `bridge.py` from the latest assistant message's usage (`input + cache_read + cache_creation`) ÷ the model's `contextWindow`, broadcast as a `context` event. Uses the per-message usage (a single API call = current context occupancy), not the `result` event's turn-cumulative total, which sums every internal tool-call round trip and reads past 100%. Subagent (sidechain) messages, those with a `parent_tool_use_id`, are skipped: they carry the subagent's context, not the session's.
+- **5h %** and **7d %**: the **%** comes from `~/.claude/usage-cache.json` via `/usage` (polled every 45s), written by the CLI statusline (`~/.claude/statusline-command.sh` tees its payload; registered under `statusLine` in `~/.claude/settings.json`), so it refreshes whenever an interactive CLI session renders. The **reset countdown + blocked status** come live from `rate_limit_event`s in the claude stream (these no longer carry `utilization`, so the % can't be live, and only `five_hour` events are emitted in practice). Cache entries whose `resets_at` has passed belong to an expired window and are dropped rather than shown. The badge tooltip says where the % came from and how old the cache is. No API cost.
 
 ## Composer & boot
 
-- **Full text editing** — a native macOS Edit menu (built in `desktop.py` via pyobjc) wires Cmd+X/C/V/A/Z and the right-click menu to the web view. Click-drag selection works natively. (WKWebView has no clipboard shortcuts without this menu.)
-- **File picker** — the `file` button opens the native open dialog (`window.pywebview.api.pick_file`) and inserts the chosen absolute path(s) into the input, so MIST can `Read` them. Browser dev mode falls back to a hidden file input (filenames only).
-- **Spoken boot greeting** — on launch MIST speaks one of several in-character greetings (`GREETINGS` in `app.py`) in her cloned voice, and shows it in the log. The greetings are **pre-rendered** to `greetings/greet_N.wav` so playback is instant (no ~28s TTS cold start). To change them: edit `GREETINGS`, start the voice service, and re-render the WAVs (index-aligned).
+- **Full text editing**: a native macOS Edit menu (built in `desktop.py` via pyobjc) wires Cmd+X/C/V/A/Z and the right-click menu to the web view. Click-drag selection works natively. (WKWebView has no clipboard shortcuts without this menu.)
+- **File picker**: the `file` button opens the native open dialog (`window.pywebview.api.pick_file`) and inserts the chosen absolute path(s) into the input, so MIST can `Read` them. Browser dev mode falls back to a hidden file input (filenames only).
+- **Spoken boot greeting**: on launch MIST speaks one of several in-character greetings (`GREETINGS` in `app.py`) in her cloned voice, and shows it in the log. The greetings are **pre-rendered** to `greetings/greet_N.wav` so playback is instant (no ~28s TTS cold start). To change them: edit `GREETINGS`, start the voice service, and re-render the WAVs (index-aligned).
 
 ## Permissions (interactive cards)
 
-New chats default to **bypassPermissions** (`--dangerously-skip-permissions`), so MIST runs unprompted — the autonomous routines and quick-entry flows depend on that, and it stays byte-for-byte the old behavior.
+New chats default to **bypassPermissions** (`--dangerously-skip-permissions`), so MIST runs unprompted. The autonomous routines and quick-entry flows depend on that, and it stays byte-for-byte the old behavior.
 
 Switch a chat to **default / acceptEdits / plan** via the perm badge and the Console now renders real **Allow / Allow-for-session / Deny** cards, just like the TUI. Mechanism (all confirmed against the live `claude` binary):
 
 - In a non-bypass mode the session spawns with `--permission-prompt-tool stdio` and sends an `initialize` control_request at start. That makes the CLI route every "ask" decision back over the control protocol as a `can_use_tool` control_request.
-- `bridge.py` catches it (`_handle_control_request`), re-broadcasts it as a `permission_request` event, and the UI renders a card showing **what** the tool will do — a red/green **diff** for Edit/Write/MultiEdit, the **plan** for ExitPlanMode, the **command** for Bash, a **checklist** for TodoWrite.
+- `bridge.py` catches it (`_handle_control_request`), re-broadcasts it as a `permission_request` event, and the UI renders a card showing **what** the tool will do: a red/green **diff** for Edit/Write/MultiEdit, the **plan** for ExitPlanMode, the **command** for Bash, a **checklist** for TodoWrite.
 - The answer is relayed via `POST /sessions/<id>/permission-response` → `respond_permission()` → a `control_response` (`{behavior:"allow", updatedInput}` or `{behavior:"deny"}`). "Allow, don't ask again" returns the CLI's own `permission_suggestions` as `updatedPermissions` (e.g. auto-accept edits for the session).
 
 ### Interrupt
 
-Press **Esc** (or click the send button, which becomes **stop** while a turn runs and the composer is empty) to cancel an in-flight turn. This sends an `interrupt` control_request — the process is **not** killed, so context is preserved and the next message just continues (unlike the old kill/restart).
+Press **Esc** (or click the send button, which becomes **stop** while a turn runs and the composer is empty) to cancel an in-flight turn. This sends an `interrupt` control_request. The process is **not** killed, so context is preserved and the next message just continues (unlike the old kill/restart).
 
 ## MCP parity with the CLI
 
 The session loads **all** MCP scopes (no `--strict-mcp-config`), exactly like the interactive `claude` CLI: things3, fitbit, withings, linkedin, and the claude.ai connectors (Gmail/Calendar/Drive/MyChart). 8 servers, ~90 MCP tools.
 
-**Important:** `init` (with the server/tool list) doesn't fire until the **first user message** — claude's stream-json mode is request-driven. So a brand-new chat shows `—` for model/MCP until you send something; after the first message everything populates (and the settings panel caches the last-known set). This is normal, not a hang.
+**Important:** `init` (with the server/tool list) doesn't fire until the **first user message**, because claude's stream-json mode is request-driven. So a brand-new chat shows `—` for model/MCP until you send something; after the first message everything populates (and the settings panel caches the last-known set). This is normal, not a hang.
 
 ## Quick access (always-on, even when MIST is closed)
 
-Double-tap the **Option (⌥)** key to summon the glowing quick-entry overlay from anywhere; type + Enter starts a new chat. Attach the current page **URL** (🔗) or a **screenshot** selection (⛶), and use the **conversation picker** (⤷, or press ↓ on an empty input) to drop the message + attachments into an existing chat instead of a new one — the overlay grows upward to show a searchable, pinned-first list, and the main window slides straight into the chosen conversation.
+Double-tap the **Option (⌥)** key to summon the glowing quick-entry overlay from anywhere; type + Enter starts a new chat. Attach the current page **URL** (🔗) or a **screenshot** selection (⛶), and use the **conversation picker** (⤷, or press ↓ on an empty input) to drop the message + attachments into an existing chat instead of a new one. The overlay grows upward to show a searchable, pinned-first list, and the main window slides straight into the chosen conversation.
 
-The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.py`), **not** by MIST herself — so it works even when MIST is fully quit. On the gesture: if MIST is running it POSTs `/show-quick`; if she's closed it `open`s her, waits for her to bind, then summons the overlay. The agent runs as a LaunchAgent (`com.exobrain.mist-hotkey-agent`, RunAtLoad + KeepAlive) installed by `install-agent.sh` — always on, starts at login.
+The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.py`), **not** by MIST herself, so it works even when MIST is fully quit. On the gesture: if MIST is running it POSTs `/show-quick`; if she's closed it `open`s her, waits for her to bind, then summons the overlay. The agent runs as a LaunchAgent (`com.exobrain.mist-hotkey-agent`, RunAtLoad + KeepAlive) installed by `install-agent.sh`: always on, starts at login.
 
 - Needs macOS **Accessibility** permission for the agent (global modifier monitoring). The agent self-requests it on first run.
 - The overlay joins all Spaces / floats over fullscreen apps, so it appears on whatever Space you're on.
@@ -114,15 +114,15 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 
 ## Roadmap (bolt-on order)
 
-- [x] **Interactive permissions** — Allow/Deny/Allow-for-session cards over the control protocol (see above).
-- [x] **Slash-command palette** — `/` autocomplete from the init `slash_commands` list.
-- [x] **Interrupt / stop** — Esc / stop button cancels an in-flight turn (`interrupt` control_request, no restart).
-- [x] **Diff viewer** — Edit/Write/MultiEdit render as red/green diffs; TodoWrite as a checklist.
-- [x] **Image paste** — clipboard + drag-drop attachments.
-- [x] **Session list / resume** — dormant revival via `--resume <session_id>`.
-- [ ] **@-file mentions** — `@` path autocomplete in the composer.
-- [ ] **MIST voice** — speak responses via `mist-voice`; reactive avatar.
-- [ ] **Runtime model/mode switch** — `set_model` / `set_permission_mode` control_requests instead of kill/restart (the control channel already supports both).
+- [x] **Interactive permissions**: Allow/Deny/Allow-for-session cards over the control protocol (see above).
+- [x] **Slash-command palette**: `/` autocomplete from the init `slash_commands` list.
+- [x] **Interrupt / stop**: Esc / stop button cancels an in-flight turn (`interrupt` control_request, no restart).
+- [x] **Diff viewer**: Edit/Write/MultiEdit render as red/green diffs; TodoWrite as a checklist.
+- [x] **Image paste**: clipboard + drag-drop attachments.
+- [x] **Session list / resume**: dormant revival via `--resume <session_id>`.
+- [ ] **@-file mentions**: `@` path autocomplete in the composer.
+- [ ] **MIST voice**: speak responses via `mist-voice`; reactive avatar.
+- [ ] **Runtime model/mode switch**: `set_model` / `set_permission_mode` control_requests instead of kill/restart (the control channel already supports both).
 
 ## Dependencies
 
