@@ -21,6 +21,14 @@
   --warn:      var(--mist-ext-warn);
   --err:       var(--md-sys-color-error);
   --ok:        var(--mist-ext-ok);            /* usage headroom (green) */
+  /* these five used to exist only in the solarpunk block, leaving terminal
+     rules that reference them (todos, perm icon, image chrome) unstyled */
+  --gold:      var(--mist-ext-warn);
+  --surface:   var(--md-sys-color-surface-container-low);
+  --hover:     var(--md-sys-color-surface-container-high);
+  --active:    color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container-high));
+  --leaf:      var(--mist-ext-ok);
+  --focus:     0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
   --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 * { box-sizing: border-box; }
@@ -197,7 +205,8 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab.pinned .ttitle { color: var(--text); }
 
 #logs { flex: 1; min-width: 0; position: relative; }
-.session-log { position: absolute; inset: 0; overflow-y: auto; padding: 16px 18px 40px; }
+/* top padding clears the rail-toggle button pinned at the logs' top-left corner */
+.session-log { position: absolute; inset: 0; overflow-y: auto; padding: 40px 18px 40px; }
 
 /* floating "jump to present" pill — only shown when scrolled up off the bottom */
 #jumpBtn {
@@ -240,6 +249,8 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
   border-left: 3px solid var(--user); padding: 9px 12px;
 }
 .msg.mist .body  { color: var(--text); }
+/* a pasted URL/path must wrap instead of forcing a horizontal scrollbar */
+.msg .body, .think .think-body, .perm-cmd { overflow-wrap: anywhere; }
 /* Chat text is selectable (WKWebView can default selection off) + visible highlight. */
 #logs, .msg .who, .msg .body, .msg .body * {
   -webkit-user-select: text; user-select: text;
@@ -266,8 +277,11 @@ details.tool > summary.tool-head {
   background: var(--md-sys-color-surface-container); padding: 5px 9px; color: var(--teal); font-size: 12px;
 }
 details.tool > summary.tool-head::-webkit-details-marker { display: none; }
-details.tool > summary.tool-head::before { content: "▸"; color: var(--dim); }
-details.tool[open] > summary.tool-head::before { content: "▾"; }
+details.tool > summary.tool-head::before {
+  content: "chevron_right"; font-family: "Material Symbols Sharp";
+  font-size: 14px; line-height: 1; color: var(--dim);
+}
+details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .tool .tname { font-weight: 700; }
 .tool .tsummary { flex: 1; min-width: 0; color: var(--md-sys-color-on-surface-variant); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool .tstate { color: var(--dim); font-size: 11px; }
@@ -302,6 +316,7 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .body .copy-btn:hover { border-color: var(--teal); color: var(--teal); }
 .body .copy-btn.copied { color: var(--teal); border-color: var(--teal); opacity: 1; }
 .body h1,.body h2,.body h3 { color: var(--teal); margin: 12px 0 6px; font-size: 14px; }
+.body h4,.body h5 { color: var(--teal); margin: 10px 0 5px; font-size: 13px; }
 .body ul,.body ol { margin: 4px 0 9px; padding-left: 22px; }
 .body a { color: var(--teal); }
 .body blockquote { border-left: 2px solid var(--line); margin: 6px 0; padding-left: 10px; color: var(--dim); }
@@ -334,8 +349,12 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 .routine { border: 1px solid var(--line); margin-bottom: 6px; }
 .routine > summary { padding: 7px 9px; cursor: pointer; list-style: none; }
 .routine > summary::-webkit-details-marker { display: none; }
-.routine > summary::before { content: "\25b8 "; color: var(--teal); font-size: 9px; }
-.routine[open] > summary::before { content: "\25be "; }
+.routine > summary::before {
+  content: "chevron_right"; font-family: "Material Symbols Sharp";
+  color: var(--teal); font-size: 12px; line-height: 1;
+  display: inline-block; vertical-align: -2px; margin-right: 3px;
+}
+.routine[open] > summary::before { content: "expand_more"; }
 .routine .rname { color: var(--text); font-size: 12px; }
 .routine .rdot { font-size: 9px; margin-left: 6px; }
 .routine .rdot.on { color: var(--ok); }
@@ -373,8 +392,11 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
   color: var(--dim); font-size: 11px; text-transform: uppercase; margin: 12px 0 6px;
   cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px;
 }
-.capBody h4::before { content: "\25be"; font-size: 9px; color: var(--teal); }   /* ▾ expanded */
-.capBody h4.collapsed::before { content: "\25b8"; }                              /* ▸ collapsed */
+.capBody h4::before {
+  content: "expand_more"; font-family: "Material Symbols Sharp";
+  font-size: 12px; line-height: 1; color: var(--teal);
+}
+.capBody h4.collapsed::before { content: "chevron_right"; }
 .capBody h4.collapsed + * { display: none; }
 .capBody .count { color: var(--teal); font-weight: 400; }
 .qa { margin-bottom: 8px; }
@@ -410,8 +432,12 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
 }
 .modelrow:hover { background: var(--md-sys-color-surface-container-high); color: var(--teal); }
 .modelrow.sel { color: var(--teal); }
-.modelrow.sel::before { content: "▸"; color: var(--teal); }
-.modelrow:not(.sel)::before { content: "\00a0\00a0"; }
+/* MD3 menus mark the selected row with a leading check */
+.modelrow::before { content: ""; width: 15px; flex: 0 0 15px; display: inline-block; }
+.modelrow.sel::before {
+  content: "check"; font-family: "Material Symbols Sharp";
+  font-size: 14px; line-height: 1; color: var(--teal);
+}
 .modelnote { padding: 8px 12px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11px; }
 
 /* ---- composer ---- */
@@ -447,18 +473,20 @@ details.tool[open] > summary.tool-head::before { content: "▾"; }
   font-family: var(--mono); font-size: 13px; padding: 9px 11px; outline: none;
 }
 #input:focus { border-color: var(--teal); }
-#fileBtn { padding: 0 12px; color: var(--dim); }
-#sendBtn { padding: 0 18px; }
 .greet { color: var(--teal); font-style: italic; }
-#sendBtn:disabled { opacity: .4; cursor: default; border-color: var(--line); color: var(--dim); }
 
 #usage {
-  position: fixed; bottom: 58px; right: 14px;
-  font-size: 11px; color: var(--dim); pointer-events: none;
+  /* rides the composer's real height (multi-line drafts grow it to ~220px) and
+     stays under the side panels (z 20) */
+  position: fixed; bottom: calc(var(--composer-h, 52px) + 6px); right: 14px;
+  font-size: 11px; color: var(--dim); pointer-events: none; z-index: 5;
 }
 
 /* ---- notes panel (app-wide persistent scratchpad) ---- */
-#scratchBtn.has { color: var(--teal); border-color: var(--teal); }
+#scratchBtn.has {
+  --md-icon-button-icon-color: var(--md-sys-color-primary);
+  --md-icon-button-hover-icon-color: var(--md-sys-color-primary);
+}
 #notesPanel {
   position: fixed; top: var(--topbar-h, 0px); right: 0; width: 340px; height: calc(100% - var(--topbar-h, 0px));
   background: var(--md-sys-color-surface-container-low); border-left: 1px solid var(--line);
@@ -615,8 +643,8 @@ html[data-theme="solarpunk"] .tab.pinned { background: #E6EFD7; }
 html[data-theme="solarpunk"] .tab.pinned:hover { background: #DCEBCF; }
 html[data-theme="solarpunk"] .tab.pinned.active { background: #D2E6C2; }
 html[data-theme="solarpunk"] .tab .dot.idle { background: #B6BE96; }
-html[data-theme="solarpunk"] .tab .dot.working,
-html[data-theme="solarpunk"] .spinner .sv-glyph { background: var(--leaf); color: var(--leaf); }
+html[data-theme="solarpunk"] .tab .dot.working { background: var(--leaf); }
+html[data-theme="solarpunk"] .spinner .sv-glyph { color: var(--leaf); }   /* color only — a background here painted a green box behind the glyph */
 
 /* --- user message bubble: warm cream, terracotta edge, bark text --- */
 html[data-theme="solarpunk"] .msg.user .body {
@@ -717,6 +745,10 @@ html[data-theme="solarpunk"] #composer > * { position: relative; z-index: 1; }
    absolutely-positioned overlay — otherwise the rule above turns it into an
    in-flow flex item that balloons the composer row and warps the whole UI. */
 html[data-theme="solarpunk"] #slashMenu { position: absolute; z-index: 40; }
+/* …and #attachPreview is the same shape of direct child — without this carve-out
+   the `#composer > *` relative rule turns the floating image preview into an
+   in-flow flex item that balloons the composer row. */
+html[data-theme="solarpunk"] #attachPreview { position: absolute; z-index: 41; }
 html[data-theme="solarpunk"] #logs::before,
 html[data-theme="solarpunk"] #tabrail::after,
 html[data-theme="solarpunk"] #composer::before,
@@ -762,21 +794,20 @@ html[data-theme="solarpunk"] #topbar::after {
 html[data-theme="solarpunk"] .badge {
   background: var(--surface-2); box-shadow: 0 1px 2px rgba(74,60,30,.10);
 }
-html[data-theme="solarpunk"] .actions button,
-html[data-theme="solarpunk"] #newTab,
-html[data-theme="solarpunk"] #scratchBtn,
-html[data-theme="solarpunk"] #fileBtn,
-html[data-theme="solarpunk"] #sendBtn {
+html[data-theme="solarpunk"] #newTab {
   background: var(--surface-2); border-color: #B6C795;
   box-shadow: 0 1px 2px rgba(74,60,30,.10);
 }
-html[data-theme="solarpunk"] .actions button:hover,
-html[data-theme="solarpunk"] #newTab:hover,
-html[data-theme="solarpunk"] #scratchBtn:hover,
-html[data-theme="solarpunk"] #fileBtn:hover,
-html[data-theme="solarpunk"] #sendBtn:not(:disabled):hover {
+html[data-theme="solarpunk"] #newTab:hover {
   border-color: var(--gold); color: var(--teal);
   box-shadow: 0 0 10px rgba(224,177,0,.30);
+}
+/* the topbar/composer buttons are md components now — recolor via their tokens */
+html[data-theme="solarpunk"] .actions md-icon-button,
+html[data-theme="solarpunk"] #scratchBtn,
+html[data-theme="solarpunk"] #fileBtn {
+  --md-icon-button-icon-color: var(--md-sys-color-on-surface-variant);
+  --md-icon-button-hover-icon-color: var(--md-sys-color-primary);
 }
 /* each tab is a distinct rounded chip with its own ground */
 html[data-theme="solarpunk"] .tab {
@@ -905,7 +936,7 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 }
 .genimg-wrap:hover .genimg-dl { opacity: 1; }
 .genimg-dl:hover { background: var(--hover); }
-.genimg-dl:focus-visible { opacity: 1; outline: 1px solid var(--focus); }
+.genimg-dl:focus-visible { opacity: 1; outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
 .genimg-dl svg { width: 16px; height: 16px; display: block; }
 /* Generated audio (mist-music): inline <audio> player + a persistent download
    button. Reuses .genimg-dl chrome, but sits inline (audio is a wide bar, not a
@@ -943,7 +974,9 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
    Fed by the stream's `system` task_* events. Flat/sharp: square, hairline,
    no shadow — same language as the tool cards and badges. */
 #bgMonitor {
-  position: fixed; right: 16px; bottom: 84px; z-index: 40;
+  /* anchored to the composer's real height; z below the side panels (20) so an
+     open settings/notes panel isn't floated over */
+  position: fixed; right: 16px; bottom: calc(var(--composer-h, 52px) + 30px); z-index: 15;
   width: min(400px, 42vw); max-height: 44vh; overflow-y: auto;
   background: var(--bg); border: 1px solid var(--teal);
   font-size: 12px; color: var(--text);
@@ -1036,9 +1069,12 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 }
 .dl { padding: 0 10px; }
 .dl .dg { display: inline-block; width: 1ch; margin-right: 8px; color: var(--dim); user-select: none; }
-.dl.add { background: rgba(60, 180, 110, 0.12); color: #b6e3c6; }
+/* text mixes toward on-surface so diffs stay legible on light AND dark grounds */
+.dl.add { background: color-mix(in srgb, var(--mist-ext-ok) 12%, transparent);
+  color: color-mix(in srgb, var(--mist-ext-ok) 40%, var(--md-sys-color-on-surface)); }
 .dl.add .dg { color: var(--ok); }
-.dl.del { background: rgba(210, 80, 80, 0.12); color: #e8b6b6; }
+.dl.del { background: color-mix(in srgb, var(--md-sys-color-error) 12%, transparent);
+  color: color-mix(in srgb, var(--md-sys-color-error) 40%, var(--md-sys-color-on-surface)); }
 .dl.del .dg { color: var(--err); }
 .dl.ctx { color: var(--md-sys-color-outline); }
 .todos { padding: 6px 10px; display: flex; flex-direction: column; gap: 3px; }
@@ -1074,7 +1110,86 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 .perm-btn.always { color: var(--teal); }
 .perm-btn.deny { color: var(--err); }
 .perm-btn.deny:hover { border-color: var(--err); }
-.perm-btn:focus { outline: 1px solid var(--focus); outline-offset: 1px; }
+.perm-btn:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
 
-/* the send button doubles as an interrupt while a turn runs */
-#sendBtn[data-mode="stop"] { color: var(--err); border-color: var(--err); }
+/* the send button doubles as an interrupt while a turn runs (md-filled-icon-button:
+   recolor its container via component tokens, host color rules can't reach it) */
+#sendBtn[data-mode="stop"] {
+  --md-filled-icon-button-container-color: var(--md-sys-color-error-container);
+  --md-filled-icon-button-icon-color: var(--md-sys-color-on-error-container);
+  --md-filled-icon-button-hover-icon-color: var(--md-sys-color-on-error-container);
+  --md-filled-icon-button-focus-icon-color: var(--md-sys-color-on-error-container);
+  --md-filled-icon-button-pressed-icon-color: var(--md-sys-color-on-error-container);
+}
+
+/* ============================================================
+   Material Design 3 components + Sharp icons (facelift 2026-07)
+   md-* elements read --md-sys-color-* from md-tokens.css and the
+   shape scale (all 0 in terminal, soft in solarpunk). This block
+   is layout/sizing glue + icon alignment for both themes.
+   ============================================================ */
+/* topbar actions: compact icon buttons */
+.actions md-icon-button {
+  --md-icon-button-state-layer-width: 32px;
+  --md-icon-button-state-layer-height: 32px;
+  --md-icon-button-icon-size: 19px;
+  --md-icon-button-icon-color: var(--dim);
+  --md-icon-button-hover-icon-color: var(--teal);
+  --md-icon-button-hover-state-layer-color: var(--md-sys-color-primary);
+}
+/* composer: icons pin to the bottom as the textarea grows */
+#composer { align-items: flex-end; }
+#scratchBtn, #fileBtn {
+  --md-icon-button-state-layer-width: 38px;
+  --md-icon-button-state-layer-height: 38px;
+  --md-icon-button-icon-size: 20px;
+  --md-icon-button-icon-color: var(--dim);
+  --md-icon-button-hover-icon-color: var(--teal);
+  --md-icon-button-hover-state-layer-color: var(--md-sys-color-primary);
+}
+#sendBtn {
+  --md-filled-icon-button-container-width: 38px;
+  --md-filled-icon-button-container-height: 38px;
+  --md-filled-icon-button-icon-size: 20px;
+}
+/* notes count rides the composer note icon as a tiny MD badge */
+#scratchBtn { position: relative; }
+#scratchBtn::after {
+  content: attr(data-count);
+  position: absolute; top: -2px; right: -4px;
+  min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; line-height: 1; font-family: var(--mono);
+  background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary);
+  border-radius: var(--md-sys-shape-corner-full);
+  pointer-events: none;
+}
+#scratchBtn:not([data-count])::after, #scratchBtn[data-count="0"]::after { display: none; }
+/* icon spans inside legacy buttons/labels */
+button .msi { font-size: 14px; vertical-align: -3px; }
+#newTab .msi, #jumpBtn .msi { font-size: 14px; vertical-align: -3px; margin-right: 2px; }
+#railToggle .msi { font-size: 15px; vertical-align: middle; }
+.capHead .xclose { padding: 2px 4px; }
+.capHead .xclose .msi { font-size: 16px; vertical-align: -3px; }
+.tab .tclose .msi { font-size: 13px; vertical-align: -2px; }
+.scratch-del .msi { font-size: 13px; vertical-align: -2px; }
+.attach-x .msi { font-size: 13px; vertical-align: -2px; }
+.perm-icon.msi { font-size: 15px; vertical-align: -3px; margin-right: 4px; }
+.todo .tg { width: 16px; flex: 0 0 16px; }
+.todo .tg .msi { font-size: 15px; vertical-align: -3px; }
+#bgMonitor .bgm-glyph.msi { font-size: 14px; line-height: 1.4; width: 15px; flex-basis: 15px; }
+#bgMonitor .bgm-kill .msi { font-size: 12px; vertical-align: -2px; }
+#bgMonitor .bgm-collapse .msi { font-size: 13px; vertical-align: -2px; }
+#bgMonitor .bgm-pill-glyph.msi { font-size: 14px; vertical-align: -2px; }
+/* switches: flat/sharp inherits square track via the shape scale */
+.qa-toggle md-switch, .rt-enabled md-switch {
+  --md-switch-track-width: 40px;
+  --md-switch-track-height: 22px;
+  --md-switch-handle-width: 14px;
+  --md-switch-handle-height: 14px;
+  margin-right: 4px;
+}
+/* keyboard focus for the rail + all native buttons */
+.tab:focus-visible, button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px;
+}
