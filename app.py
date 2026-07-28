@@ -41,29 +41,13 @@ _meta_lock = threading.Lock()
 SESSIONS_META = os.path.join(DATA_DIR, "sessions.json")
 _pending_open = None   # session id the main window should jump to (set by quick entry)
 
-# The repo/dir MIST runs in. Defaults to the harness (where her persona lives),
-# but the user can point the Console at a different repo from the topbar repo card.
-# Persisted so the choice survives a restart; new chats inherit it.
-WORKSPACE_PATH = os.path.join(DATA_DIR, "workspace.json")
-
-
+# The repo/dir MIST runs in. Every launch starts in the harness (where her
+# persona lives), and the user can point the Console at a different repo from the
+# topbar repo card for the rest of that run. Deliberately NOT persisted: a repo
+# picked for one piece of work shouldn't silently become the default for every
+# future chat. Existing chats keep their own cwd from sessions.json regardless.
 def _load_workspace():
-    try:
-        with open(WORKSPACE_PATH) as f:
-            p = (json.load(f) or {}).get("cwd")
-        if p and os.path.isdir(p):
-            return p
-    except Exception:
-        pass
     return HARNESS
-
-
-def _save_workspace(cwd):
-    try:
-        with open(WORKSPACE_PATH, "w") as f:
-            json.dump({"cwd": cwd}, f)
-    except Exception:
-        pass
 
 
 # Theme persists server-side (not just in the WebView's localStorage, which can
@@ -720,7 +704,6 @@ def set_workspace():
         return jsonify({"ok": False, "error": "not a directory"}), 400
     cwd = os.path.abspath(os.path.expanduser(cwd))
     _workspace = cwd
-    _save_workspace(cwd)
     s = _sessions.get(sid) if sid else None
     if s:
         s.set_cwd(cwd)
