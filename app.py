@@ -41,15 +41,13 @@ _meta_lock = threading.Lock()
 SESSIONS_META = os.path.join(DATA_DIR, "sessions.json")
 _pending_open = None   # session id the main window should jump to (set by quick entry)
 
-# The repo/dir MIST runs in. Every launch starts in the harness (where her
-# persona lives), and the user can point the Console at a different repo from the
-# topbar repo card for the rest of that run. Deliberately NOT persisted: a repo
-# picked for one piece of work shouldn't silently become the default for every
-# future chat. Existing chats keep their own cwd from sessions.json regardless.
-def _load_workspace():
-    return HARNESS
-
-
+# The repo/dir MIST runs in is PER-CHAT, and every new chat starts in the harness
+# (where her persona lives). The topbar repo card points the chat you're in at a
+# different repo; that choice is deliberately not remembered anywhere, neither on
+# disk nor in a process-wide default, because a repo picked for one piece of work
+# shouldn't become the dir every later chat opens in. Existing chats keep their
+# own cwd from sessions.json, since a claude transcript is keyed to the directory
+# it was created in.
 # Theme persists server-side (not just in the WebView's localStorage, which can
 # be wiped when the app is fully closed/reopened), so the chosen look survives.
 THEME_PATH = os.path.join(DATA_DIR, "theme.json")
@@ -104,9 +102,6 @@ def _save_font(fid, stack):
             json.dump({"id": fid, "stack": stack}, f)
     except Exception:
         pass
-
-
-_workspace = _load_workspace()
 
 
 def _save_meta():
@@ -226,7 +221,7 @@ def _load_meta():
             pin_order=m.get("pin_order", 0),
             claude_session_id=csid, model=m.get("model"),
             permission_mode=m.get("permission_mode") or DEFAULT_PERMISSION_MODE,
-            import_path=m.get("import_path"), cwd=m.get("cwd") or _workspace,
+            import_path=m.get("import_path"), cwd=m.get("cwd") or HARNESS,
             last_activity=m.get("last_activity"), autostart=False)  # dormant
         _order.append(sid)
         try:
@@ -242,7 +237,7 @@ def _new_session():
     global _counter
     _counter += 1
     sid = f"s{_counter}"
-    _sessions[sid] = ClaudeSession(id=sid, model=_default_model or None, cwd=_workspace,
+    _sessions[sid] = ClaudeSession(id=sid, model=_default_model or None, cwd=HARNESS,
                                    permission_mode=_default_perm or DEFAULT_PERMISSION_MODE)
     _order.append(sid)
     _save_meta()
@@ -661,8 +656,8 @@ def _repo_info(cwd=None):
     """Git origin + branch for the cwd the headless claude runs in.
     'repo currently being pointed at' = where this session would push. Pass a
     session's own cwd so the badge reflects the chat you're viewing; falls back
-    to the global default (new-chat inheritance) when no session cwd is given."""
-    cwd = cwd or _workspace
+    to the harness (where a new chat would open) when no session cwd is given."""
+    cwd = cwd or HARNESS
     def git(*args):
         try:
             return subprocess.run(["git", "-C", cwd, *args],
@@ -693,21 +688,21 @@ def repo():
 
 @app.route("/workspace", methods=["POST"])
 def set_workspace():
-    """Point the Console at a different repo/dir. Sets the global default (new
-    chats inherit it) and switches the active chat into it (fresh, since a
-    claude transcript can't --resume across directories)."""
-    global _workspace
+    """Point THIS chat at a different repo/dir (fresh, since a claude transcript
+    can't --resume across directories). Scoped to the chat on purpose: it sets no
+    global default, so the next new chat still opens in the harness."""
     data = request.get_json(silent=True) or {}
     cwd = (data.get("cwd") or "").strip()
     sid = data.get("session")
     if not cwd or not os.path.isdir(cwd):
         return jsonify({"ok": False, "error": "not a directory"}), 400
-    cwd = os.path.abspath(os.path.expanduser(cwd))
-    _workspace = cwd
     s = _sessions.get(sid) if sid else None
-    if s:
-        s.set_cwd(cwd)
-    return jsonify({"ok": True, **_repo_info()})
+    if not s:
+        return jsonify({"ok": False, "error": "open a chat first"}), 400
+    cwd = os.path.abspath(os.path.expanduser(cwd))
+    s.set_cwd(cwd)
+    _save_meta()
+    return jsonify({"ok": True, **_repo_info(cwd)})
 
 
 @app.route("/sessions/<sid>/model", methods=["POST"])
