@@ -237,7 +237,7 @@ def _new_session():
     global _counter
     _counter += 1
     sid = f"s{_counter}"
-    _sessions[sid] = ClaudeSession(id=sid, model=_default_model or None, cwd=HARNESS,
+    _sessions[sid] = ClaudeSession(id=sid, model=_new_chat_model() or None, cwd=HARNESS,
                                    permission_mode=_default_perm or DEFAULT_PERMISSION_MODE)
     _order.append(sid)
     _save_meta()
@@ -372,7 +372,16 @@ def get_models():
     return _models_cache["models"]
 
 
-_default_model = ""
+def _new_chat_model():
+    """Model for brand-new chats: always the newest clean Opus alias, regardless
+    of what the last chat was switched to. Resolved per-call so it tracks CLI
+    updates the same way the picker does."""
+    for m in get_models():
+        if "opus" in m["id"] and not m["id"].endswith("[1m]"):
+            return m["id"]
+    return ""
+
+
 _default_perm = ""   # "" -> ClaudeSession falls back to DEFAULT_PERMISSION_MODE
 _theme = _load_theme()
 
@@ -649,7 +658,7 @@ def airdrop_claim():
 @app.route("/config")
 def config():
     return jsonify({"spinner_verbs": SPINNER_VERBS, "models": get_models(),
-                    "default_model": _default_model})
+                    "default_model": _new_chat_model()})
 
 
 def _repo_info(cwd=None):
@@ -707,12 +716,10 @@ def set_workspace():
 
 @app.route("/sessions/<sid>/model", methods=["POST"])
 def set_model(sid):
-    global _default_model
     s = _sessions.get(sid)
     if not s:
         return jsonify({"ok": False}), 404
     model = (request.get_json(silent=True) or {}).get("model", "")
-    _default_model = model            # new chats inherit this choice
     s.set_model(model)
     _save_meta()
     return jsonify({"ok": True, "model": model})

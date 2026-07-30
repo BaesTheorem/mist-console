@@ -156,7 +156,7 @@ def _new_session():
     global _counter
     _counter += 1
     sid = f"s{_counter}"
-    _sessions[sid] = ClaudeSession(id=sid, model=_default_model or None,
+    _sessions[sid] = ClaudeSession(id=sid, model=_new_chat_model() or None,
                                    cwd=_workspace_dir(),
                                    permission_mode=_default_perm or DEFAULT_PERMISSION_MODE)
     _order.append(sid)
@@ -312,7 +312,15 @@ def get_models():
     return _models_cache["models"]
 
 
-_default_model = ""
+def _new_chat_model():
+    """Model for brand-new chats: always the newest clean Opus alias, regardless
+    of what the last chat was switched to."""
+    for m in get_models():
+        if "opus" in m["id"] and not m["id"].endswith("[1m]"):
+            return m["id"]
+    return ""
+
+
 _default_perm = ""
 _pending_focus = None
 
@@ -535,7 +543,7 @@ def peek_focus():
 @app.route("/config")
 def config():
     return jsonify({"spinner_verbs": SPINNER_VERBS, "models": get_models(),
-                    "default_model": _default_model})
+                    "default_model": _new_chat_model()})
 
 
 def _repo_info(cwd=None):
@@ -588,12 +596,10 @@ def set_workspace():
 
 @app.route("/sessions/<sid>/model", methods=["POST"])
 def set_model(sid):
-    global _default_model
     s = _sessions.get(sid)
     if not s:
         return jsonify({"ok": False}), 404
     model = (request.get_json(silent=True) or {}).get("model", "")
-    _default_model = model
     s.set_model(model)
     _save_meta()
     return jsonify({"ok": True, "model": model})
