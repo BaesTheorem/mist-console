@@ -373,13 +373,14 @@ def get_models():
 
 
 def _new_chat_model():
-    """Model for brand-new chats: always the newest clean Opus alias, regardless
-    of what the last chat was switched to. Resolved per-call so it tracks CLI
-    updates the same way the picker does."""
-    for m in get_models():
-        if "opus" in m["id"] and not m["id"].endswith("[1m]"):
-            return m["id"]
-    return ""
+    """Model for brand-new chats: always the newest Opus alias, preferring the
+    1M-context variant, regardless of what the last chat was switched to.
+    Resolved per-call so it tracks CLI updates the same way the picker does."""
+    opus = [m["id"] for m in get_models() if "opus" in m["id"]]
+    for mid in opus:
+        if mid.endswith("[1m]"):
+            return mid
+    return opus[0] if opus else ""
 
 
 _default_perm = ""   # "" -> ClaudeSession falls back to DEFAULT_PERMISSION_MODE
