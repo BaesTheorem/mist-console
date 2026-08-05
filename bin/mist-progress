@@ -288,16 +288,62 @@ class Meter:
 
 
 # ---- running a command under a bar -------------------------------------------
-def run_command(bar, argv, use_pty=True):
-    """Run argv, mirror its output to our own stdout byte-for-byte, and drive the
-    bar from it. Returns the exit code."""
+class Passthrough:
+    """Mirror the command's output, minus its redraw frames.
+
+    A pty makes tools print their meter, and a meter redraws by returning to the
+    start of the line with \\r — a 4 GB download emits thousands of frames of the
+    same line. Those frames are worth pixels and worth nothing in a transcript,
+    and this output is read back by a model, where every frame is tokens. So only
+    \\n-terminated lines are emitted, each collapsed to its final frame. Ordinary
+    output is untouched; `--raw` turns the filtering off."""
+
+    def __init__(self, out, raw=False):
+        self.out = out
+        self.raw = raw
+        self.pending = b""
+
+    def write(self, chunk):
+        if self.raw:
+            self._emit(chunk)
+            return
+        data = self.pending + chunk
+        keep = []
+        while True:
+            i = data.find(b"\n")
+            if i < 0:
+                break
+            line, data = data[:i + 1], data[i + 1:]
+            keep.append(line.rsplit(b"\r", 1)[-1] if b"\r" in line else line)
+        # An unterminated frame stays pending: it's either a half-read line or the
+        # meter's live frame, and neither should be emitted yet.
+        self.pending = data[-8192:]
+        if keep:
+            self._emit(b"".join(keep))
+
+    def close(self):
+        """Emit whatever the command left unterminated (its last meter frame, or a
+        final line with no newline), so nothing real is swallowed."""
+        if self.pending:
+            tail = self.pending.rsplit(b"\r", 1)[-1] if not self.raw else self.pending
+            if tail.strip():
+                self._emit(tail if tail.endswith(b"\n") else tail + b"\n")
+            self.pending = b""
+
+    def _emit(self, data):
+        self.out.write(data)
+        self.out.flush()
+
+
+def run_command(bar, argv, use_pty=True, raw=False):
+    """Run argv, mirror its output to our own stdout, and drive the bar from it.
+    Returns the exit code."""
     meter = Meter(bar)
-    out = sys.stdout.buffer
+    through = Passthrough(sys.stdout.buffer, raw=raw)
 
     def mirror(chunk):
-        out.write(chunk)
-        out.flush()
-        meter.feed(chunk)
+        through.write(chunk)
+        meter.feed(chunk)     # the meter still sees every frame — that's the bar
 
     proc = None
 
@@ -363,6 +409,7 @@ def run_command(bar, argv, use_pty=True):
                 break
             mirror(chunk)
     meter.flush()
+    through.close()
     code = proc.wait()
     if code == 0:
         bar.finish("done")
@@ -371,18 +418,18 @@ def run_command(bar, argv, use_pty=True):
     return code
 
 
-def run_pipe(bar):
+def run_pipe(bar, raw=False):
     meter = Meter(bar)
-    out = sys.stdout.buffer
+    through = Passthrough(sys.stdout.buffer, raw=raw)
     src = sys.stdin.buffer
     while True:
         chunk = src.read(1024)
         if not chunk:
             break
-        out.write(chunk)
-        out.flush()
+        through.write(chunk)
         meter.feed(chunk)
     meter.flush()
+    through.close()
     bar.finish("done")
     return 0
 
@@ -411,6 +458,8 @@ def main():
     ap.add_argument("--url", default=os.environ.get("MIST_CONSOLE_URL", DEFAULT_URL))
     ap.add_argument("--no-pty", action="store_true",
                     help="don't give the command a pty (it then may hide its meter)")
+    ap.add_argument("--raw", action="store_true",
+                    help="pass output through byte-for-byte, redraw frames included")
     # Split the wrapped command off by hand at the first bare `--`. argparse's
     # REMAINDER would start collecting at the first flag after the mode, which
     # ate --label and then tried to exec it.
@@ -431,8 +480,8 @@ def main():
             label = os.path.basename(cmd[0]) if cmd else "working"
         bar = Bar(bar_id, args.url, args.session, label=label)
         if args.mode == "run":
-            return run_command(bar, cmd, use_pty=not args.no_pty)
-        return run_pipe(bar)
+            return run_command(bar, cmd, use_pty=not args.no_pty, raw=args.raw)
+        return run_pipe(bar, raw=args.raw)
 
     bar = Bar(bar_id, args.url, args.session)
     fields = {k: getattr(args, k) for k in
