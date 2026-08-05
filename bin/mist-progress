@@ -1,0 +1,463 @@
+#!/usr/bin/env python3
+"""mist-progress — draw a live progress bar in the MIST Console chat that started
+this process, and keep it updating in place.
+
+The Console renders one element per bar id: post to the same id again and that
+element updates, so a 4 GB download is one line that fills, not a wall of ticks.
+
+Usage
+  mist-progress run --label "Downloading model" -- curl -L -O https://…
+      Run a command, pass its output through untouched, and parse its own
+      progress meter (curl / wget / pip / git / rsync / anything printing a
+      percentage or a byte pair) into the bar. Finishes itself on exit: done on
+      exit 0, error otherwise. This is the one to reach for.
+
+  … | mist-progress pipe --label "Uploading"
+      Same parsing, but for something already producing output on stdin. The
+      stream is passed through unchanged.
+
+  mist-progress start --label "Rebuilding index"        # opens a bar, prints its id
+  mist-progress set --id ID --pct 42 --detail "chunk 3" # moves it
+  mist-progress set --id ID --current 120 --total 500   # …or by count/bytes
+  mist-progress done --id ID                            # done | fail | cancel
+
+A bar with no percentage is not a dead end: it renders as an indeterminate bar
+with elapsed time and whatever detail line you give it, which still answers "is
+this alive?".
+
+Addressing: the chat is $MIST_CONSOLE_SESSION and the server is
+$MIST_CONSOLE_URL, both exported into every Console session's shell, so inside a
+chat there is nothing to configure. Elsewhere (a watcher, a launchd job) pass
+--session/--url. With neither, the CLI stays silent and still runs the command,
+so wrapping something in mist-progress never breaks it outside the Console.
+"""
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+DEFAULT_URL = "http://127.0.0.1:5014"
+POST_INTERVAL = 0.2      # seconds; the server coalesces further
+GIVE_UP_AFTER = 3        # consecutive POST failures before we stop trying
+
+
+# ---- talking to the Console --------------------------------------------------
+class Bar:
+    """One progress bar. Owns a background poster so parsing never blocks on IO."""
+
+    def __init__(self, bar_id, url, session, label=None):
+        self.id = bar_id
+        self.url = (url or "").rstrip("/")
+        self.session = session or ""
+        self.enabled = bool(self.url and self.session)
+        self.state = {"id": bar_id, "status": "running"}
+        if label:
+            self.state["label"] = label
+        self._dirty = bool(label)
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._fails = 0
+        self._thread = None
+        if self.enabled:
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+
+    def update(self, **fields):
+        """Merge fields into the bar's state; the poster ships them on its next tick."""
+        clean = {k: v for k, v in fields.items() if v is not None}
+        if not clean:
+            return
+        with self._lock:
+            if all(self.state.get(k) == v for k, v in clean.items()):
+                return          # nothing moved — don't wake the poster
+            self.state.update(clean)
+            self._dirty = True
+
+    def finish(self, status="done", detail=None, label=None):
+        """Settle the bar. Posted synchronously: the process usually exits right
+        after this, and a bar frozen mid-fill is exactly the lie we're fixing."""
+        with self._lock:
+            self.state["status"] = status
+            if detail is not None:
+                self.state["detail"] = detail
+            if label is not None:
+                self.state["label"] = label
+            payload = dict(self.state)
+            self._dirty = False
+        self._stop.set()
+        self._post(payload)
+
+    def _loop(self):
+        while not self._stop.is_set():
+            self._stop.wait(POST_INTERVAL)
+            with self._lock:
+                if not self._dirty:
+                    continue
+                payload = dict(self.state)
+                self._dirty = False
+            self._post(payload)
+
+    def _post(self, payload):
+        if not self.enabled or self._fails >= GIVE_UP_AFTER:
+            return
+        req = urllib.request.Request(
+            "%s/progress/%s" % (self.url, self.session),
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=2).read()
+            self._fails = 0
+        except Exception:
+            # The Console may be closed, restarting, or on another port. Fail
+            # quiet — the wrapped command is the point, the bar is the garnish.
+            self._fails += 1
+
+
+# ---- reading someone else's progress meter -----------------------------------
+_PCT = re.compile(r"(\d{1,3}(?:\.\d+)?)\s?%")
+_BYTES = re.compile(
+    r"(\d+(?:\.\d+)?)\s*([KMGT]i?B|B)\s*(?:/|\s+of\s+)\s*(\d+(?:\.\d+)?)\s*([KMGT]i?B|B)", re.I)
+# pip/rich style, where the unit is written once for the pair: "12.3/45.6 MB"
+_BYTES_SHARED = re.compile(
+    r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*([KMGT]i?B|B)\b", re.I)
+_PIP_RAW = re.compile(r"Progress\s+(\d+)\s+of\s+(\d+)")          # pip --progress-bar raw
+_COUNT = re.compile(r"\((\d+)\s*/\s*(\d+)\)")                     # git "Receiving objects: (12/34)"
+# curl's default meter has no % sign: the columns are
+#   % Total  Total  % Received  Received  % Xferd  Xferd  …
+# so the first column IS the percent, and columns 2 and 4 are the sizes (in
+# curl's 1024-based k/M/G shorthand). Anchored on its time columns below so an
+# ordinary numeric log line can't match.
+_CURL = re.compile(
+    r"^\s*(\d{1,3})\s+(\d+(?:\.\d+)?[kMGTP]?)\s+(\d{1,3})\s+(\d+(?:\.\d+)?[kMGTP]?)\s+\d+\s+\S+")
+_CURL_TIME = re.compile(r"(--:--:--|\d+:\d\d:\d\d)")
+_SUFFIX = {"": 1.0, "k": 1024.0, "m": 1024.0 ** 2,
+           "g": 1024.0 ** 3, "t": 1024.0 ** 4, "p": 1024.0 ** 5}
+
+
+def _curl_size(tok):
+    try:
+        return float(tok.rstrip("kMGTP")) * _SUFFIX[tok[-1].lower() if tok[-1].isalpha() else ""]
+    except (ValueError, KeyError, IndexError):
+        return None
+_ETA = re.compile(r"\beta[:\s]+(\d+:\d\d(?::\d\d)?|(?:\d+[hms]\s*)+)", re.I)
+_RATE = re.compile(r"(\d+(?:\.\d+)?\s*[KMGT]?i?B/s)", re.I)
+_MULT = {"b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12,
+         "kib": 1024.0, "mib": 1024.0 ** 2, "gib": 1024.0 ** 3, "tib": 1024.0 ** 4}
+
+
+def _to_bytes(num, unit):
+    try:
+        return float(num) * _MULT.get(unit.lower(), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _eta_seconds(raw):
+    raw = raw.strip().lower()
+    if ":" in raw:
+        parts = [int(p) for p in raw.split(":")]
+        secs = 0
+        for p in parts:
+            secs = secs * 60 + p
+        return secs
+    secs = 0
+    for val, unit in re.findall(r"(\d+)\s*([hms])", raw):
+        secs += int(val) * {"h": 3600, "m": 60, "s": 1}[unit]
+    return secs or None
+
+
+def parse_line(line):
+    """Pull whatever progress a tool's output line is carrying. Returns a dict of
+    any of pct / current / total / rate / eta, or {} when the line says nothing."""
+    out = {}
+    m = _BYTES.search(line)
+    if m:
+        cur = _to_bytes(m.group(1), m.group(2))
+        tot = _to_bytes(m.group(3), m.group(4))
+        if cur is not None and tot:
+            out["current"], out["total"], out["unit"] = cur, tot, "bytes"
+    else:
+        m = _BYTES_SHARED.search(line)
+        if m:
+            cur = _to_bytes(m.group(1), m.group(3))
+            tot = _to_bytes(m.group(2), m.group(3))
+            if cur is not None and tot:
+                out["current"], out["total"], out["unit"] = cur, tot, "bytes"
+    if "current" not in out:
+        m = _PIP_RAW.search(line) or _COUNT.search(line)
+        if m:
+            cur, tot = float(m.group(1)), float(m.group(2))
+            if tot:
+                out["current"], out["total"] = cur, tot
+    m = _PCT.search(line)
+    if m:
+        pct = float(m.group(1))
+        if 0 <= pct <= 100:
+            out["pct"] = pct
+    elif "pct" not in out and _CURL_TIME.search(line):
+        m = _CURL.match(line)
+        if m:
+            pct = float(m.group(1))
+            if 0 <= pct <= 100:
+                out["pct"] = pct
+            cur, tot = _curl_size(m.group(4)), _curl_size(m.group(2))
+            if "current" not in out and cur is not None and tot:
+                out["current"], out["total"], out["unit"] = cur, tot, "bytes"
+    m = _RATE.search(line)
+    if m:
+        out["rate"] = re.sub(r"\s+", " ", m.group(1)).strip()
+    m = _ETA.search(line)
+    if m:
+        eta = _eta_seconds(m.group(1))
+        if eta:
+            out["eta"] = eta
+    return out
+
+
+class Meter:
+    """Feeds raw output bytes in, pushes parsed progress to a Bar.
+
+    Tools redraw their meter with \\r and no trailing newline, so segments are
+    split on both and the unterminated tail is parsed too (that tail IS the
+    current frame) without being consumed."""
+
+    def __init__(self, bar, detail_when_blind=True):
+        self.bar = bar
+        self.tail = ""
+        self.detail_when_blind = detail_when_blind
+        self.samples = []           # (t, current) for deriving an ETA ourselves
+        self.saw_any = False
+
+    def feed(self, chunk):
+        text = self.tail + chunk.decode("utf-8", "replace")
+        parts = re.split(r"[\r\n]", text)
+        self.tail = parts[-1][-4096:]
+        best, best_line = {}, ""
+        for part in parts:
+            if not part.strip():
+                continue
+            got = parse_line(part)
+            if got:
+                best, best_line = got, part
+            elif not best:
+                best_line = part          # keep the newest line for the detail slot
+        if best:
+            if not self.saw_any:
+                # Real numbers arrived: drop the placeholder detail line we were
+                # showing before them (often a meter's own column header).
+                self.saw_any = True
+                best.setdefault("detail", "")
+            self._derive_eta(best)
+            self.bar.update(**best)
+        elif self.detail_when_blind and best_line and not self.saw_any:
+            # No numbers anywhere yet: an indeterminate bar plus the tool's own
+            # last line still tells you it's moving and what it's chewing on.
+            self.bar.update(detail=best_line.strip()[:120])
+
+    def _derive_eta(self, got):
+        """Most tools print a rate but not a remaining time. If we have a total,
+        estimate one from the last ~10s of movement so the bar can say '3m left'."""
+        cur, tot = got.get("current"), got.get("total")
+        if not cur or not tot or "eta" in got:
+            return
+        now = time.time()
+        self.samples.append((now, cur))
+        self.samples = [(t, c) for (t, c) in self.samples if now - t <= 10][-40:]
+        if len(self.samples) < 2:
+            return
+        (t0, c0), (t1, c1) = self.samples[0], self.samples[-1]
+        if t1 <= t0 or c1 <= c0:
+            return
+        speed = (c1 - c0) / (t1 - t0)
+        if speed > 0:
+            got["eta"] = max(0, int((tot - cur) / speed))
+
+    def flush(self):
+        if self.tail.strip():
+            got = parse_line(self.tail)
+            if got:
+                self.bar.update(**got)
+        self.tail = ""
+
+
+# ---- running a command under a bar -------------------------------------------
+def run_command(bar, argv, use_pty=True):
+    """Run argv, mirror its output to our own stdout byte-for-byte, and drive the
+    bar from it. Returns the exit code."""
+    meter = Meter(bar)
+    out = sys.stdout.buffer
+
+    def mirror(chunk):
+        out.write(chunk)
+        out.flush()
+        meter.feed(chunk)
+
+    proc = None
+
+    def bail(signum, _frame):
+        if proc and proc.poll() is None:
+            proc.send_signal(signum)
+        bar.finish("canceled", detail="interrupted")
+        sys.exit(130)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, bail)
+        except ValueError:
+            pass        # not on the main thread; the wrapper still works
+
+    if use_pty:
+        # Most tools print a progress meter only when they believe a human is
+        # watching, and check isatty() to decide. A pty makes that true, which is
+        # the difference between a live bar and a silent pipe for pip, git, and
+        # anything using rich/tqdm.
+        import fcntl
+        import pty
+        import struct
+        import termios
+        master, slave = pty.openpty()
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
+        except Exception:
+            pass
+        try:
+            proc = subprocess.Popen(argv, stdout=slave, stderr=slave,
+                                    stdin=subprocess.DEVNULL, close_fds=True)
+        except FileNotFoundError as e:
+            os.close(master)
+            os.close(slave)
+            bar.finish("error", detail=str(e))
+            print("mist-progress: %s" % e, file=sys.stderr)
+            return 127
+        os.close(slave)
+        try:
+            while True:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    break          # EIO — the child closed the pty, i.e. it exited
+                if not chunk:
+                    break
+                mirror(chunk)
+        finally:
+            os.close(master)
+    else:
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL)
+        except FileNotFoundError as e:
+            bar.finish("error", detail=str(e))
+            print("mist-progress: %s" % e, file=sys.stderr)
+            return 127
+        while True:
+            chunk = proc.stdout.read(1024)
+            if not chunk:
+                break
+            mirror(chunk)
+    meter.flush()
+    code = proc.wait()
+    if code == 0:
+        bar.finish("done")
+    else:
+        bar.finish("error", detail="exit %d" % code)
+    return code
+
+
+def run_pipe(bar):
+    meter = Meter(bar)
+    out = sys.stdout.buffer
+    src = sys.stdin.buffer
+    while True:
+        chunk = src.read(1024)
+        if not chunk:
+            break
+        out.write(chunk)
+        out.flush()
+        meter.feed(chunk)
+    meter.flush()
+    bar.finish("done")
+    return 0
+
+
+# ---- cli ---------------------------------------------------------------------
+def new_id(label):
+    slug = re.sub(r"[^a-z0-9]+", "-", (label or "bar").lower()).strip("-")[:24] or "bar"
+    return "%s-%d-%s" % (slug, os.getpid(), format(int(time.time() * 1000) % 1000000, "x"))
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="mist-progress", add_help=True,
+                                 description="Live progress bars in the MIST Console.")
+    ap.add_argument("mode", choices=["run", "pipe", "start", "set", "update",
+                                     "done", "fail", "cancel"])
+    ap.add_argument("--id", help="bar id (stable key; same id = same element)")
+    ap.add_argument("--label", help="what this is, in words")
+    ap.add_argument("--detail", help="one-line status under the bar")
+    ap.add_argument("--pct", type=float, help="0-100")
+    ap.add_argument("--current", type=float)
+    ap.add_argument("--total", type=float)
+    ap.add_argument("--unit", help='"bytes" to format as sizes, else a plain count')
+    ap.add_argument("--eta", type=float, help="seconds remaining")
+    ap.add_argument("--rate", help='e.g. "12.4 MB/s"')
+    ap.add_argument("--session", default=os.environ.get("MIST_CONSOLE_SESSION", ""))
+    ap.add_argument("--url", default=os.environ.get("MIST_CONSOLE_URL", DEFAULT_URL))
+    ap.add_argument("--no-pty", action="store_true",
+                    help="don't give the command a pty (it then may hide its meter)")
+    # Split the wrapped command off by hand at the first bare `--`. argparse's
+    # REMAINDER would start collecting at the first flag after the mode, which
+    # ate --label and then tried to exec it.
+    argv = sys.argv[1:]
+    cmd = []
+    if "--" in argv:
+        i = argv.index("--")
+        cmd, argv = argv[i + 1:], argv[:i]
+    args = ap.parse_args(argv)
+
+    bar_id = args.id or new_id(args.label)
+
+    if args.mode in ("run", "pipe"):
+        label = args.label
+        if args.mode == "run" and not cmd:
+            ap.error("run needs a command: mist-progress run --label L -- cmd args")
+        if not label:
+            label = os.path.basename(cmd[0]) if cmd else "working"
+        bar = Bar(bar_id, args.url, args.session, label=label)
+        if args.mode == "run":
+            return run_command(bar, cmd, use_pty=not args.no_pty)
+        return run_pipe(bar)
+
+    bar = Bar(bar_id, args.url, args.session)
+    fields = {k: getattr(args, k) for k in
+              ("label", "detail", "pct", "current", "total", "unit", "eta", "rate")}
+    if args.mode == "start":
+        bar.update(status="running", **fields)
+        # The id is the handle for every later call, so hand it back for `ID=$(…)`.
+        print(bar_id)
+        time.sleep(POST_INTERVAL * 2)       # let the poster ship it before we exit
+        return 0
+    if args.mode in ("set", "update"):
+        if not args.id:
+            ap.error("set needs --id (from `mist-progress start`)")
+        bar.update(status="running", **fields)
+        time.sleep(POST_INTERVAL * 2)
+        return 0
+    if not args.id:
+        ap.error("%s needs --id" % args.mode)
+    bar.finish({"done": "done", "fail": "error", "cancel": "canceled"}[args.mode],
+               detail=args.detail, label=args.label)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

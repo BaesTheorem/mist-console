@@ -95,6 +95,39 @@ Switch a chat to **default / acceptEdits / plan** via the perm badge and the Con
 
 Press **Esc** (or click the send button, which becomes **stop** while a turn runs and the composer is empty) to cancel an in-flight turn. This sends an `interrupt` control_request. The process is **not** killed, so context is preserved and the next message just continues (unlike the old kill/restart).
 
+## Progress bars (in-place, not a scroll of ticks)
+
+A download, upload, or install renders as **one element that updates in place**: a
+label, a filling bar, and a line of "1.2 GB / 2.9 GB · 12.4 MB/s · ~3m left · 1m12s
+elapsed". A long silent wait is indistinguishable from a hang, and that was the
+thing to fix.
+
+- **Driving it**: `bin/mist-progress`, on PATH inside every session.
+  `mist-progress run --label "Downloading model" -- curl -L -O <url>` runs the
+  command, passes its output through byte-for-byte, and parses the command's own
+  meter (curl, wget, pip, git, rsync, anything printing a percentage or a byte
+  pair) into the bar. It gives the command a **pty** by default, since most tools
+  only print a meter when they think a human is watching. `start` / `set` / `done`
+  drive a bar you compute yourself; `pipe` reads a stream you already have.
+- **Wiring**: `POST /progress/<sid>` with `{id, label, pct, current, total, unit,
+  detail, rate, eta, status}`. `id` is the caller's key — post the same id again
+  and the SAME element moves. Every session's shell gets `$MIST_CONSOLE_SESSION`
+  and `$MIST_CONSOLE_URL`, so a script started from a chat reports back into that
+  chat with nothing to configure. Outside the Console the CLI stays silent and
+  still runs the command, so wrapping something in it never breaks it.
+- **No percentage, still no dead end**: a bar with nothing but a label renders
+  indeterminate, with an elapsed clock and whatever detail line it's given.
+- **Cost**: ticks are broadcast live but only a bar's first and last frames are
+  persisted (`bridge.PROGRESS_MIN_INTERVAL` coalesces the rest), so a 10-minute
+  install doesn't bury the replayed transcript in thousands of dead updates. A bar
+  whose process died mid-run replays as **interrupted** rather than as one that
+  still looks live.
+- **The dock**: scroll away from a running bar and it re-appears as a one-line
+  echo at the bottom-left of the conversation; click it to jump back. It hides
+  whenever the real bar is on screen.
+- Reduce Motion is respected: the indeterminate sweep becomes a static hatched
+  fill and jump-to-bar scrolling is instant.
+
 ## MCP parity with the CLI
 
 The session loads **all** MCP scopes (no `--strict-mcp-config`), exactly like the interactive `claude` CLI: things3, fitbit, withings, linkedin, and the claude.ai connectors (Gmail/Calendar/Drive/MyChart). 8 servers, ~90 MCP tools.

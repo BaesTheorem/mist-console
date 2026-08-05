@@ -786,6 +786,28 @@ def stop_bg_task(sid, task_id):
     return jsonify({"ok": True})
 
 
+@app.route("/progress/<sid>", methods=["POST"])
+def progress(sid):
+    """Feed one in-place progress bar in chat <sid>.
+
+    Body: {id, label?, status?, pct?, current?, total?, unit?, detail?, rate?, eta?}
+    `id` is the caller's own stable key for the bar — post to the same id again
+    and the SAME element updates rather than a new one appearing. status is
+    running (default) / done / error / canceled.
+
+    Anything that can reach localhost can drive this; the address of the chat
+    lives in $MIST_CONSOLE_SESSION inside every session's own shell, so a script
+    started from a chat reports back into that chat with no plumbing. The CLI in
+    bin/mist-progress is the ergonomic front end."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    body = request.get_json(silent=True) or {}
+    if not s.progress(body):
+        return jsonify({"ok": False, "error": "id is required"}), 400
+    return jsonify({"ok": True})
+
+
 @app.route("/sessions/<sid>/title", methods=["POST"])
 def rename_session(sid):
     s = _sessions.get(sid)

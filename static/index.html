@@ -61,6 +61,9 @@ if(_fid)_d.dataset.font=_fid;}catch(e){}</script>
   <main id="logs">
     <button id="railToggle" title="Hide the chat list" aria-label="Toggle chat list"><span class="msi">left_panel_close</span></button>
     <button id="jumpBtn" hidden title="Jump to the latest message"><span class="msi">arrow_downward</span> jump to present</button>
+    <!-- Compact echo of any running progress bar that's scrolled out of view.
+         Lives inside #logs so it tracks the log area, not the window. -->
+    <aside id="progDock" hidden></aside>
   </main>
 </div>
 

@@ -968,6 +968,109 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 }
 .lightbox-btn:hover { background: var(--hover); }
 
+/* ---------- in-place progress bars ----------
+   One element per transfer, created once and mutated from then on: a download
+   is a bar that fills, never a scroll of ticks and never a silent wait. Same
+   flat/sharp language as the tool cards — square, hairline, no shadow. The
+   track is a thin hairline rule that a solid fill eats from the left. */
+.prog { border: 1px solid var(--line); margin: 8px 0; padding: 7px 10px 8px; }
+.prog-head { display: flex; align-items: baseline; gap: 8px; }
+.prog-glyph.msi { font-size: 14px; line-height: 1.4; flex: 0 0 15px; color: var(--dim); }
+.prog.running .prog-glyph { color: var(--teal); animation: dot-breathe 1.15s ease-in-out infinite; }
+.prog.done .prog-glyph { color: var(--ok); }
+.prog.error .prog-glyph { color: var(--err); }
+.prog.canceled .prog-glyph, .prog.stale .prog-glyph { color: var(--warn); }
+.prog-label { flex: 1 1 auto; min-width: 0; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prog-pct { flex: 0 0 auto; color: var(--teal); font-variant-numeric: tabular-nums; }
+.prog.done .prog-pct { color: var(--ok); }
+.prog.error .prog-pct { color: var(--err); }
+.prog-track {
+  height: 4px; margin: 6px 0 5px;
+  background: color-mix(in srgb, var(--md-sys-color-outline-variant) 45%, transparent);
+  overflow: hidden;
+}
+.prog-fill {
+  height: 100%; width: 0; background: var(--teal);
+  transition: width .25s linear;
+}
+.prog.done .prog-fill { background: var(--ok); }
+.prog.error .prog-fill { background: var(--err); }
+.prog.canceled .prog-fill, .prog.stale .prog-fill { background: var(--dim); }
+.prog-sub { color: var(--dim); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prog.done, .prog.canceled, .prog.stale { opacity: .78; }
+/* No percentage to show (an installer that only says it's working): the fill
+   spans the track and a sweep carries "alive" instead of a number. */
+.prog.indet .prog-fill {
+  background: linear-gradient(90deg, transparent 0%,
+    var(--teal) 35%, var(--teal) 65%, transparent 100%);
+  background-size: 45% 100%; background-repeat: no-repeat;
+  animation: prog-sweep 1.5s ease-in-out infinite;
+  transition: none;
+}
+@keyframes prog-sweep {
+  0% { background-position: -50% 0; }
+  100% { background-position: 150% 0; }
+}
+/* Reduce Motion is on for this machine, so the sweep must not be the only cue:
+   fall back to a static hatched fill that still reads as "running, size unknown". */
+@media (prefers-reduced-motion: reduce) {
+  .prog.running .prog-glyph { animation: none; }
+  .prog.indet .prog-fill {
+    animation: none;
+    background: repeating-linear-gradient(90deg,
+      var(--teal) 0 6px, transparent 6px 12px);
+    background-size: auto; opacity: .55;
+  }
+  #progDock .pd-row.indet .pd-fill { animation: none; }
+}
+
+/* ---------- progress dock ----------
+   A running bar that scrolls out of view reappears here as a one-liner at the
+   bottom of the conversation. It sits INSIDE #logs (like #jumpBtn), so it tracks
+   the log area rather than the window — no math against the tab rail's width or
+   the composer's height, and it can't drift over the rail when that's resized.
+   Left-hand side, so it never collides with the background-task monitor on the
+   right. Click a row to jump back to the real bar. Hidden whenever that bar is
+   on screen — this echoes, it doesn't duplicate. */
+#progDock {
+  position: absolute; left: 14px; bottom: 14px; z-index: 6;
+  width: min(340px, 40%);
+  background: var(--bg); border: 1px solid var(--teal);
+  font-size: 12px; color: var(--text);
+}
+#progDock[hidden] { display: none; }
+#progDock .pd-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-bottom: 1px solid var(--line); cursor: pointer;
+}
+#progDock .pd-row:last-child { border-bottom: 0; }
+#progDock .pd-row:hover { background: var(--hover); }
+#progDock .pd-glyph.msi { font-size: 14px; color: var(--teal); flex: 0 0 15px;
+  animation: dot-breathe 1.15s ease-in-out infinite; }
+#progDock .pd-main { flex: 1 1 auto; min-width: 0; }
+#progDock .pd-top { display: flex; gap: 8px; align-items: baseline; }
+#progDock .pd-label { flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#progDock .pd-pct { flex: 0 0 auto; color: var(--teal); font-variant-numeric: tabular-nums; }
+#progDock .pd-track {
+  height: 3px; margin-top: 4px;
+  background: color-mix(in srgb, var(--md-sys-color-outline-variant) 45%, transparent);
+  overflow: hidden;
+}
+#progDock .pd-fill { height: 100%; background: var(--teal); transition: width .25s linear; }
+#progDock .pd-row.indet .pd-fill {
+  background: linear-gradient(90deg, transparent 0%,
+    var(--teal) 35%, var(--teal) 65%, transparent 100%);
+  background-size: 45% 100%; background-repeat: no-repeat;
+  animation: prog-sweep 1.5s ease-in-out infinite; transition: none;
+}
+#progDock .pd-more { padding: 4px 10px; color: var(--dim); font-size: 10px; }
+@media (prefers-reduced-motion: reduce) {
+  #progDock .pd-glyph.msi { animation: none; }
+}
+
 /* ---------- background-task monitor ----------
    A live panel over the composer that shows what background agents +
    `run_in_background` shells are doing while the foreground turn sits idle.

@@ -24,6 +24,21 @@ os.makedirs(DATA_DIR, exist_ok=True)
 DEFAULT_PERMISSION_MODE = "bypassPermissions"
 HISTORY_CAP = 8000   # max events kept in memory for replay (jsonl keeps all)
 
+# Where the Console answers, and where its own CLI tools live. Both are handed to
+# every session's environment so a shell inside a chat can talk back to that chat
+# (see ensure_started + the /progress route).
+CONSOLE_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
+CONSOLE_URL = os.environ.get("MIST_CONSOLE_URL", "http://127.0.0.1:5014")
+
+# Progress-event policy. A download posts many updates a second; broadcasting all
+# of them is fine (SSE is cheap) but PERSISTING all of them is not — the jsonl is
+# replayed on every open, and a 10-minute install would bury the transcript in
+# thousands of dead ticks. So intermediate ticks are ephemeral (live subscribers
+# only) and only the first event for a bar and its terminal state hit disk: a
+# replayed transcript shows each transfer once, in its final state.
+PROGRESS_MIN_INTERVAL = 0.15   # seconds between broadcasts per bar (terminal always passes)
+PROGRESS_TERMINAL = ("done", "error", "canceled")
+
 # app.py sets this to its _save_meta so a session can persist itself the instant
 # its claude_session_id is assigned (on the backend's init event) — otherwise the
 # id lives only in memory until the 10s periodic saver, and a window close /
@@ -254,6 +269,20 @@ NO_VOICE_PROMPT = (
     "remain available on other surfaces; they are simply disabled in this one.)"
 )
 
+# The Console renders a real, in-place progress element (see /progress + the
+# `progress` event), so a long download/upload/install never looks like a hang.
+# Every session gets the `mist-progress` CLI on PATH plus the env vars it needs
+# to address THIS chat, and this prompt is how the model learns it exists.
+PROGRESS_PROMPT = (
+    "This Console renders live progress bars. Whenever a command you run has to "
+    "download, upload, install, clone, sync, or otherwise transfer something that "
+    "takes more than a few seconds, run it through `mist-progress run --label "
+    "\"<what it is>\" -- <command>` (it passes the command's output through "
+    "unchanged and draws a bar that updates in place in this chat). For work "
+    "whose progress you compute yourself, use `mist-progress start/set/done`. "
+    "Never leave the user watching a silent wait."
+)
+
 
 class ClaudeSession:
     """One conversation: a persisted event history + (lazily) a claude process."""
@@ -297,6 +326,7 @@ class ClaudeSession:
         self._pending_stops = {}     # control request_id -> task_id awaiting ack
         self._pending_perms = {}     # can_use_tool request_id -> {input, suggestions}
         self._init_sent = False      # control-protocol initialize handshake sent?
+        self._progress = {}          # progress bar id -> {last: ts, done: bool}
 
         # History loads lazily on first open (snapshot_history), NOT here. At
         # startup app.py constructs a ClaudeSession for every saved chat; eagerly
@@ -410,7 +440,7 @@ class ClaudeSession:
         # THIS session only. Other surfaces (news-briefing podcast, note
         # narration, the mist-terminal greeting) keep voice — we don't touch
         # CLAUDE.md.
-        cmd += ["--append-system-prompt", NO_VOICE_PROMPT]
+        cmd += ["--append-system-prompt", NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT]
         return cmd
 
     def ensure_started(self):
@@ -419,7 +449,13 @@ class ClaudeSession:
                 return
             env = dict(os.environ)
             env["PATH"] = (os.path.expanduser("~/.npm-global/bin")
-                           + ":/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", ""))
+                           + ":/opt/homebrew/bin:/usr/local/bin:" + CONSOLE_BIN
+                           + ":" + env.get("PATH", ""))
+            # Address THIS chat from anything the session shells out to. A script
+            # (or mist-progress) posts to $MIST_CONSOLE_URL/progress/$MIST_CONSOLE_SESSION
+            # and its bar renders inline in the conversation that started it.
+            env["MIST_CONSOLE_SESSION"] = self.id or ""
+            env["MIST_CONSOLE_URL"] = CONSOLE_URL
             try:
                 self.proc = subprocess.Popen(
                     self._build_cmd(), cwd=self.cwd, env=env,
@@ -687,13 +723,64 @@ class ClaudeSession:
                 "now re-bills the whole conversation, which burns tokens fast. "
                 "Start a “+ new chat” for a new task, or send again to continue here.")
 
+    # ---- progress bars -----------------------------------------------------
+    def progress(self, payload):
+        """Update one in-place progress bar in this chat. `payload` is the parsed
+        body of POST /progress/<sid>: {id, label, status, pct, current, total,
+        unit, detail, rate, eta}. Returns False only for an unusable payload.
+
+        Throttled + mostly ephemeral (see PROGRESS_MIN_INTERVAL): a live viewer
+        sees every meaningful tick, disk sees the start and the end."""
+        pid = str(payload.get("id") or "").strip()
+        if not pid:
+            return False
+        status = payload.get("status") or "running"
+        if status not in ("running",) + PROGRESS_TERMINAL:
+            status = "running"
+        terminal = status in PROGRESS_TERMINAL
+        now = time.time()
+        with self._lock:
+            st = self._progress.get(pid)
+            first = st is None
+            if first:
+                st = self._progress[pid] = {"last": 0.0, "done": False}
+            if st["done"] and not first:
+                return True          # bar already settled; ignore late stragglers
+            if not terminal and now - st["last"] < PROGRESS_MIN_INTERVAL:
+                return True          # coalesce: the next tick is milliseconds away
+            st["last"] = now
+            if terminal:
+                st["done"] = True
+        ev = {"type": "progress", "id": pid, "status": status}
+        for k in ("label", "detail", "rate", "unit"):
+            v = payload.get(k)
+            if v is not None:
+                ev[k] = str(v)[:200]
+        for k in ("pct", "current", "total", "eta"):
+            v = payload.get(k)
+            if isinstance(v, (int, float)):
+                ev[k] = v
+        # A caller that reports bytes but no percentage still gets a real bar.
+        if "pct" not in ev and ev.get("total"):
+            try:
+                ev["pct"] = max(0.0, min(100.0, ev["current"] / ev["total"] * 100))
+            except (KeyError, TypeError, ZeroDivisionError):
+                pass
+        if terminal and status == "done" and "pct" in ev:
+            ev["pct"] = 100.0
+        # Only the opening and closing frames are worth keeping (see the policy
+        # note at PROGRESS_MIN_INTERVAL).
+        self._broadcast(ev, record=(first or terminal))
+        return True
+
     # ---- pub/sub -----------------------------------------------------------
-    def _broadcast(self, obj):
+    def _broadcast(self, obj, record=True):
         # Stamp every event with the wall-clock time it was seen, so the front-end
         # can show an accurate per-message timestamp on both live turns and replay.
         if "ts" not in obj:
             obj["ts"] = time.time()
-        self._record(obj)
+        if record:
+            self._record(obj)
         with self._lock:
             subs = list(self._subscribers)
         for q in subs:
