@@ -104,6 +104,33 @@ def _save_font(fid, stack):
         pass
 
 
+# Text size, same deal: persisted server-side so a wiped localStorage still opens
+# at the size you set, and injected pre-paint so it never flashes at 100% first.
+# Stored as a whole percent and clamped — the UI is usable across this range and
+# nothing outside it is a size anyone chose on purpose.
+TEXTSIZE_PATH = os.path.join(DATA_DIR, "textsize.json")
+TEXTSIZE_MIN, TEXTSIZE_MAX, TEXTSIZE_DEFAULT = 70, 200, 100
+
+
+def _load_textsize():
+    try:
+        with open(TEXTSIZE_PATH) as f:
+            pct = int((json.load(f) or {}).get("pct"))
+        if TEXTSIZE_MIN <= pct <= TEXTSIZE_MAX:
+            return pct
+    except Exception:
+        pass
+    return TEXTSIZE_DEFAULT
+
+
+def _save_textsize(pct):
+    try:
+        with open(TEXTSIZE_PATH, "w") as f:
+            json.dump({"pct": pct}, f)
+    except Exception:
+        pass
+
+
 def _save_meta():
     with _meta_lock:
         data = []
@@ -405,6 +432,7 @@ def index():
         html = html.replace('||"terminal"', '||' + json.dumps(theme))
         html = html.replace('<html lang="en">', '<html lang="en" data-theme="%s">' % theme)
         html = html.replace('window.__mistFont=null;', 'window.__mistFont=%s;' % json.dumps(_load_font()))
+        html = html.replace('window.__mistZoom=null;', 'window.__mistZoom=%d;' % _load_textsize())
         return Response(html, mimetype="text/html")
     except Exception:
         return send_from_directory("static", "index.html")
@@ -576,6 +604,20 @@ def theme():
         _save_theme(t)
         return jsonify({"ok": True, "theme": t})
     return jsonify({"theme": _load_theme()})
+
+
+@app.route("/textsize", methods=["GET", "POST"])
+def textsize():
+    if request.method == "POST":
+        try:
+            pct = int((request.get_json(silent=True) or {}).get("pct"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "pct must be a number"}), 400
+        pct = max(TEXTSIZE_MIN, min(TEXTSIZE_MAX, pct))
+        _save_textsize(pct)
+        return jsonify({"ok": True, "pct": pct})
+    return jsonify({"pct": _load_textsize(),
+                    "min": TEXTSIZE_MIN, "max": TEXTSIZE_MAX})
 
 
 @app.route("/font", methods=["GET", "POST"])

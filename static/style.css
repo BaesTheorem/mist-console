@@ -52,12 +52,24 @@ body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
   /* Terminal: a black field with MIST's own mark on it, nothing else. The logo
      is bright (a white-hot core), so it is held low and large — a watermark to
      notice, never a light source under the text. Opacity is the readability
-     knob, and it was measured, not eyeballed: the brightest pixel of the core
-     composites to ~#292B28 at .16, which still leaves body text at 11.8:1 —
-     well past WCAG AAA, with room to spare for the dimmer chrome text. */
+     knob, and it was measured, not eyeballed. Raising it uniformly is what
+     doesn't work: the logo's core is near-white, so at .30 the *dim* chrome text
+     (--md-sys-color-outline, timestamps and sublines) falls to 2.7:1, failing
+     even AA, long before the body text is in trouble. So the mark runs BRIGHT
+     and a mask holds it down to roughly .14 across the column where messages
+     actually sit (they're left-aligned, max 900px). Full strength lives in the
+     empty right margin, where there is nothing to read. */
   --wp-image: url("MIST_nobg.png");
-  --wp-opacity: .16; --wp-blend: normal;
+  --wp-opacity: .32; --wp-blend: normal;
   --wp-size: auto 62%; --wp-repeat: no-repeat; --wp-pos: center;
+}
+/* Readability mask (terminal): .45 alpha over the reading column is .144
+   effective — body text 12.1:1, dim text 4.9:1, both past AA with the body past
+   AAA — ramping to full brightness past the column's edge. On a narrow window
+   the whole field is simply the dimmed value, which is the safe direction. */
+html[data-theme="terminal"] #logs::after {
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.45) 0, rgba(0,0,0,.45) 940px, #000 1100px, #000 100%);
+          mask-image: linear-gradient(to right, rgba(0,0,0,.45) 0, rgba(0,0,0,.45) 940px, #000 1100px, #000 100%);
 }
 /* the conversation is a black canvas in this theme, not the navy chrome ground */
 html[data-theme="terminal"] #logs { background: #000; }
@@ -463,6 +475,19 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   font-size: 14px; line-height: 1; color: var(--teal);
 }
 .modelnote { padding: 8px 12px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11px; }
+
+/* text-size stepper (settings): −  100%  +  — flat/sharp, same chip language as
+   the badges. The readout is a button because clicking it resets to 100%. */
+.tsize { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.tsize button {
+  font-family: var(--mono); font-size: 12px; line-height: 1;
+  background: var(--md-sys-color-surface-container-lowest); color: var(--text);
+  border: 1px solid var(--line); padding: 5px 0; cursor: pointer;
+}
+.tsize #tsizeUp, .tsize #tsizeDown { width: 28px; font-size: 14px; }
+.tsize #tsizeVal { width: 56px; color: var(--teal); font-variant-numeric: tabular-nums; }
+.tsize button:hover { border-color: var(--teal); color: var(--teal); }
+.tsize-note { color: var(--dim); font-size: 10px; flex: 1 1 100%; }
 
 /* ---- composer ---- */
 #composer {
