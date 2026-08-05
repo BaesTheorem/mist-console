@@ -95,6 +95,26 @@ Switch a chat to **default / acceptEdits / plan** via the perm badge and the Con
 
 Press **Esc** (or click the send button, which becomes **stop** while a turn runs and the composer is empty) to cancel an in-flight turn. This sends an `interrupt` control_request. The process is **not** killed, so context is preserved and the next message just continues (unlike the old kill/restart).
 
+## Look: theme, font, text size
+
+Settings carries three appearance controls, all persisted **twice** — localStorage
+so they apply before first paint, and server-side (`data/*.json`) so a wiped
+WebView store still opens the way you left it.
+
+- **Text size** scales the whole window via `zoom` on the root, 70–200% in steps
+  of 5. `⌘+` / `⌘−` / `⌘0` work too; a WebView has no browser chrome, so nothing
+  binds those unless we do. Scaling only the message text would leave tiny chrome
+  around big text, which is worse than either.
+- **Font**: system faces plus ten vendored OFL families (see
+  [`static/fonts/README.md`](static/fonts/README.md)). Each row previews itself.
+- **Terminal wallpaper** is MIST's mark on black. The asset is `mist-wall.png`,
+  the logo with its blown-out white core compressed back into its own blue: the
+  core is what capped brightness, since at high opacity it drowned the dim
+  timestamp text long before body text suffered. With no hotspot the mark runs 4×
+  brighter (`--wp-opacity: .40`) and still measures 12:1 for body text and 4.9:1
+  for the dimmest chrome text. To brighten further, regenerate the asset with a
+  lower cap rather than raising the opacity.
+
 ## Progress bars (in-place, not a scroll of ticks)
 
 A download, upload, or install renders as **one element that updates in place**: a

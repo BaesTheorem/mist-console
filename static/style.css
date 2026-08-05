@@ -53,23 +53,20 @@ body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
      is bright (a white-hot core), so it is held low and large — a watermark to
      notice, never a light source under the text. Opacity is the readability
      knob, and it was measured, not eyeballed. Raising it uniformly is what
-     doesn't work: the logo's core is near-white, so at .30 the *dim* chrome text
-     (--md-sys-color-outline, timestamps and sublines) falls to 2.7:1, failing
-     even AA, long before the body text is in trouble. So the mark runs BRIGHT
-     and a mask holds it down to roughly .14 across the column where messages
-     actually sit (they're left-aligned, max 900px). Full strength lives in the
-     empty right margin, where there is nothing to read. */
-  --wp-image: url("MIST_nobg.png");
-  --wp-opacity: .32; --wp-blend: normal;
-  --wp-size: auto 62%; --wp-repeat: no-repeat; --wp-pos: center;
-}
-/* Readability mask (terminal): .45 alpha over the reading column is .144
-   effective — body text 12.1:1, dim text 4.9:1, both past AA with the body past
-   AAA — ramping to full brightness past the column's edge. On a narrow window
-   the whole field is simply the dimmed value, which is the safe direction. */
-html[data-theme="terminal"] #logs::after {
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.45) 0, rgba(0,0,0,.45) 940px, #000 1100px, #000 100%);
-          mask-image: linear-gradient(to right, rgba(0,0,0,.45) 0, rgba(0,0,0,.45) 940px, #000 1100px, #000 100%);
+     doesn't work: the source logo's core is near-white, and THAT is what caps
+     everything — at .30 the dim chrome text (--md-sys-color-outline: timestamps,
+     sublines) falls to 2.7:1, failing even AA, long before the body text is in
+     any trouble. The mark stays centered on the chat, so dimming or dodging the
+     column isn't the answer either.
+     The fix is in the asset: mist-wall.png is the logo with its blown-out core
+     compressed back into the logo's own blue (peak channel 132 instead of 255,
+     silhouette untouched). With no white hotspot to blow out, the whole mark can
+     run four times brighter at .40 — measured peak #112635, leaving body text at
+     12:1 and the dimmest chrome text at 4.9:1, both past AA. Regenerate the
+     asset, not this number, if it ever needs to go brighter still. */
+  --wp-image: url("mist-wall.png");
+  --wp-opacity: .40; --wp-blend: normal;
+  --wp-size: auto 70%; --wp-repeat: no-repeat; --wp-pos: center;
 }
 /* the conversation is a black canvas in this theme, not the navy chrome ground */
 html[data-theme="terminal"] #logs { background: #000; }
@@ -326,7 +323,11 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 
 /* inline "thinking" spinner in the chat — full-width, MIST verb */
 .spinner { display: flex; align-items: center; gap: 8px; padding: 8px 2px; color: var(--violet); font-style: italic; font-size: 13px; }
-.spinner .sv-glyph { color: var(--teal); font-style: normal; animation: pulse 1.4s ease-in-out infinite; }
+.spinner .sv-glyph { color: var(--teal); font-style: normal; animation: pulse 1.4s ease-in-out infinite;
+  display: inline-flex; align-items: center; }
+/* MIST's rhombus, wherever it's drawn as an icon (the thinking spinner today) */
+.mist-ico { width: 8px; height: 15px; display: block; fill: currentColor; }
+.spinner .mist-ico { width: 9px; height: 16px; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* markdown body */
