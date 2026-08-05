@@ -49,12 +49,21 @@ body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
    theme, whose opaque body background paints over any negative-z child.)
    --wp-* are the knobs; each theme tunes size/blend/opacity to its own ground. */
 :root {
-  --wp-opacity: .22; --wp-blend: normal;
-  --wp-size: cover; --wp-repeat: no-repeat; --wp-pos: center;
+  /* Terminal: a black field with MIST's own mark on it, nothing else. The logo
+     is bright (a white-hot core), so it is held low and large — a watermark to
+     notice, never a light source under the text. Opacity is the readability
+     knob, and it was measured, not eyeballed: the brightest pixel of the core
+     composites to ~#292B28 at .16, which still leaves body text at 11.8:1 —
+     well past WCAG AAA, with room to spare for the dimmer chrome text. */
+  --wp-image: url("MIST_nobg.png");
+  --wp-opacity: .16; --wp-blend: normal;
+  --wp-size: auto 62%; --wp-repeat: no-repeat; --wp-pos: center;
 }
+/* the conversation is a black canvas in this theme, not the navy chrome ground */
+html[data-theme="terminal"] #logs { background: #000; }
 #logs::after {
   content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  background-image: url("riom-lilies.png");
+  background-image: var(--wp-image);
   background-size: var(--wp-size);
   background-repeat: var(--wp-repeat);
   background-position: var(--wp-pos);
@@ -70,6 +79,7 @@ body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
    green lattice and `multiply` it onto the paper like printed ink — the foliage
    and borders read clearly while the whites stay light. */
 html[data-theme="solarpunk"] {
+  --wp-image: url("riom-lilies.png");
   --wp-opacity: .55; --wp-blend: multiply;
   --wp-size: 660px auto; --wp-repeat: repeat; --wp-pos: top left;
 }
@@ -167,7 +177,14 @@ body.col-resizing { cursor: col-resize; user-select: none; }
 body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab.drag-over { box-shadow: inset 0 2px 0 0 var(--teal); }   /* legacy insertion line (unused) */
 .tab.active { background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container-high)); color: var(--text); border-left-color: var(--teal); }
-.tab .dot { width: 7px; height: 7px; flex: 0 0 7px; background: var(--dim); border-radius: 0; }
+/* Status marker: MIST's own silhouette, the tall rhombus from the logo, clipped
+   out of the existing box so every state rule (color, breathe, glow) still just
+   sets a background. Every chat in the rail wears it, in every theme. */
+.tab .dot {
+  width: 8px; height: 13px; flex: 0 0 8px; background: var(--dim);
+  border-radius: 0; transform: none;
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+}
 .tab .dot.idle { background: var(--md-sys-color-outline-variant); }
 /* thinking/working dots breathe so you can spot which chats are live at a glance */
 .tab .dot.thinking { background: var(--violet); animation: dot-breathe 1.15s ease-in-out infinite; }
@@ -217,13 +234,20 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 #jumpBtn:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 16%, var(--md-sys-color-surface-container-high)); }
 #jumpBtn[hidden] { display: none; }
 
-/* collapse/expand toggle for the tab rail — pinned to the logs' top-left corner */
+/* Collapse/expand toggle for the tab rail. It is part of the rail's edge, not a
+   button floating over the conversation: a slim nub flush against the rail's
+   border, sharing its hairline and dropping its own left edge so the two read as
+   one piece of chrome. Vertically centered and only 11px wide, so it lives in
+   the log's gutter and never sits on the text. */
 #railToggle {
-  position: absolute; top: 8px; left: 8px; z-index: 6;
-  width: 22px; height: 22px; line-height: 1; text-align: center;
-  padding: 0; background: var(--md-sys-color-surface-container-low); color: var(--dim); border: 1px solid var(--line);
+  position: absolute; left: 0; top: 50%; transform: translateY(-50%); z-index: 6;
+  width: 11px; height: 52px; line-height: 1; text-align: center;
+  padding: 0; background: var(--md-sys-color-surface-container-low); color: var(--dim);
+  border: 1px solid var(--line); border-left: 0;
+  display: flex; align-items: center; justify-content: center;
 }
-#railToggle:hover { border-color: var(--teal); color: var(--teal); }
+#railToggle:hover { border-color: var(--teal); color: var(--teal);
+  background: var(--md-sys-color-surface-container-high); }
 #mid.rail-collapsed #tabrail { width: 0; flex-basis: 0; overflow: hidden; border-right: 0; }
 #mid.rail-collapsed #railResize { display: none; }
 .session-log[hidden] { display: none; }
@@ -874,13 +898,11 @@ html[data-theme="solarpunk"] .tab.active {
 html[data-theme="solarpunk"] .tab.pinned { background: linear-gradient(180deg, #FBF3DA, #F6EAC8); }
 html[data-theme="solarpunk"] .tab.pinned.active { background: linear-gradient(180deg, #E7F0D2, #D9E8BF); }
 
-/* status dots become little living leaves — tilted, breathing (shared
-   @keyframes dot-breathe), softly glowing. Color still carries meaning:
+/* Status markers keep MIST's rhombus here too (it's her mark, not a theme
+   flourish) — the solarpunk voice comes through in color and glow instead:
    sage = idle, gold = thinking, foliage = working, brick = error. */
 html[data-theme="solarpunk"] .tab .dot {
-  width: 9px; height: 9px; flex-basis: 9px;
-  border-radius: 0 70% 0 70%;          /* leaf silhouette */
-  transform: rotate(-12deg);
+  width: 9px; height: 14px; flex-basis: 9px;
 }
 html[data-theme="solarpunk"] .tab .dot.idle { background: #8FB06B; }   /* living sage, not muted */
 html[data-theme="solarpunk"] .tab .dot.thinking { box-shadow: 0 0 6px rgba(224,177,0,.75); }
@@ -1271,7 +1293,7 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 /* icon spans inside legacy buttons/labels */
 button .msi { font-size: 14px; vertical-align: -3px; }
 #newTab .msi, #jumpBtn .msi { font-size: 14px; vertical-align: -3px; margin-right: 2px; }
-#railToggle .msi { font-size: 15px; vertical-align: middle; }
+#railToggle .msi { font-size: 14px; vertical-align: middle; margin-left: -1px; }
 .capHead .xclose { padding: 2px 4px; }
 .capHead .xclose .msi { font-size: 16px; vertical-align: -3px; }
 .tab .tclose .msi { font-size: 13px; vertical-align: -2px; }
