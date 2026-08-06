@@ -259,14 +259,27 @@ def maybe_probe_rate_util():
     threading.Thread(target=_probe_rate_util, daemon=True).start()
 
 
-# Scoped to Console sessions only (see _build_cmd). Keeps MIST from speaking
-# aloud in a text chat; voice stays enabled everywhere else.
+# Scoped to Console sessions only (see _build_cmd). Stops MIST from talking at
+# the room unprompted, without stopping her from handing over a file when asked.
+# The Console already serves and plays .mp3/.wav inline (see _AUDIO_EXTS in
+# app.py), so an audio *reply* is just another embed. What doesn't belong in a
+# chat window is unrequested noise through the speakers.
 NO_VOICE_PROMPT = (
-    "You are running inside the MIST Console, a text-only chat surface. "
-    "Do NOT produce audio or speech here: never run mist-say, mist-notify, "
-    "any mist-voice script, afplay, the `say` command, or anything else that "
-    "plays sound or speaks aloud. Respond in text only. (Your voice tools "
-    "remain available on other surfaces; they are simply disabled in this one.)"
+    "You are running inside the MIST Console, a chat surface that renders audio "
+    "inline but never expects sound it wasn't asked for. Do NOT speak aloud on "
+    "your own initiative: no bare mist-say (it plays by default), no afplay, no "
+    "`say`, no mist-notify sounds, nothing that comes out of the speakers unbidden. "
+    "Default to text.\n"
+    "When Alex explicitly asks for an audio or spoken response, render it and embed "
+    "it: pipe your reply text to "
+    "`'/Users/alexhedtke/Documents/Exobrain harness/mist-voice/.venv/bin/python' "
+    "'/Users/alexhedtke/Documents/Exobrain harness/mist-voice/scripts/narrate.py' - "
+    "-o '/Users/alexhedtke/Documents/Exobrain harness/tmp/audio/<name>.mp3'`, then put "
+    "`![reply](/Users/alexhedtke/Documents/Exobrain harness/tmp/audio/<name>.mp3)` in "
+    "your message so the Console shows a player. Write the path RAW, with literal "
+    "spaces, and never percent-encode it. Always include the written text too; the audio "
+    "is an addition to the reply, not a replacement for it. Synthesis is slower than "
+    "real time, so keep spoken replies short and wrap the render in `mist-progress run`."
 )
 
 # The Console renders a real, in-place progress element (see /progress + the
@@ -433,13 +446,13 @@ class ClaudeSession:
         # Exobrain's CLAUDE.md ("Identity & Voice: MIST"), which `claude`
         # auto-loads because we run in the harness cwd (see HARNESS / cwd below).
         #
-        # Voice is OFF in the Console. CLAUDE.md grants MIST audio tools
+        # Voice is opt-in in the Console. CLAUDE.md grants MIST audio tools
         # (mist-say / mist-notify / mist-voice), and with bypassPermissions she
-        # can run them unprompted — so she'd occasionally speak aloud mid-chat.
-        # The Console is a text surface, so we scope a "no audio" instruction to
-        # THIS session only. Other surfaces (news-briefing podcast, note
-        # narration, the mist-terminal greeting) keep voice — we don't touch
-        # CLAUDE.md.
+        # can run them unprompted, so she'd occasionally speak aloud mid-chat.
+        # We scope a "don't speak unless asked" instruction to THIS session: an
+        # explicit request still gets a rendered, embedded track. Other surfaces
+        # (news-briefing podcast, note narration, the mist-terminal greeting)
+        # are untouched, and we don't edit CLAUDE.md.
         cmd += ["--append-system-prompt", NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT]
         return cmd
 
