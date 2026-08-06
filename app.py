@@ -262,11 +262,15 @@ def _load_meta():
 
 def _new_session():
     global _counter
-    _counter += 1
-    sid = f"s{_counter}"
-    _sessions[sid] = ClaudeSession(id=sid, model=_new_chat_model() or None, cwd=HARNESS,
-                                   permission_mode=_default_perm or DEFAULT_PERMISSION_MODE)
-    _order.append(sid)
+    # Under the meta lock: two concurrent creates (quick-entry + the UI button)
+    # racing the unguarded counter could mint the same sid and silently overwrite
+    # one conversation with the other.
+    with _meta_lock:
+        _counter += 1
+        sid = f"s{_counter}"
+        _sessions[sid] = ClaudeSession(id=sid, model=_new_chat_model() or None, cwd=HARNESS,
+                                       permission_mode=_default_perm or DEFAULT_PERMISSION_MODE)
+        _order.append(sid)
     _save_meta()
     return sid
 
@@ -870,7 +874,10 @@ def pin_session(sid):
         return jsonify({"ok": False}), 404
     s.pinned = not s.pinned
     if s.pinned:   # newly pinned -> drop to the end of the pinned list
-        s.pin_order = max((x.pin_order for x in _sessions.values() if x.pinned), default=-1) + 1
+        # list() first: iterating the live dict while another request inserts a
+        # session raises RuntimeError and 500s the pin.
+        s.pin_order = max((x.pin_order for x in list(_sessions.values()) if x.pinned),
+                          default=-1) + 1
     _save_meta()
     return jsonify({"ok": True, "pinned": s.pinned})
 
@@ -922,16 +929,29 @@ def stream(sid):
     s.ensure_imported()                     # lazily convert an imported session
 
     def gen():
-        for ev in s.snapshot_history():     # replay full transcript
-            yield _sse(ev)
-        # Boundary marker: everything above is history, everything below is live.
-        # The front-end uses this to reconcile the background-task monitor once
-        # (instead of flickering it as historical task start/finish events replay).
-        yield _sse({"type": "replay_done"})
-        q = s.subscribe()                   # then live
+        # Subscribe FIRST, then snapshot: anything broadcast while the (network-
+        # paced, possibly seconds-long) replay streams out lands in the queue
+        # instead of falling into the gap — the old order lost those events, so a
+        # chat opened mid-turn froze mid-sentence until the next reconnect. The
+        # overlap (events in both snapshot and queue) is dropped by seq stamp.
+        q = s.subscribe()
         try:
+            last_seq = 0
+            for ev in s.snapshot_history():     # replay full transcript
+                sq = ev.get("seq")
+                if isinstance(sq, int) and sq > last_seq:
+                    last_seq = sq
+                yield _sse(ev)
+            # Boundary marker: everything above is history, everything below is
+            # live. The front-end uses this to reconcile the background-task
+            # monitor once (instead of flickering it during replay).
+            yield _sse({"type": "replay_done"})
             while True:
-                yield _sse(q.get())
+                ev = q.get()
+                sq = ev.get("seq")
+                if isinstance(sq, int) and sq <= last_seq:
+                    continue                     # already replayed above
+                yield _sse(ev)
         except GeneratorExit:
             s.unsubscribe(q)
 
@@ -1044,9 +1064,10 @@ def quick_access_set():
 @app.route("/usage")
 def usage():
     # Three sources, merged in order of authority:
-    #   1. RATE_UTIL_PATH — the LIVE utilization %, probed from the subscription's
-    #      own rate-limit response headers just after a real turn (the only fresh
-    #      source of the % during Console-only use). See bridge._probe_rate_util.
+    #   1. RATE_UTIL_PATH — the LIVE utilization %, read from the free
+    #      GET /api/oauth/usage account endpoint on a timer plus after each turn
+    #      (see bridge._probe_rate_util / start_rate_poller). Stays ≤ ~1 min
+    #      stale while a Console window is open, with zero token cost.
     #   2. RATE_LIVE_PATH — reset time + status from each turn's rate_limit_event
     #      (always fresh; carries no %). Fallback for reset/status if no probe yet.
     #   3. USAGE_CACHE — the interactive-CLI statusline cache; its % is often days
@@ -1303,6 +1324,7 @@ def _rt_save_meta(d, cron, enabled):
 def _cron_field(expr, lo, hi):
     """Expand one cron field (supports *, n, a-b, a,b, */step, a-b/step)."""
     vals = set()
+    weekday = (lo, hi) == (0, 6)
     for part in expr.split(","):
         step = 1
         rng = part
@@ -1317,6 +1339,8 @@ def _cron_field(expr, lo, hi):
         else:
             a = b = int(rng)
         for v in range(a, b + 1, step):
+            if weekday:
+                v %= 7   # standard cron allows 7 for Sunday; "0 9 * * 7" is valid
             if lo <= v <= hi:
                 vals.add(v)
     return sorted(vals)
@@ -1767,6 +1791,7 @@ def _reaper():
 
 import bridge as _bridge
 _bridge.on_meta_dirty = _save_meta   # let a session persist its claude_session_id on init
+_bridge.start_rate_poller(_sessions)   # keep the usage badges' % near-real-time (free read)
 
 _load_meta()
 _load_notes()

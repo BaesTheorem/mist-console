@@ -52,7 +52,7 @@ GIVE_UP_AFTER = 3        # consecutive POST failures before we stop trying
 class Bar:
     """One progress bar. Owns a background poster so parsing never blocks on IO."""
 
-    def __init__(self, bar_id, url, session, label=None):
+    def __init__(self, bar_id, url, session, label=None, oneshot=False):
         self.id = bar_id
         self.url = (url or "").rstrip("/")
         self.session = session or ""
@@ -65,12 +65,19 @@ class Bar:
         self._stop = threading.Event()
         self._fails = 0
         self._thread = None
-        if self.enabled:
+        # One-shot CLI calls (start/set/done) post synchronously in update():
+        # a background poster + a sleep to let it drain added a flat ~0.4s to
+        # every invocation, which a shell loop of `set` calls pays repeatedly.
+        # The poster thread is for `run`/`pipe`, where updates arrive far faster
+        # than they should be posted.
+        self.oneshot = oneshot
+        if self.enabled and not oneshot:
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
 
     def update(self, **fields):
-        """Merge fields into the bar's state; the poster ships them on its next tick."""
+        """Merge fields into the bar's state; the poster ships them on its next
+        tick (or immediately, for a one-shot bar)."""
         clean = {k: v for k, v in fields.items() if v is not None}
         if not clean:
             return
@@ -79,6 +86,9 @@ class Bar:
                 return          # nothing moved — don't wake the poster
             self.state.update(clean)
             self._dirty = True
+            payload = dict(self.state)
+        if self.oneshot:
+            self._post(payload)
 
     def finish(self, status="done", detail=None, label=None):
         """Settle the bar. Posted synchronously: the process usually exits right
@@ -316,8 +326,17 @@ class Passthrough:
             line, data = data[:i + 1], data[i + 1:]
             keep.append(line.rsplit(b"\r", 1)[-1] if b"\r" in line else line)
         # An unterminated frame stays pending: it's either a half-read line or the
-        # meter's live frame, and neither should be emitted yet.
-        self.pending = data[-8192:]
+        # meter's live frame, and neither should be emitted yet. Bound it without
+        # losing real output: redraw frames (\r present) collapse to the live
+        # frame, and a genuinely huge single line (no \r — a long JSON blob, a
+        # minified dump) flushes its head through rather than being truncated.
+        if len(data) > 8192:
+            if b"\r" in data:
+                data = data.rsplit(b"\r", 1)[-1]
+            else:
+                keep.append(data)
+                data = b""
+        self.pending = data
         if keep:
             self._emit(b"".join(keep))
 
@@ -483,20 +502,18 @@ def main():
             return run_command(bar, cmd, use_pty=not args.no_pty, raw=args.raw)
         return run_pipe(bar, raw=args.raw)
 
-    bar = Bar(bar_id, args.url, args.session)
+    bar = Bar(bar_id, args.url, args.session, oneshot=True)   # posts synchronously
     fields = {k: getattr(args, k) for k in
               ("label", "detail", "pct", "current", "total", "unit", "eta", "rate")}
     if args.mode == "start":
         bar.update(status="running", **fields)
         # The id is the handle for every later call, so hand it back for `ID=$(…)`.
         print(bar_id)
-        time.sleep(POST_INTERVAL * 2)       # let the poster ship it before we exit
         return 0
     if args.mode in ("set", "update"):
         if not args.id:
             ap.error("set needs --id (from `mist-progress start`)")
         bar.update(status="running", **fields)
-        time.sleep(POST_INTERVAL * 2)
         return 0
     if not args.id:
         ap.error("%s needs --id" % args.mode)

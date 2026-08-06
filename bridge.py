@@ -170,22 +170,24 @@ def record_rate_limit(info):
     maybe_probe_rate_util()
 
 
-# Live utilization %, probed from the subscription's own rate-limit response
-# headers. WHY a separate probe: the headless stream's rate_limit_event carries
-# resets_at + status but NOT the %, and ~/.claude/usage-cache.json (the only
-# other source of the %) is refreshed solely by the interactive CLI statusline,
-# so during Console-only use it goes stale for days. An OAuth-authenticated
-# /v1/messages call returns anthropic-ratelimit-unified-{5h,7d}-utilization in
-# its response headers — the authoritative live number — using Claude Code's own
-# subscription token (no API key, no scraping). /usage merges this in.
+# Live utilization %, read from the account API: GET api.anthropic.com/api/oauth/usage
+# with Claude Code's own subscription OAuth token returns per-window utilization
+# (0-100) and resets_at. It is a METADATA READ — no message is sent, no tokens are
+# consumed, and it does not open or extend a rate-limit window (verified: three
+# consecutive reads return identical numbers). That retires the old probe, which
+# sent a real 1-token haiku /v1/messages call to harvest response headers and
+# therefore could only safely fire right after a turn, inside an already-open
+# window — leaving the % stale whenever the Console sat idle.
 #
-# We probe ONLY from record_rate_limit (i.e. just after a real turn), never on a
-# timer: the 5h window is anchored to your first message and rolls 5h from there,
-# so a probe fired while idle would START a fresh window just to measure it. Tied
-# to a real turn, the window is already open — the probe is one tiny request
-# inside it and does not move the reset (which is anchored to the window start).
+# Being free and side-effect-less, it can poll on a timer (see start_rate_poller):
+# every RATE_POLL_ACTIVE_SEC while someone is looking at a Console window (any
+# live SSE subscriber), every RATE_POLL_IDLE_SEC otherwise, plus an immediate
+# read after each turn's rate_limit_event. /usage merges the result in as the
+# authoritative %.
 RATE_UTIL_PATH = os.path.join(DATA_DIR, "rate-util.json")
-_PROBE_MIN_INTERVAL = 300          # seconds between probes during continuous use
+_PROBE_MIN_INTERVAL = 20           # floor between reads (post-turn bursts coalesce)
+RATE_POLL_ACTIVE_SEC = 60          # someone has a Console window open
+RATE_POLL_IDLE_SEC = 600           # server running, nobody watching
 _probe_state = {"last_ts": 0.0}
 _probe_state_lock = threading.Lock()
 
@@ -205,36 +207,42 @@ def _read_oauth_token():
         return None
 
 
+def _iso_to_epoch(raw):
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(raw).timestamp())
+    except Exception:
+        return None
+
+
 def _probe_rate_util():
-    """One minimal OAuth-authenticated request; persist the unified utilization
-    headers per window. Silent no-op on any failure (expired token, offline) so
-    the badge falls back to the live reset countdown."""
+    """Read GET /api/oauth/usage (free, no side effects) and persist per-window
+    utilization. Silent no-op on any failure (expired token, offline) so the
+    badge falls back to the live reset countdown and the CLI cache."""
     token = _read_oauth_token()
     if not token:
         return
-    body = json.dumps({"model": "claude-haiku-4-5", "max_tokens": 1,
-                       "messages": [{"role": "user", "content": "hi"}]}).encode()
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages", data=body, method="POST",
+        "https://api.anthropic.com/api/oauth/usage",
         headers={"Authorization": "Bearer " + token,
-                 "anthropic-version": "2023-06-01",
-                 "anthropic-beta": "oauth-2025-04-20",
-                 "content-type": "application/json"})
+                 "anthropic-beta": "oauth-2025-04-20"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            hdrs = resp.headers
+            data = json.loads(resp.read().decode()) or {}
     except Exception:
         return
     rec, now = {}, int(time.time())
-    for win, tag in (("five_hour", "5h"), ("seven_day", "7d")):
-        util = hdrs.get("anthropic-ratelimit-unified-%s-utilization" % tag)
+    for win in ("five_hour", "seven_day"):
+        w = data.get(win) or {}
+        util = w.get("utilization")
         if util is None:
             continue
-        reset = hdrs.get("anthropic-ratelimit-unified-%s-reset" % tag)
         try:
-            rec[win] = {"utilization": float(util),
-                        "resets_at": int(reset) if reset else None,
-                        "status": hdrs.get("anthropic-ratelimit-unified-%s-status" % tag),
+            # The endpoint reports 0-100; rate-util.json keeps the 0-1 fraction
+            # the old header probe wrote, so /usage and its readers don't change.
+            rec[win] = {"utilization": float(util) / 100.0,
+                        "resets_at": _iso_to_epoch(w.get("resets_at") or ""),
+                        "status": None,
                         "ts": now}
         except (TypeError, ValueError):
             continue
@@ -250,13 +258,31 @@ def _probe_rate_util():
 
 
 def maybe_probe_rate_util():
-    """Throttled, non-blocking trigger. Caller guarantees an active window."""
+    """Throttled, non-blocking trigger (the read is free; the floor just keeps a
+    burst of back-to-back turns from stampeding the endpoint)."""
     with _probe_state_lock:
         now = time.time()
         if now - _probe_state["last_ts"] < _PROBE_MIN_INTERVAL:
             return
         _probe_state["last_ts"] = now
     threading.Thread(target=_probe_rate_util, daemon=True).start()
+
+
+def start_rate_poller(sessions):
+    """Poll the free usage read on a timer so the badges stay near-real-time even
+    while the Console just sits there: usage spent in the interactive CLI, in a
+    background routine, or on the phone shows up within a minute, not on the next
+    Console turn. Faster while any chat has a live SSE subscriber (a window is
+    actually looking at the badges), slower when nobody is."""
+    def loop():
+        while True:
+            try:
+                watched = any(s._subscribers for s in list(sessions.values()))
+            except Exception:
+                watched = False
+            maybe_probe_rate_util()
+            time.sleep(RATE_POLL_ACTIVE_SEC if watched else RATE_POLL_IDLE_SEC)
+    threading.Thread(target=loop, daemon=True).start()
 
 
 # Scoped to Console sessions only (see _build_cmd). Stops MIST from talking at
@@ -328,6 +354,14 @@ class ClaudeSession:
         self._subscribers = []
         self._lock = threading.Lock()
         self._hist_lock = threading.Lock()
+        # stdin is a line-oriented JSON protocol shared by several writers (send,
+        # control responses, interrupt, stop_task, the reader thread's auto-
+        # decline). Interleaved partial writes corrupt it — a pasted image is
+        # megabytes, far beyond one pipe write — so every write holds this lock.
+        # Deliberately NOT self._lock: a big image write can block until the CLI
+        # drains the pipe, and that must not stall the rest of the session.
+        self._stdin_lock = threading.Lock()
+        self._ev_seq = 0             # monotonic event stamp (see stream() dedup)
         self._resume_tried = False
         self._started_at = 0.0
         self._saw_init = False
@@ -351,28 +385,44 @@ class ClaudeSession:
 
     # ---- history persistence ----------------------------------------------
     def _load_history(self):
+        # The ENTIRE load happens under _hist_lock. The old shape (set the flag
+        # under the lock, then append outside it) let a second reader — another
+        # window opening the same chat, or a live _record during the load — see a
+        # half-loaded list and render a truncated transcript, or interleave a
+        # fresh event in front of older history lines.
         with self._hist_lock:
             if self._history_loaded:
                 return
             self._history_loaded = True
-        if not self._jsonl or not os.path.exists(self._jsonl):
-            return
-        try:
-            for line in _tail_lines(self._jsonl, HISTORY_CAP):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    self.history.append(json.loads(line))
-                except Exception:
-                    pass  # skip a truncated/corrupt line, keep the rest
-            # restore context % from the last context event we saw
-            for obj in reversed(self.history):
-                if obj.get("type") == "context":
-                    self.context_pct = obj.get("pct")
-                    break
-        except Exception:
-            pass
+            if not self._jsonl or not os.path.exists(self._jsonl):
+                return
+            try:
+                loaded = []
+                for line in _tail_lines(self._jsonl, HISTORY_CAP):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        loaded.append(json.loads(line))
+                    except Exception:
+                        pass  # skip a truncated/corrupt line, keep the rest
+                # Anything recorded while we were reading the file is NEWER than
+                # every line in it — it belongs after the loaded tail.
+                self.history = loaded + self.history
+                self.history = self.history[-HISTORY_CAP:]
+                # keep the event stamp monotonic across dormancy (stream() dedup
+                # compares live queue stamps against replayed history stamps)
+                for obj in self.history:
+                    s = obj.get("seq")
+                    if isinstance(s, int) and s > self._ev_seq:
+                        self._ev_seq = s
+                # restore context % from the last context event we saw
+                for obj in reversed(self.history):
+                    if obj.get("type") == "context":
+                        self.context_pct = obj.get("pct")
+                        break
+            except Exception:
+                pass
 
     def _record(self, obj):
         obj = _slim_event(obj)
@@ -380,12 +430,15 @@ class ClaudeSession:
             self.history.append(obj)
             if len(self.history) > HISTORY_CAP:
                 self.history = self.history[-HISTORY_CAP:]
-        if self._jsonl:
-            try:
-                with open(self._jsonl, "a") as f:
-                    f.write(json.dumps(obj) + "\n")
-            except Exception:
-                pass
+            # The file append stays under the lock too: a large event is many
+            # write() syscalls, and two threads appending concurrently interleave
+            # them — both lines land mangled and replay silently skips them.
+            if self._jsonl:
+                try:
+                    with open(self._jsonl, "a") as f:
+                        f.write(json.dumps(obj) + "\n")
+                except Exception:
+                    pass
 
     def snapshot_history(self):
         self._load_history()   # lazy: read this chat's jsonl tail on first open
@@ -457,6 +510,7 @@ class ClaudeSession:
         return cmd
 
     def ensure_started(self):
+        spawn_err = None
         with self._lock:
             if self.alive:
                 return
@@ -475,16 +529,33 @@ class ClaudeSession:
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, bufsize=1)
             except Exception as e:
-                self._broadcast({"type": "process_exit", "code": -1, "error": str(e)})
-                return
-            self.alive = True
-            self._started_at = time.time()
-            self._saw_init = False
-            self._init_sent = False
-            self._pending_perms = {}
-            threading.Thread(target=self._read_stdout, daemon=True).start()
-            threading.Thread(target=self._read_stderr, daemon=True).start()
-            threading.Thread(target=self._watch, daemon=True).start()
+                # Broadcast AFTER releasing the lock: _broadcast re-acquires
+                # self._lock, and threading.Lock is not reentrant — doing it here
+                # deadlocked the whole session the first time a spawn failed
+                # (deleted cwd, claude binary mid-update).
+                spawn_err = str(e)
+            else:
+                self.alive = True
+                self._started_at = time.time()
+                self._saw_init = False
+                self._init_sent = False
+                self._pending_perms = {}
+                # A fresh backend starts un-flagged. If the OLD process's watcher
+                # never consumed a pending _intentional_stop (it skips itself once
+                # self.proc is replaced), leaving it set would make this new
+                # backend's first real crash look intentional and go unreported.
+                self._intentional_stop = False
+                # Each worker is pinned to THE process it was started for. They
+                # check `self.proc is proc` before touching shared state, so a
+                # thread belonging to an old backend (model switch, reap, crash +
+                # respawn) can't flip flags or broadcast into the new one.
+                proc = self.proc
+                threading.Thread(target=self._read_stdout, args=(proc,), daemon=True).start()
+                threading.Thread(target=self._read_stderr, args=(proc,), daemon=True).start()
+                threading.Thread(target=self._watch, args=(proc,), daemon=True).start()
+        if spawn_err is not None:
+            self._broadcast({"type": "process_exit", "code": -1, "error": spawn_err})
+            return
         # Enable the SDK control protocol so the CLI will route permission
         # decisions to us as can_use_tool control_requests. Only needed when a
         # prompt tool is in play (non-bypass modes); bypassPermissions never asks.
@@ -506,21 +577,27 @@ class ClaudeSession:
             return f"console-{prefix}-{self._ctl_seq}"
 
     def _write_stdin(self, obj):
-        """Write one JSON line to the claude process stdin. Returns True on success."""
+        """Write one JSON line to the claude process stdin. Returns True on success.
+        Serialized: concurrent writers interleaving partial lines would corrupt
+        the protocol (see _stdin_lock)."""
         if not self.alive or not self.proc or self.proc.stdin is None:
             return False
         try:
-            self.proc.stdin.write(json.dumps(obj) + "\n")
-            self.proc.stdin.flush()
+            with self._stdin_lock:
+                self.proc.stdin.write(json.dumps(obj) + "\n")
+                self.proc.stdin.flush()
             return True
         except (BrokenPipeError, ValueError, OSError):
             self.alive = False
             return False
 
-    def _watch(self):
-        code = self.proc.wait()
-        self.alive = False
-        self._turn_active = False
+    def _watch(self, proc):
+        code = proc.wait()
+        with self._lock:
+            if self.proc is not proc:
+                return   # an old backend finally died; the live one is not ours to touch
+            self.alive = False
+            self._turn_active = False
         if self._intentional_stop:           # close or model switch — not a crash
             self._intentional_stop = False
             return
@@ -575,17 +652,26 @@ class ClaudeSession:
         no conversation is lost and no extra tokens are spent (see IDLE_REAP_SEC).
         Mirrors set_model/set_permission: clear _resume_tried first so the revive
         actually --resumes instead of starting fresh."""
-        if timeout <= 0 or not self.alive or self._turn_active:
-            return False
-        if time.time() - self.last_activity < timeout:
-            return False
-        self._resume_tried = False
-        self.stop()
+        # Checks AND the stop happen under the session lock, mutually exclusive
+        # with send() reserving the turn (which sets _turn_active under the same
+        # lock). Without this, a send landing in the gap between the checks and
+        # stop() had its message written to a process the reaper was about to
+        # SIGTERM — and because the stop was "intentional", the exit was swallowed
+        # and the message vanished with a spinner left behind.
+        with self._lock:
+            if timeout <= 0 or not self.alive or self._turn_active:
+                return False
+            if time.time() - self.last_activity < timeout:
+                return False
+            self._resume_tried = False
+            self._stop_locked()
         return True
 
     # ---- io ----------------------------------------------------------------
-    def _read_stdout(self):
-        for line in self.proc.stdout:
+    def _read_stdout(self, proc):
+        for line in proc.stdout:
+            if self.proc is not proc:
+                return   # replaced backend: stop relaying a dead process's output
             line = line.strip()
             if not line:
                 continue
@@ -676,8 +762,10 @@ class ClaudeSession:
             return True
         return False
 
-    def _read_stderr(self):
-        for line in self.proc.stderr:
+    def _read_stderr(self, proc):
+        for line in proc.stderr:
+            if self.proc is not proc:
+                return
             if line.strip():
                 self._broadcast({"type": "stderr", "text": line.rstrip()})
 
@@ -756,15 +844,35 @@ class ClaudeSession:
             st = self._progress.get(pid)
             first = st is None
             if first:
-                st = self._progress[pid] = {"last": 0.0, "done": False}
+                st = self._progress[pid] = {"last": 0.0, "done": False, "gen": 0}
             if st["done"] and not first:
-                return True          # bar already settled; ignore late stragglers
-            if not terminal and now - st["last"] < PROGRESS_MIN_INTERVAL:
+                # The docs sell --id as a STABLE key, so a script reusing one
+                # (`--id model-download`, run daily) must get a fresh bar, not
+                # silence forever. A running post well clear of the settle is a
+                # new generation — new element in the UI via a suffixed id. Posts
+                # right after the terminal frame are stragglers and stay ignored.
+                if not terminal and now - st["last"] > 5:
+                    st["done"] = False
+                    st["gen"] += 1
+                    first = True     # record the new bar's opening frame
+                else:
+                    return True
+            if not terminal and not first and now - st["last"] < PROGRESS_MIN_INTERVAL:
                 return True          # coalesce: the next tick is milliseconds away
             st["last"] = now
+            gen = st["gen"]
             if terminal:
                 st["done"] = True
-        ev = {"type": "progress", "id": pid, "status": status}
+                # Settled bars stay registered to absorb late stragglers, but a
+                # long-lived chat shouldn't accumulate them forever: keep the
+                # newest 200 settled entries and drop the oldest beyond that.
+                done = [k for k, v in self._progress.items() if v["done"]]
+                for k in done[:-200]:
+                    del self._progress[k]
+        # Later generations broadcast a suffixed id so the UI keys a NEW element
+        # instead of resurrecting the settled bar sitting mid-transcript.
+        ev_id = pid if not gen else "%s~%d" % (pid, gen)
+        ev = {"type": "progress", "id": ev_id, "status": status}
         for k in ("label", "detail", "rate", "unit"):
             v = payload.get(k)
             if v is not None:
@@ -792,15 +900,30 @@ class ClaudeSession:
         # can show an accurate per-message timestamp on both live turns and replay.
         if "ts" not in obj:
             obj["ts"] = time.time()
+        with self._lock:
+            # Monotonic stamp, persisted with the event: /stream subscribes BEFORE
+            # snapshotting history and uses this to drop the overlap (an event in
+            # both the snapshot and the queue), instead of the old subscribe-after
+            # shape that silently LOST everything broadcast during a slow replay.
+            self._ev_seq += 1
+            obj["seq"] = self._ev_seq
+            subs = list(self._subscribers)
         if record:
             self._record(obj)
-        with self._lock:
-            subs = list(self._subscribers)
         for q in subs:
             try:
                 q.put_nowait(obj)
             except queue.Full:
-                pass
+                # Drop the OLDEST event, not this one. A stalled client that
+                # drops whatever arrives next loses exactly the events that
+                # matter most — the result that stops the spinner, a permission
+                # card, a bar's terminal frame — and desyncs until a manual
+                # reload. Old deltas are the expendable ones.
+                try:
+                    q.get_nowait()
+                    q.put_nowait(obj)
+                except Exception:
+                    pass
 
     def subscribe(self):
         q = queue.Queue(maxsize=4000)
@@ -843,19 +966,30 @@ class ClaudeSession:
         if not self.title:
             t = text or "Screenshot" if image_path else (text or url or "New chat")
             self.title = (t[:40] + "…") if len(t) > 40 else t
-        self.last_activity = time.time()
+        # Reserve the turn BEFORE broadcasting/writing, under the session lock:
+        # once _turn_active is set the reaper (which checks it under the same
+        # lock) can no longer put this backend dormant out from under the write.
+        with self._lock:
+            if not self.alive:
+                return False
+            self.last_activity = time.time()
+            self._turn_active = True   # cleared on the matching result (or exit)
         ev = {"type": "user_text", "text": display}   # for live + replay
         if img_for_display:
             ev["image"] = img_for_display
         self._broadcast(ev)
         msg = {"type": "user", "message": {"role": "user", "content": content}}
         try:
-            self.proc.stdin.write(json.dumps(msg) + "\n")
-            self.proc.stdin.flush()
-            self._turn_active = True   # cleared on the matching result (or exit)
+            # _stdin_lock, not self._lock: an image payload is megabytes and this
+            # write can block until the CLI drains the pipe — the session must
+            # stay responsive (progress posts, /interrupt) while it does.
+            with self._stdin_lock:
+                self.proc.stdin.write(json.dumps(msg) + "\n")
+                self.proc.stdin.flush()
             return True
         except (BrokenPipeError, ValueError, OSError):
             self.alive = False
+            self._turn_active = False
             return False
 
     def stop_task(self, task_id):
@@ -997,6 +1131,11 @@ class ClaudeSession:
         self._broadcast({"type": "status_idle"})
 
     def stop(self):
+        with self._lock:
+            self._stop_locked()
+
+    def _stop_locked(self):
+        """Terminate the backend. Caller holds self._lock."""
         self._intentional_stop = True
         try:
             if self.proc and self.alive:
