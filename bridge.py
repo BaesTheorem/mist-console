@@ -308,6 +308,22 @@ NO_VOICE_PROMPT = (
     "real time, so keep spoken replies short and wrap the render in `mist-progress run`."
 )
 
+# The Console renders a first-class recipe card (ingredients checklist, step
+# timers, a full-screen cooking mode) whenever the model emits a ```recipe
+# fence. This prompt teaches the model the contract; static/app.js renders it.
+RECIPE_PROMPT = (
+    "When you give Alex a recipe, the Console renders it as an interactive "
+    "recipe card with a cooking mode and clickable timers. Emit the recipe as a "
+    "fenced code block with language `recipe` containing ONE JSON object:\n"
+    '{"title": str, "serves": str, "time": {"prep": str, "cook": str, "total": str}, '
+    '"ingredients": [str, ...] or [{"group": str, "items": [str, ...]}, ...], '
+    '"steps": [{"text": str, "timer": seconds} or str, ...], "notes": str}\n'
+    "Set \"timer\" (integer seconds) on every step that involves timed waiting "
+    "(simmer, bake, rest, proof); omit it otherwise. Only title, ingredients, "
+    "and steps are required. Keep prose around the block brief — the card IS "
+    "the recipe. Use the block for any real recipe, not for one-line food tips."
+)
+
 # The Console renders a real, in-place progress element (see /progress + the
 # `progress` event), so a long download/upload/install never looks like a hang.
 # Every session gets the `mist-progress` CLI on PATH plus the env vars it needs
@@ -506,7 +522,8 @@ class ClaudeSession:
         # explicit request still gets a rendered, embedded track. Other surfaces
         # (news-briefing podcast, note narration, the mist-terminal greeting)
         # are untouched, and we don't edit CLAUDE.md.
-        cmd += ["--append-system-prompt", NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT]
+        cmd += ["--append-system-prompt",
+                NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT + "\n\n" + RECIPE_PROMPT]
         return cmd
 
     def ensure_started(self):

@@ -115,6 +115,27 @@ WebView store still opens the way you left it.
   for the dimmest chrome text. To brighten further, regenerate the asset with a
   lower cap rather than raising the opacity.
 
+## Recipe cards + cooking mode
+
+A ```` ```recipe ```` fence (JSON — schema in `bridge.RECIPE_PROMPT`, which teaches
+the model to emit one whenever it gives a real recipe) renders as an interactive
+card: title/serves/times, a tap-to-check ingredient list (grouped or flat), and
+numbered steps with **inline clickable timers** — claude.ai style — wherever a
+step declares `"timer": seconds` or its text mentions a duration ("simmer 10
+minutes"; ranges start at the lower bound). Click a chip to start; click again to
+pause; ✕ resets; done turns red, pulses, and plays a short WebAudio chime (user-
+started, so it's asked-for sound; the context is unlocked on the starting click,
+which WebKit requires).
+
+**cooking mode** opens a full-screen step-at-a-time view: arm's-length type, the
+step's timer front and center, an ingredients drawer, ←/→/space to step, Esc to
+exit (captured before the composer's interrupt Esc), and a best-effort screen
+wake lock. Timer and checklist state live in registries keyed by recipe slug +
+index — not in the DOM — so they survive the transcript's per-delta re-renders
+and are shared between the card and the overlay (a timer started in one is
+already ticking in the other). A parse failure falls back to a plain code block;
+a still-streaming recipe shows a "plating…" stub instead of raw JSON.
+
 ## Progress bars (in-place, not a scroll of ticks)
 
 A download, upload, or install renders as **one element that updates in place**: a
