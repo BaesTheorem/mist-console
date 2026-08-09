@@ -799,6 +799,11 @@ def airdrop_claim():
     return jsonify({})
 
 
+@app.route("/active-chat", methods=["GET", "POST"])
+def active_chat():
+    return jsonify({})
+
+
 @app.route("/routines")
 def routines():
     return jsonify({"routines": [], "supported": False})

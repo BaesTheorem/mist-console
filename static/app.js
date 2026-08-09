@@ -2001,6 +2001,7 @@ function switchTo(id) {
   growInput();
   hideSlash();
   input.focus();
+  reportActiveChat();   // AirDropped photos follow the chat you switch to
 }
 async function createSession() {
   const r = await fetch("/sessions", { method: "POST" });
@@ -2342,6 +2343,23 @@ async function claimPendingFocus() {
 window.addEventListener("focus", claimPendingFocus);
 claimPendingFocus();
 
+/* ---------- active-chat beacon ---------- */
+/* Tell the backend which chat is on screen, so an AirDropped photo lands where
+   you're actually looking. Reported on every tab switch (see switchTo) and on a
+   heartbeat; the heartbeat also serves as liveness, since it stops when the
+   Console quits and the watcher then treats the record as stale. */
+function reportActiveChat() {
+  if (!activeId) return;
+  fetch("/active-chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sid: activeId, focused: document.hasFocus() }),
+  }).catch(() => {});
+}
+setInterval(reportActiveChat, 30000);
+window.addEventListener("focus", reportActiveChat);
+reportActiveChat();
+
 /* ---------- repo indicator ---------- */
 /* Always show which git repo the cwd points at (origin@branch). Refreshes on a
    timer and on window focus so an out-of-band `git remote set-url` shows up. */
@@ -2480,7 +2498,7 @@ input.addEventListener("paste", (e) => {
    /new [text] opens a fresh chat (and optionally seeds the first message).
    /here [off] and /photos steer where AirDropped iPhone photos land (see the
    airdrop-to-console watcher). A claim lasts 5 minutes; absent one the watcher
-   uses recency then the dedicated photos chat. */
+   uses the chat on screen, then recency, then the dedicated photos chat. */
 const LOCAL_COMMANDS = [
   { name: "new", desc: "Start a new chat" },
   { name: "here", desc: "Route AirDropped photos to this chat (/here off to cancel)" },

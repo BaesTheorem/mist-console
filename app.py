@@ -702,6 +702,29 @@ def airdrop_claim():
     return jsonify({})
 
 
+# Which chat is on screen. The front-end reports this on every tab switch and on
+# a 30s heartbeat, so the AirDrop router can drop a photo into the chat you're
+# looking at rather than inferring it from recency (which counts agent output,
+# not your attention, and so picks the wrong chat whenever a second one is mid
+# turn). The heartbeat is what makes the record trustworthy: it stops when the
+# Console quits, so the watcher can tell "showing this chat" from "long gone".
+_active_chat = None  # {"sid": <sid>, "focused": bool, "ts": <epoch>}
+
+
+@app.route("/active-chat", methods=["GET", "POST"])
+def active_chat():
+    global _active_chat
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        sid = body.get("sid")
+        _active_chat = ({"sid": sid, "focused": bool(body.get("focused")),
+                         "ts": time.time()} if sid in _sessions else None)
+        return jsonify({"ok": True})
+    if not _active_chat or _active_chat["sid"] not in _sessions:
+        return jsonify({})
+    return jsonify({**_active_chat, "age": time.time() - _active_chat["ts"]})
+
+
 @app.route("/config")
 def config():
     return jsonify({"spinner_verbs": SPINNER_VERBS, "models": get_models(),
