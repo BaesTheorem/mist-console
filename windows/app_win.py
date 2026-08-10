@@ -356,7 +356,12 @@ def setup_page():
 # ---- local media serving -------------------------------------------------------
 _IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
-_MEDIA_EXTS = _IMG_EXTS | _AUDIO_EXTS
+_VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm"}
+_MEDIA_EXTS = _IMG_EXTS | _AUDIO_EXTS | _VIDEO_EXTS
+# Types the WebView may render in the app's origin; the rest is forced to
+# download so nothing under an allowlisted root can execute same-origin.
+_INLINE_EXTS = _MEDIA_EXTS | {".pdf"}
+_SECRET_EXTS = {".env", ".pem", ".key", ".p12", ".keychain"}
 
 
 def _media_roots():
@@ -367,11 +372,18 @@ def _media_roots():
 
 
 def _safe_media_path(raw):
+    """Any extension under the allowlisted roots is servable (the chat embeds
+    arbitrary files as download cards), except hidden files/dirs and
+    credential-shaped extensions. Only _INLINE_EXTS render in-page."""
     path = os.path.realpath(os.path.expanduser(raw or ""))
-    under = any(path == r or path.startswith(r + os.sep) for r in _media_roots())
-    if (under and os.path.splitext(path)[1].lower() in _MEDIA_EXTS
-            and os.path.isfile(path)):
-        return path
+    for root in _media_roots():
+        if path == root or path.startswith(root + os.sep):
+            rel = path[len(root):]
+            if any(part.startswith(".") for part in rel.split(os.sep) if part):
+                return None
+            if os.path.splitext(path)[1].lower() in _SECRET_EXTS:
+                return None
+            return path if os.path.isfile(path) else None
     return None
 
 
@@ -454,9 +466,12 @@ def serve_local_file():
     path = _safe_media_path(request.args.get("path", ""))
     if not path:
         abort(404)
+    inline_ok = os.path.splitext(path)[1].lower() in _INLINE_EXTS
+    # conditional=True enables Range requests, which <video> needs to seek.
     return send_file(path,
-                     as_attachment=(request.args.get("download") == "1"),
-                     download_name=os.path.basename(path))
+                     as_attachment=(request.args.get("download") == "1" or not inline_ok),
+                     download_name=os.path.basename(path),
+                     conditional=True)
 
 
 @app.route("/save-to-downloads", methods=["POST"])

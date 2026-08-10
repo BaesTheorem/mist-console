@@ -995,6 +995,27 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 }
 .genaudio { height: 36px; max-width: min(340px, 100%); }
 .genaudio-dl { position: static; opacity: 1; flex: none; }
+/* Generated video: inline player, same corner download chrome as images. */
+.genvideo-wrap { position: relative; display: inline-block; line-height: 0; margin: 6px 0; max-width: 100%; }
+.genvideo {
+  display: block; max-width: min(480px, 100%); max-height: 400px; width: auto;
+  border: 1px solid var(--line); background: #000;
+}
+.genvideo-wrap:hover .genvideo-dl { opacity: 1; }
+/* Any-file attachment card: the whole card is the save-to-Downloads button. */
+.genfile {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 6px 0; padding: 8px 12px; max-width: 100%;
+  border: 1px solid var(--line); background: var(--surface);
+  cursor: pointer; line-height: normal; vertical-align: middle;
+  transition: background 0.12s, border-color 0.12s;
+}
+.genfile:hover { background: var(--hover); }
+.genfile-icon { font-size: 20px; }
+.genfile-name { font-size: 13px; overflow-wrap: anywhere; }
+.genfile-glyph svg { width: 16px; height: 16px; display: block; opacity: 0.7; }
+.genfile.saved { color: var(--ok); border-color: var(--ok); }
+.genfile.save-err { color: var(--err); border-color: var(--err); }
 /* Confirmation flash after a one-click save to ~/Downloads. */
 .genimg-dl.saved { opacity: 1; color: var(--ok); border-color: var(--ok); }
 .genimg-dl.save-err { opacity: 1; color: var(--err); border-color: var(--err); }

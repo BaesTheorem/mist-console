@@ -73,6 +73,17 @@ function imgSrc(p) {
   if (p.startsWith("~") || p.startsWith("/")) return "/file?path=" + encodeURIComponent(p);
   return null;
 }
+/* Display name for an attachment card: entity-undo (same as imgSrc), strip
+   query/fragment, take the last path segment. */
+function fileBaseName(p) {
+  p = String(p).trim()
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/[?#].*$/, "");
+  if (p.startsWith("file://")) p = p.slice(7);
+  const seg = p.split("/").filter(Boolean).pop() || p;
+  try { return decodeURIComponent(seg); } catch (_) { return seg; }
+}
 /* Inline-thumbnail HTML (lightbox + Save-to-Downloads, same chrome as generated
    images) for a local image path. '' if the path can't be served by /file. The
    click + download are handled by the delegated `logs` listener, so this works
@@ -331,11 +342,31 @@ function md(src) {
                    'title="Save to Downloads" aria-label="Save to Downloads">' + DL + '</button>' +
                '</span>';
       }
-      return '<span class="genimg-wrap">' +
-               '<a class="imglink" href="' + src + '" data-full="' + src + '">' +
-                 '<img class="genimg" src="' + src + '" alt="' + alt + '" loading="lazy"></a>' +
-               '<button class="genimg-dl" type="button" data-dl="' + src + '" ' +
-                 'title="Save to Downloads" aria-label="Save to Downloads">' + DL + '</button>' +
+      // Video embeds as an inline player; WKWebView plays h264/aac natively.
+      if (/\.(mp4|m4v|mov|webm)(\?|$)/i.test(path)) {
+        return '<span class="genvideo-wrap">' +
+                 '<video class="genvideo" controls preload="metadata" src="' + src + '"></video>' +
+                 '<button class="genimg-dl genvideo-dl" type="button" data-dl="' + src + '" ' +
+                   'title="Save to Downloads" aria-label="Save to Downloads">' + DL + '</button>' +
+               '</span>';
+      }
+      // Images: local files by extension, plus any http(s) URL (type unknown;
+      // <img> was always the behavior for remote embeds).
+      if (/\.(png|jpe?g|webp|gif)(\?|$)/i.test(path) || /^https?:/i.test(String(path).trim())) {
+        return '<span class="genimg-wrap">' +
+                 '<a class="imglink" href="' + src + '" data-full="' + src + '">' +
+                   '<img class="genimg" src="' + src + '" alt="' + alt + '" loading="lazy"></a>' +
+                 '<button class="genimg-dl" type="button" data-dl="' + src + '" ' +
+                   'title="Save to Downloads" aria-label="Save to Downloads">' + DL + '</button>' +
+               '</span>';
+      }
+      // Any other local file: an attachment card. The whole card is the button;
+      // click saves to Downloads via the same data-dl contract.
+      return '<span class="genfile" role="button" tabindex="0" data-dl="' + src + '" ' +
+               'title="Save to Downloads">' +
+               '<span class="msi genfile-icon" aria-hidden="true">draft</span>' +
+               '<span class="genfile-name">' + esc(fileBaseName(path)) + '</span>' +
+               '<span class="genfile-glyph" aria-hidden="true">' + DL + '</span>' +
              '</span>';
     })
     .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2">$1</a>')
@@ -3552,6 +3583,12 @@ logs.addEventListener("click", async (e) => {
   if (dlBtn) {
     e.preventDefault();
     saveToDownloads(dlBtn.getAttribute("data-dl"), dlBtn);
+    return;
+  }
+  const fileCard = e.target.closest(".genfile");
+  if (fileCard) {
+    e.preventDefault();
+    saveToDownloads(fileCard.getAttribute("data-dl"), fileCard);
     return;
   }
   const imgLink = e.target.closest(".imglink");

@@ -448,18 +448,33 @@ def index():
 # ?path= can't read arbitrary files. ?download=1 forces a save.
 _IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
-_MEDIA_EXTS = _IMG_EXTS | _AUDIO_EXTS
+_VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm"}
+_MEDIA_EXTS = _IMG_EXTS | _AUDIO_EXTS | _VIDEO_EXTS
+# Types the WebView may render in the app's origin. Everything else is served
+# Content-Disposition: attachment, so a stray .html/.svg under an allowlisted
+# root can never execute same-origin.
+_INLINE_EXTS = _MEDIA_EXTS | {".pdf"}
+# Never serve these even under an allowlisted root; the harness .env lives in
+# one of the roots and localhost is reachable cross-origin from a browser.
+_SECRET_EXTS = {".env", ".pem", ".key", ".p12", ".keychain"}
 _IMG_ROOTS = [os.path.realpath(os.path.expanduser(p)) for p in (
     "~/Downloads", "~/Exobrain/Attachments", "~/Documents/Exobrain harness")]
 
 
 def _safe_image_path(raw):
-    """Resolve `raw` to a real media file (image or audio) under the allowlist, or None."""
+    """Resolve `raw` to a servable file under the allowlist, or None. Any
+    extension is allowed (the chat embeds arbitrary files as download cards),
+    but hidden files/dirs and credential-shaped extensions stay unreachable,
+    and only _INLINE_EXTS render in the page (see /file)."""
     path = os.path.realpath(os.path.expanduser(raw or ""))
-    under = any(path == r or path.startswith(r + os.sep) for r in _IMG_ROOTS)
-    if (under and os.path.splitext(path)[1].lower() in _MEDIA_EXTS
-            and os.path.isfile(path)):
-        return path
+    for root in _IMG_ROOTS:
+        if path == root or path.startswith(root + os.sep):
+            rel = path[len(root):]
+            if any(part.startswith(".") for part in rel.split(os.sep) if part):
+                return None
+            if os.path.splitext(path)[1].lower() in _SECRET_EXTS:
+                return None
+            return path if os.path.isfile(path) else None
     return None
 
 
@@ -557,9 +572,12 @@ def serve_local_file():
     path = _safe_image_path(request.args.get("path", ""))
     if not path:
         abort(404)
+    inline_ok = os.path.splitext(path)[1].lower() in _INLINE_EXTS
+    # conditional=True enables Range requests, which <video> needs to seek.
     return send_file(path,
-                     as_attachment=(request.args.get("download") == "1"),
-                     download_name=os.path.basename(path))
+                     as_attachment=(request.args.get("download") == "1" or not inline_ok),
+                     download_name=os.path.basename(path),
+                     conditional=True)
 
 
 @app.route("/save-to-downloads", methods=["POST"])
