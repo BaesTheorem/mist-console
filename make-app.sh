@@ -16,8 +16,15 @@
 set -e
 
 PROJ="/Users/alexhedtke/Documents/mist-console"
-APP="$HOME/Desktop/Apps/MIST Console.app"
+APP="/Applications/MIST Console.app"   # custom .app bundles live in /Applications (2026-08-05)
 ICON_SRC="/Users/alexhedtke/Documents/mist-console/static/mist-logo.png"  # MIST logo (from ~/Downloads/MIST.png)
+
+# Refuse to rebuild under a running console: rm -rf'ing the bundle would yank
+# the live process's python tree out from under it.
+if pgrep -f "MIST Console.app/Contents" >/dev/null 2>&1; then
+  echo "MIST Console is running. Quit it first (rebuilding would gut the live process)."
+  exit 1
+fi
 
 echo "Building $APP ..."
 rm -rf "$APP"
@@ -98,5 +105,19 @@ if [ -f "$ICON_SRC" ]; then
   rm -rf "$TMP"
 fi
 [ -f "$APP/Contents/Resources/AppIcon.icns" ] || echo "  icon: skipped (default)"
+
+# Sign the bundle (Apple Development identity when present, ad-hoc otherwise).
+# A signed bundle keeps a stable TCC identity across rebuilds. NEVER re-sign
+# while the app is running: macOS revokes the live process's TCC grants
+# (learned 2026-08-11 when a mid-session re-sign cut off Documents access).
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+  | awk -F'"' '/Apple Development/{print $2; exit}')
+if [ -n "$IDENTITY" ]; then
+  codesign --force --deep -s "$IDENTITY" "$APP" && echo "  signed: $IDENTITY"
+else
+  codesign --force --deep -s - "$APP" && echo "  signed: ad-hoc"
+fi
+
 touch "$APP"
-echo "Done. Double-click ~/Desktop/Apps/MIST Console.app"
+echo "Done. Double-click /Applications/MIST Console.app"
+echo "(First launch after a rebuild may re-ask Documents/Desktop permission; allow it.)"

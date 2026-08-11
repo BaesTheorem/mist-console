@@ -169,6 +169,28 @@ thing to fix.
 - Reduce Motion is respected: the indeterminate sweep becomes a static hatched
   fill and jump-to-bar scrolling is instant.
 
+## Notifications (bell panel + inline reply)
+
+The Console is the receiving end of the full-featured notification pipeline
+(`mist-notifier/` in the harness repo builds `/Applications/MIST Notifier.app`,
+which posts native banners for `mist-notify`):
+
+- **`POST /notify-reply`** `{sid?, text}`: inline reply typed into a macOS
+  banner. Lands in the target chat like a composer send (sid → active chat →
+  newest chat). No context gate: there's no composer to restore held text into.
+- **`GET /notifications`**: tail of `~/Library/Logs/exobrain/notifications-history.jsonl`
+  (mist-notify appends every banner it sends, whichever route delivered it).
+- **`POST /notifications/open`** `{link}`: re-fires a click target from the
+  bell panel (URLs/paths/`cmd:`; `console:*` targets are handled client-side by
+  switching chats).
+- **The bell** (top-bar, next to notes): the notification feed, newest first,
+  with an unread tint on the icon (`notifSeen` timestamp in localStorage).
+
+Why the Console doesn't post banners itself: usernoted validates a UN-API
+caller's main executable against its bundle record, and the Console's
+script→python launch chain can never pass (UNErrorDomain Code=1). Details and
+the other macOS 26 landmines live in the harness `mist-notifier/README.md`.
+
 ## MCP parity with the CLI
 
 The session loads **all** MCP scopes (no `--strict-mcp-config`), exactly like the interactive `claude` CLI: things3, fitbit, withings, linkedin, and the claude.ai connectors (Gmail/Calendar/Drive/MyChart). 8 servers, ~90 MCP tools.

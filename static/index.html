@@ -40,6 +40,7 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
     <span class="badge usage" id="r7d" title="7-day limit used">7d —</span>
   </div>
   <div class="actions">
+    <md-icon-button id="notifBtn" touch-target="none" title="Notifications · everything MIST has pinged you about" aria-label="Notifications"><md-icon>notifications</md-icon></md-icon-button>
     <md-icon-button id="notesBtn" touch-target="none" title="Notes · a persistent scratchpad saved to disk" aria-label="Notes"><md-icon>edit_note</md-icon></md-icon-button>
     <md-icon-button id="settingsBtn" touch-target="none" title="Settings · active MCP servers + tools" aria-label="Settings"><md-icon>settings</md-icon></md-icon-button>
   </div>
@@ -116,6 +117,12 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
       </div>
     </div>
   </div>
+</aside>
+
+<aside id="notifPanel" hidden>
+  <div class="capHead">notifications <span class="count" id="nNotifs"></span><button id="notifClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
+  <div class="notes-hint">Every banner MIST has sent, newest first. Click one to reopen what it pointed at.</div>
+  <div class="capBody" id="notifList"></div>
 </aside>
 
 <aside id="notesPanel" hidden>

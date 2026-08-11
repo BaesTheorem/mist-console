@@ -699,6 +699,78 @@ def peek_focus():
     return jsonify({"sid": sid or ""})
 
 
+# ---- notifications (full-featured banner pipeline) ---------------------------
+# mist-notify delivers banners through MIST Notifier.app (native buttons, inline
+# reply, images) and appends every notification to a history JSONL. These routes
+# are the Console side of that pipeline: the reply relay and the bell panel.
+_NOTIF_HISTORY = os.path.expanduser(
+    "~/Library/Logs/exobrain/notifications-history.jsonl")
+
+
+@app.route("/notify-reply", methods=["POST"])
+def notify_reply():
+    """Inline reply typed into a macOS banner. MIST Notifier relays it here and
+    it lands in the target chat exactly like a composer send. No context gate:
+    the reply is an explicit user act, and there is no composer to restore the
+    text into if it were held."""
+    body = request.get_json(silent=True) or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "empty"}), 400
+    sid = body.get("sid")
+    if not sid or sid not in _sessions:
+        sid = (_active_chat or {}).get("sid")
+    if not sid or sid not in _sessions:
+        # Newest conversation as a last resort, so a reply always lands somewhere.
+        sid = max(_sessions, key=lambda k: _sessions[k].last_activity or 0,
+                  default=None)
+    if not sid:
+        return jsonify({"ok": False, "error": "no sessions"}), 404
+    s = _sessions[sid]
+    if s.maybe_auth_command(text):
+        return jsonify({"ok": True, "auth": True, "sid": sid})
+    ok = s.send(text)
+    _save_meta()
+    return jsonify({"ok": ok, "sid": sid})
+
+
+@app.route("/notifications")
+def notifications_history():
+    """Recent mist-notify history for the bell panel, newest first."""
+    try:
+        limit = min(int(request.args.get("limit", 50)), 200)
+    except ValueError:
+        limit = 50
+    items = []
+    try:
+        with open(_NOTIF_HISTORY) as f:
+            lines = f.readlines()[-limit:]
+        for ln in lines:
+            try:
+                items.append(json.loads(ln))
+            except ValueError:
+                pass
+    except OSError:
+        pass
+    items.reverse()
+    return jsonify(items)
+
+
+@app.route("/notifications/open", methods=["POST"])
+def notifications_open():
+    """Re-fire a notification's click target from the bell panel. Console
+    targets are handled client-side (the panel just switches chats); this
+    covers URLs, schemes, file paths, and cmd: targets."""
+    link = ((request.get_json(silent=True) or {}).get("link") or "").strip()
+    if not link or link == "console" or link.startswith("console:"):
+        return jsonify({"ok": True, "client": True})
+    if link.startswith("cmd:"):
+        subprocess.Popen(["/bin/zsh", "-lc", link[4:]])
+        return jsonify({"ok": True})
+    subprocess.Popen(["/usr/bin/open", link])
+    return jsonify({"ok": True})
+
+
 # AirDrop-router claim. The airdrop-to-console watcher asks here which chat an
 # incoming photo should land in. A composer command (/here, /photos) sets it;
 # the watcher reads it and, absent a live claim, falls back to recency then the

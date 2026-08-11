@@ -2192,6 +2192,7 @@ function openNotes() {
   $("#capPanel").hidden = true;
   $("#modelCard").hidden = true;
   $("#permCard").hidden = true;
+  $("#notifPanel").hidden = true;
   $("#notesPanel").hidden = false;
   loadNotes();                               // re-read from disk every time it opens
   $("#notesInput").focus();
@@ -2213,6 +2214,82 @@ $("#notesInput").addEventListener("keydown", (e) => {
   e.stopPropagation();
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); }
 });
+
+/* ---------- notification history (bell) ----------
+   mist-notify appends every banner it sends to a history JSONL; /notifications
+   serves the tail. The bell shows the feed and re-fires a row's click target:
+   console links switch chats right here, everything else goes to the backend. */
+let notifs = [];
+function fmtAgo(ts) {
+  const d = Math.max(0, Date.now() / 1000 - ts);
+  if (d < 60) return "now";
+  if (d < 3600) return Math.floor(d / 60) + "m";
+  if (d < 86400) return Math.floor(d / 3600) + "h";
+  return Math.floor(d / 86400) + "d";
+}
+function notifDot() {
+  const seen = parseFloat(localStorage.getItem("notifSeen") || "0");
+  const newest = notifs.length ? notifs[0].ts || 0 : 0;
+  $("#notifBtn").classList.toggle("has-new", newest > seen);
+}
+async function loadNotifs() {
+  try { notifs = await (await fetch("/notifications?limit=50")).json(); }
+  catch (_) { notifs = []; }
+  notifDot();
+}
+function renderNotifs() {
+  const list = $("#notifList");
+  $("#nNotifs").textContent = notifs.length ? String(notifs.length) : "";
+  if (!notifs.length) {
+    list.innerHTML = '<div class="scratch-empty">Nothing yet. When MIST pings you (briefings, watchers, errors), it lands here too.</div>';
+    return;
+  }
+  list.innerHTML = notifs.map((n, i) => `
+    <div class="notif-row" data-i="${i}" title="${esc(n.link || "console")}">
+      <div class="notif-head">
+        <span class="notif-title">${esc(n.title || "MIST")}</span>
+        <span class="notif-time">${fmtAgo(n.ts || 0)}</span>
+      </div>
+      ${n.subtitle ? `<div class="notif-sub">${esc(n.subtitle)}</div>` : ""}
+      <div class="notif-body">${esc(n.body || "")}</div>
+    </div>`).join("");
+  list.querySelectorAll(".notif-row").forEach((row) => {
+    row.addEventListener("click", () => openNotifTarget(notifs[+row.dataset.i]));
+  });
+}
+async function openNotifTarget(n) {
+  const link = (n && n.link) || "";
+  if (!link || link === "console") return;
+  if (link.indexOf("console:") === 0) {
+    const sid = link.slice(8);
+    if (sessions.has(sid)) switchTo(sid);
+    return;
+  }
+  try {
+    await fetch("/notifications/open", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link }),
+    });
+  } catch (_) {}
+}
+async function openNotifs() {
+  $("#capPanel").hidden = true;
+  $("#modelCard").hidden = true;
+  $("#permCard").hidden = true;
+  $("#notesPanel").hidden = true;
+  $("#notifPanel").hidden = false;
+  await loadNotifs();
+  renderNotifs();
+  if (notifs.length) localStorage.setItem("notifSeen", String(notifs[0].ts || 0));
+  notifDot();
+}
+$("#notifBtn").addEventListener("click", () => {
+  const p = $("#notifPanel");
+  if (p.hidden) openNotifs(); else p.hidden = true;
+});
+$("#notifClose").addEventListener("click", () => { $("#notifPanel").hidden = true; });
+loadNotifs();                                  // paint the unread dot on boot
+setInterval(loadNotifs, 120000);               // keep it honest while open all day
 
 /* One-time migration: pull legacy per-chat localStorage notes into the store. */
 async function migrateLegacyNotes() {
@@ -2681,6 +2758,7 @@ $("#settingsBtn").addEventListener("click", () => {
   loadRoutines();                          // routines now live as a settings section
   loadWatchers();                          // watchers section (launchd watch jobs)
   $("#notesPanel").hidden = true;
+  $("#notifPanel").hidden = true;
   $("#modelCard").hidden = true;
   $("#permCard").hidden = true;
   $("#capPanel").hidden = false;
