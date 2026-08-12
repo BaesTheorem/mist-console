@@ -268,8 +268,12 @@ def _new_session():
     with _meta_lock:
         _counter += 1
         sid = f"s{_counter}"
+        # Every new chat starts at DEFAULT_PERMISSION_MODE (bypass), full stop.
+        # Switching one chat to a stricter mode is a decision about THAT piece of
+        # work, not a new global default, so it deliberately does not carry over.
+        # Reopening an existing chat still restores its own saved mode.
         _sessions[sid] = ClaudeSession(id=sid, model=_new_chat_model() or None, cwd=HARNESS,
-                                       permission_mode=_default_perm or DEFAULT_PERMISSION_MODE)
+                                       permission_mode=DEFAULT_PERMISSION_MODE)
         _order.append(sid)
     _save_meta()
     return sid
@@ -414,7 +418,6 @@ def _new_chat_model():
     return opus[0] if opus else ""
 
 
-_default_perm = ""   # "" -> ClaudeSession falls back to DEFAULT_PERMISSION_MODE
 _theme = _load_theme()
 
 # When a clickable notification is opened (e.g. a briefing/triage banner with a
@@ -890,14 +893,15 @@ _VALID_PERMS = {"default", "acceptEdits", "plan", "bypassPermissions"}
 
 @app.route("/sessions/<sid>/permission", methods=["POST"])
 def set_permission(sid):
-    global _default_perm
+    """Scoped to THIS chat only. It used to also set a global default that new
+    chats inherited, which meant one careful session quietly re-armed every later
+    one; new chats now always open at DEFAULT_PERMISSION_MODE (see _new_sid)."""
     s = _sessions.get(sid)
     if not s:
         return jsonify({"ok": False}), 404
     mode = (request.get_json(silent=True) or {}).get("mode", "")
     if mode not in _VALID_PERMS:
         return jsonify({"ok": False, "error": "bad mode"}), 400
-    _default_perm = mode              # new chats inherit this choice
     s.set_permission(mode)
     _save_meta()
     return jsonify({"ok": True, "mode": mode})

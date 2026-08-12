@@ -29,6 +29,8 @@ HISTORY_CAP = 8000   # max events kept in memory for replay (jsonl keeps all)
 # (see ensure_started + the /progress route).
 CONSOLE_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
 CONSOLE_URL = os.environ.get("MIST_CONSOLE_URL", "http://127.0.0.1:5014")
+# Banners for blocking permission asks (see _notify_permission).
+NOTIFY_BIN = os.path.join(HARNESS, "mist-voice", "bin", "mist-notify")
 
 # Progress-event policy. A download posts many updates a second; broadcasting all
 # of them is fine (SSE is cheap) but PERSISTING all of them is not — the jsonl is
@@ -769,6 +771,8 @@ class ClaudeSession:
                 "suggestions": req.get("permission_suggestions") or [],
                 "blocked_path": req.get("blocked_path"),
             })
+            self._notify_permission(req_id, req.get("tool_name"),
+                                    req.get("input") or {})
             return True
         # Unknown blocking request (e.g. request_user_dialog): decline politely so
         # the CLI applies its default and the turn keeps moving.
@@ -778,6 +782,58 @@ class ClaudeSession:
                 "error": f"unsupported control_request: {sub}"}})
             return True
         return False
+
+    @staticmethod
+    def _perm_summary(tool_name, tool_input):
+        """One line describing what is being asked for, for the banner body."""
+        d = tool_input if isinstance(tool_input, dict) else {}
+        for key in ("command", "file_path", "path", "url", "pattern", "prompt"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                val = " ".join(val.split())
+                if len(val) > 140:
+                    val = val[:139] + "…"
+                return f"{tool_name or 'A tool'}: {val}"
+        return f"{tool_name or 'A tool'} wants to run."
+
+    def _notify_permission(self, req_id, tool_name, tool_input):
+        """Put a blocking permission ask on a banner with the decision buttons
+        wired straight back to /permission-response.
+
+        Without this the ask only exists inside the Console window, so stepping
+        away from the machine leaves the turn parked indefinitely on a card
+        nobody is looking at. Only modes that actually ask ever reach here
+        (bypassPermissions never asks), so there is no focus check and no
+        quiet-hours logic: if this fires, the mode was a deliberate choice to be
+        asked. Voice is off because a coding turn can stack several asks in a
+        row and narrating each one would be unbearable; the sound still plays.
+        """
+        if not req_id:
+            return
+        try:
+            url = f"{CONSOLE_URL}/sessions/{self.id}/permission-response"
+
+            def button(label, payload):
+                # Single-quoted for sh -c, so any embedded quote must be broken out.
+                body = json.dumps(payload).replace("'", "'\\''")
+                return (f"{label}=cmd:/usr/bin/curl -sS -X POST {url} "
+                        f"-H 'Content-Type: application/json' -d '{body}'")
+
+            subprocess.Popen(
+                [NOTIFY_BIN, self._perm_summary(tool_name, tool_input),
+                 "MIST needs permission", "Purr", f"console:{self.id}",
+                 "--subtitle", str(tool_name or "tool"),
+                 "--urgency", "timeSensitive",
+                 "--group", f"perm-{self.id}",
+                 "--id", f"perm-{req_id}",
+                 "--no-voice",
+                 "--action", button("Allow", {"request_id": req_id, "decision": "allow"}),
+                 "--action", button("Always allow", {"request_id": req_id,
+                                                     "decision": "allow", "remember": True}),
+                 "--action", button("Deny", {"request_id": req_id, "decision": "deny"})],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass   # a missing/broken notifier must never swallow the permission card
 
     def _read_stderr(self, proc):
         for line in proc.stderr:
