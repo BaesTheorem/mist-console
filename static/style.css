@@ -92,15 +92,15 @@ html[data-theme="solarpunk"] {
   --wp-opacity: .55; --wp-blend: multiply;
   --wp-size: 660px auto; --wp-repeat: repeat; --wp-pos: top left;
 }
-/* Readability mask (cream theme only): the messages are left-aligned in a ~900px
-   column, so fade the wallpaper down to ~30% behind that column and let it run at
-   full strength out in the empty right margin. Text then sits on near-clean paper
-   while the lilies stay vivid where there's nothing to read. The partial-alpha
-   stops (rgba …,.30) dim rather than fully clear, so a soft ghost of the pattern
-   still shows behind the text. */
+/* Readability mask (cream theme only): hold the wallpaper at ~30% everywhere the
+   text runs, so it reads as a soft ghost of the pattern behind near-clean paper
+   rather than competing with the words. This used to ramp back to full strength
+   past 1010px, back when messages were capped at a 900px column and the right
+   side was empty; messages now run the full width, so there is no empty margin
+   left to decorate and the dim is uniform. */
 html[data-theme="solarpunk"] #logs::after {
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.30) 0, rgba(0,0,0,.30) 820px, #000 1010px, #000 100%);
-          mask-image: linear-gradient(to right, rgba(0,0,0,.30) 0, rgba(0,0,0,.30) 820px, #000 1010px, #000 100%);
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.30) 0, rgba(0,0,0,.30) 100%);
+          mask-image: linear-gradient(to right, rgba(0,0,0,.30) 0, rgba(0,0,0,.30) 100%);
 }
 
 /* ---- top bar ---- */
@@ -261,7 +261,10 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 #mid.rail-collapsed #railResize { display: none; }
 .session-log[hidden] { display: none; }
 .msg {
-  margin: 0 0 18px; max-width: 900px;
+  /* Full width on purpose: no max-width column. Wide windows used to dump every
+     spare pixel into a dead right margin, since the margin shorthand below sets
+     left/right to 0 (not auto) so the column sat flush left. */
+  margin: 0 0 18px; max-width: none;
   /* Skip layout/paint for off-screen messages so fullscreen/resize only reflows
      the visible few instead of the whole (multi-thousand-node) transcript.
      `auto` remembers each message's real height once rendered, so scrolling and
@@ -284,12 +287,43 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .msg.mist .body  { color: var(--text); }
 /* a pasted URL/path must wrap instead of forcing a horizontal scrollbar */
 .msg .body, .think .think-body, .perm-cmd { overflow-wrap: anywhere; }
-/* Chat text is selectable (WKWebView can default selection off) + visible highlight. */
-#logs, .msg .who, .msg .body, .msg .body * {
+/* Everything in the transcript is selectable, opt-OUT rather than opt-in.
+   pywebview passes text_select=False by default, which injects
+   `body {-webkit-user-select: none; cursor: default}` into the page; desktop.py
+   now passes text_select=True so that never lands. This rule is the belt to that
+   suspenders: an #logs-rooted selector outranks the injected `body` one, so
+   selection survives even if the flag regresses. It has to cover the whole
+   subtree, not just `.msg .body`. The old allowlist left the `.msg` wrapper
+   itself unselectable, which chopped any drag that crossed a message boundary,
+   and left think blocks, tool lines and file cards dead entirely. Chrome that
+   shouldn't be selectable (icon ligatures, tab titles, gutter glyphs) declares
+   `user-select: none` on itself, which beats this by directness. */
+#logs, #logs * {
   -webkit-user-select: text; user-select: text;
 }
+#logs { cursor: auto; }
 .msg .body { cursor: text; }
 ::selection { background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent); color: var(--text); }
+
+/* ---- transcript right-click menu ----
+   Shift+right-click bypasses this and gets WebKit's own menu (Look Up, Speech,
+   Services), so nothing is lost by intercepting the plain one. */
+#ctxMenu {
+  position: fixed; z-index: 9500; min-width: 176px; padding: 3px 0;
+  background: var(--md-sys-color-surface-container-high);
+  border: 1px solid var(--line);
+  font-size: 12px; user-select: none;
+}
+#ctxMenu[hidden] { display: none; }   /* id selector beats UA [hidden] */
+#ctxMenu .ctx-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 6px 12px; background: none; border: 0; text-align: left;
+  color: var(--text); font: inherit; cursor: pointer; white-space: nowrap;
+}
+#ctxMenu .ctx-item:hover { background: var(--md-sys-color-surface-container-highest); color: var(--teal); }
+#ctxMenu .ctx-item .msi { font-size: 15px; color: var(--dim); flex: 0 0 auto; }
+#ctxMenu .ctx-item:hover .msi { color: var(--teal); }
+#ctxMenu .ctx-sep { height: 1px; margin: 3px 0; background: var(--line-soft); }
 
 /* thinking */
 .think {

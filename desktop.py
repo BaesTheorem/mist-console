@@ -831,10 +831,14 @@ def main():
     except Exception:
         pass
     _quiet_launch = quiet
+    # text_select=True is load-bearing, not cosmetic: pywebview defaults it to
+    # False and then injects `body {-webkit-user-select: none; cursor: default}`
+    # into the page (webview/js/customize.js), which kills selection app-wide and
+    # leaves the right-click menu with nothing to copy.
     _main_window = webview.create_window(
         "MIST Console", f"http://127.0.0.1:{PORT}",
         js_api=Api(), width=1120, height=800, min_size=(720, 520),
-        background_color="#0E1C2B", hidden=quiet)
+        background_color="#0E1C2B", hidden=quiet, text_select=True)
     # Closing the window FULLY shuts the server down — no lingering "windowless
     # zombie" that keeps port 5014 (and stale code) alive. Stop every ClaudeSession
     # child first so nothing is orphaned on the 8 GB machine, then hard-exit:

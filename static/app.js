@@ -1088,13 +1088,14 @@ class Session {
       else if (d.type === "text_delta") {
         b.text += d.text || "";
         b.el.innerHTML = md(b.text) + '<span class="cursor">&nbsp;</span>';
+        b.el._mdsrc = b.text;
       } else if (d.type === "input_json_delta") {
         this.toolInputs[e.index] += d.partial_json || "";
         b.pre.textContent = this.toolInputs[e.index];
       }
     } else if (e.type === "content_block_stop") {
       const b = this.blocks[e.index];
-      if (b && b.type === "text") b.el.innerHTML = md(b.text || "");
+      if (b && b.type === "text") { b.el.innerHTML = md(b.text || ""); b.el._mdsrc = b.text || ""; }
     }
     this.scroll();
   }
@@ -1104,7 +1105,9 @@ class Session {
     const body = this.addMsg("mist", "MIST", tsMs(ts), this.takeAnchor());
     blocks.forEach((b) => {
       if (b.kind === "text") {
-        body.appendChild(el("div", "md", md(b.text)));
+        const tdiv = el("div", "md", md(b.text));
+        tdiv._mdsrc = b.text || "";   // raw source for "copy message", kept off the DOM
+        body.appendChild(tdiv);
       } else if (b.kind === "thinking") {
         const d = el("details", "think");
         d.appendChild(el("summary", null, "thinking"));
@@ -1158,6 +1161,7 @@ class Session {
             // (it stays above the message), then continue this same text block in a
             // fresh bubble below the message with a clean buffer.
             live.el.innerHTML = md(live.text || "");
+            live.el._mdsrc = live.text || "";
             this.current = { body: this.addMsg("mist", "MIST", tsMs(o.ts)) };
             const te = el("div", "md");
             this.current.body.appendChild(te);
@@ -3258,7 +3262,9 @@ $("#permClose").addEventListener("click", () => { $("#permCard").hidden = true; 
    first, then the side panels). The composer's own keydown calls this before
    its interrupt fallback; this document-level listener covers everywhere else. */
 function closeTopOverlay() {
-  for (const id of ["#modelCard", "#permCard", "#capPanel", "#notesPanel"]) {
+  // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
+  // may be floating over.
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#capPanel", "#notesPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }
@@ -3633,24 +3639,34 @@ document.addEventListener("click", (e) => {
   handleRecipeClick(e);
 });
 
+/* Clipboard write with a fallback. 127.0.0.1 counts as a trustworthy origin in
+   WebKit so the async API is the path that normally runs, but it still refuses
+   without a user gesture, hence the hidden-textarea + execCommand backstop. */
+async function copyText(text) {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) {
+    const ta = el("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) {}
+    ta.remove();
+    return ok;
+  }
+}
+
 logs.addEventListener("click", async (e) => {
   if (handleRecipeClick(e)) return;
   const btn = e.target.closest(".copy-btn");
   if (btn) {
     const pre = btn.parentElement.querySelector("pre");
-    const text = pre ? pre.textContent : "";
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (_) {
-      const ta = el("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); } catch (_) {}
-      ta.remove();
-    }
+    await copyText(pre ? pre.textContent : "");
     btn.classList.add("copied");
     btn.textContent = "Copied";
     clearTimeout(btn._t);
@@ -3681,6 +3697,134 @@ logs.addEventListener("click", async (e) => {
     if (/^https?:/i.test(href)) { e.preventDefault(); openExternal(href); }
   }
 });
+
+/* ---------- transcript right-click menu ----------
+   WebKit's own menu only ever offers the rendered text. In a chat the thing you
+   usually want is the raw markdown of a reply, so we intercept the plain
+   right-click and offer that alongside the ordinary Copy. Shift+right-click
+   falls through to the native menu (Look Up, Speech, Services, Translate). */
+const ctxMenu = $("#ctxMenu");
+
+function hideCtxMenu() {
+  if (ctxMenu && !ctxMenu.hidden) { ctxMenu.hidden = true; ctxMenu.innerHTML = ""; return true; }
+  return false;
+}
+
+/* The markdown source of a whole message. Each rendered `.md` block carries its
+   own source on `_mdsrc` (a JS property, not a data- attribute: a transcript runs
+   to thousands of nodes and we're not paying DOM weight for it). User messages
+   are plain textContent, so innerText round-trips them exactly. */
+function messageSource(msg) {
+  const blocks = [...msg.querySelectorAll(".body .md")];
+  if (blocks.length && blocks.some((b) => typeof b._mdsrc === "string")) {
+    return blocks.map((b) => (typeof b._mdsrc === "string" ? b._mdsrc : b.innerText)).join("\n\n").trim();
+  }
+  const body = msg.querySelector(".body");
+  return body ? body.innerText.trim() : "";
+}
+
+function selectionInLogs() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const anchor = sel.anchorNode;
+  const node = anchor && anchor.nodeType === 3 ? anchor.parentElement : anchor;
+  if (!node || !node.closest || !node.closest("#logs")) return null;
+  const text = sel.toString();
+  return text ? text : null;
+}
+
+function openCtxMenu(x, y, items) {
+  ctxMenu.innerHTML = "";
+  items.forEach((it) => {
+    if (it === "-") { ctxMenu.appendChild(el("div", "ctx-sep")); return; }
+    const b = el("button", "ctx-item");
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    b.appendChild(el("span", "msi", it.icon));
+    b.appendChild(el("span", null, it.label));
+    b.addEventListener("click", () => { hideCtxMenu(); it.run(); });
+    ctxMenu.appendChild(b);
+  });
+  // Two rulers are in play and they disagree whenever the text-size control is
+  // off 100%, because applyTextSize sets `zoom` on <html>. Event clientX/clientY,
+  // getBoundingClientRect() and innerWidth are all unzoomed viewport px; style.left
+  // and offsetWidth are zoomed CSS px. So: clamp in viewport px, then divide by
+  // the zoom on the way back out. Measuring the ratio off the element beats
+  // reading the zoom value, since it degrades to 1 when the property is unset.
+  // Reveal only after placing, or the menu flashes at the pre-clamp spot.
+  ctxMenu.style.visibility = "hidden";
+  ctxMenu.style.left = "0px";
+  ctxMenu.style.top = "0px";
+  ctxMenu.hidden = false;
+  const r = ctxMenu.getBoundingClientRect();
+  const z = (ctxMenu.offsetWidth && r.width / ctxMenu.offsetWidth) || 1;
+  const left = Math.max(4, Math.min(x, window.innerWidth - r.width - 4));
+  const top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4));
+  ctxMenu.style.left = (left - r.left) / z + "px";
+  ctxMenu.style.top = (top - r.top) / z + "px";
+  ctxMenu.style.visibility = "";
+}
+
+logs.addEventListener("contextmenu", (e) => {
+  if (e.shiftKey) return;            // escape hatch to the native WebKit menu
+  const msg = e.target.closest(".msg");
+  if (!msg) return;
+  e.preventDefault();
+
+  const items = [];
+  const selText = selectionInLogs();
+  if (selText) items.push({ icon: "content_copy", label: "Copy", run: () => copyText(selText) });
+
+  const pre = e.target.closest(".codeblock, pre");
+  if (pre) {
+    const code = pre.matches("pre") ? pre : pre.querySelector("pre");
+    if (code) items.push({ icon: "code", label: "Copy code block", run: () => copyText(code.textContent) });
+  }
+
+  items.push({ icon: "notes", label: "Copy message", run: () => copyText(messageSource(msg)) });
+  items.push({
+    icon: "select_all", label: "Select message",
+    run: () => {
+      const body = msg.querySelector(".body") || msg;
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    },
+  });
+
+  const link = e.target.closest("a[href]");
+  const href = link && link.getAttribute("href");
+  if (href && /^https?:/i.test(href)) {
+    items.push("-");
+    items.push({ icon: "open_in_new", label: "Open link", run: () => openExternal(href) });
+    items.push({ icon: "link", label: "Copy link", run: () => copyText(href) });
+  }
+
+  // Images and file cards already know how to save themselves; reuse that path.
+  // On media the data-dl lives on the corner button, which is a sibling of the
+  // <img>/<audio>, so closest() alone misses it when you right-click the media.
+  const dlHost = e.target.closest("[data-dl], .genimg-wrap, .genaudio-wrap, .genvideo-wrap");
+  const dl = dlHost && (dlHost.matches("[data-dl]") ? dlHost : dlHost.querySelector("[data-dl]"));
+  if (dl) {
+    const src = dl.getAttribute("data-dl");
+    const path = new URLSearchParams(src.slice(src.indexOf("?") + 1)).get("path");
+    items.push("-");
+    items.push({ icon: "download", label: "Save to Downloads", run: () => saveToDownloads(src, dl) });
+    if (path) items.push({ icon: "content_paste", label: "Copy file path", run: () => copyText(path) });
+  }
+
+  openCtxMenu(e.clientX, e.clientY, items);
+});
+
+// Dismissal: outside click, scroll, window blur. Escape is handled by
+// closeTopOverlay, which lists #ctxMenu first so it closes before other panels.
+document.addEventListener("pointerdown", (e) => {
+  if (!ctxMenu.hidden && !(e.target.closest && e.target.closest("#ctxMenu"))) hideCtxMenu();
+}, true);
+logs.addEventListener("scroll", hideCtxMenu, true);
+window.addEventListener("blur", hideCtxMenu);
 
 /* ---------- boot ---------- */
 async function boot() {
