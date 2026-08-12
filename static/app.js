@@ -546,6 +546,7 @@ class Session {
     this.pinOrder = info.pin_order || 0;
     this.model = info.model || "";
     this.permMode = info.permission_mode || "";
+    this.effort = info.effort || "";
     this.lastActivity = info.last_activity ? info.last_activity * 1000 : Date.now();
     this.logEl = el("div", "session-log");
     this.logEl.hidden = true;
@@ -1742,6 +1743,47 @@ async function selectPerm(p) {
     });
   } catch (_) {}
 }
+/* ---------- thinking-depth switcher card ----------
+   `claude --effort <level>`. "" means don't pass the flag at all and let the CLI
+   use its own default, which is why it's a listed choice rather than an absence. */
+const EFFORTS = [
+  { id: "",       label: "default · whatever the CLI picks" },
+  { id: "low",    label: "low · fastest, barely thinks" },
+  { id: "medium", label: "medium · brief reasoning" },
+  { id: "high",   label: "high · thorough" },
+  { id: "xhigh",  label: "xhigh · very thorough, slower" },
+  { id: "max",    label: "max · think as long as it takes" },
+];
+function curEffort() {
+  const s = activeId && sessions.get(activeId);
+  return (s && s.effort) || "";
+}
+function effortLabel(id) { return id || "default"; }
+function renderThinkCard() {
+  const list = $("#thinkList");
+  list.innerHTML = "";
+  const cur = curEffort();
+  EFFORTS.forEach((e) => {
+    const row = el("div", "modelrow" + (e.id === cur ? " sel" : ""), esc(e.label));
+    row.addEventListener("click", () => selectEffort(e));
+    list.appendChild(row);
+  });
+}
+async function selectEffort(e) {
+  $("#thinkCard").hidden = true;
+  if (!activeId) return;
+  const s = sessions.get(activeId);
+  s.effort = e.id;
+  $("#think").textContent = "think: " + effortLabel(e.id);
+  s.notice("Thinking depth set to " + effortLabel(e.id) + ". Applies to your next message.");
+  try {
+    await fetch("/sessions/" + activeId + "/effort", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ effort: e.id }),
+    });
+  } catch (_) {}
+}
+
 // Color a usage badge green → yellow → red as it nears its limit.
 function setUsageLevel(elem, pct) {
   if (!elem) return;
@@ -1784,6 +1826,8 @@ function fillCaps(init, s) {
   // here is what made a selection look like it "reset" after a tab switch.
   $("#model").textContent = (s && s.model) || init.model || "model —";
   $("#perm").textContent = "perm: " + ((s && s.permMode) || init.permissionMode || "—");
+  // init carries no effort field, so the chat's own selection is the only source.
+  $("#think").textContent = "think: " + effortLabel(s && s.effort);
   fillSettings(init);
 }
 function chips(id, items) {
@@ -2015,6 +2059,7 @@ function switchTo(id) {
   else {   // dormant chat, no init yet — still show its own selections
     $("#model").textContent = s.model || "model —";
     $("#perm").textContent = "perm: " + (s.permMode || "—");
+    $("#think").textContent = "think: " + effortLabel(s.effort);
   }
   applyStatus(s);
   renderBgMonitor();   // repaint the background-task panel for THIS chat
@@ -3264,7 +3309,7 @@ $("#permClose").addEventListener("click", () => { $("#permCard").hidden = true; 
 function closeTopOverlay() {
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
-  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#capPanel", "#notesPanel"]) {
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#capPanel", "#notesPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }

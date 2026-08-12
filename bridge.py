@@ -347,7 +347,7 @@ class ClaudeSession:
     def __init__(self, id=None, title=None, pinned=False, claude_session_id=None,
                  last_activity=None, autostart=True, import_path=None,
                  permission_mode=DEFAULT_PERMISSION_MODE, model=None, cwd=HARNESS,
-                 pin_order=0):
+                 pin_order=0, effort=None):
         self.id = id
         self.title = title
         self.pinned = pinned
@@ -358,6 +358,7 @@ class ClaudeSession:
         self.claude_session_id = claude_session_id   # for --resume after a restart
         self.permission_mode = permission_mode
         self.model = model
+        self.effort = effort   # None -> omit --effort, let the CLI use its default
         self.cwd = cwd
 
         self.proc = None
@@ -513,6 +514,11 @@ class ClaudeSession:
             cmd += ["--resume", self.claude_session_id]  # restore model context
         if self.model:
             cmd += ["--model", self.model]
+        # Thinking depth. Omitted entirely when unset so the CLI applies its own
+        # default; an unrecognised value is only warned about, not rejected, so
+        # the valid set is enforced at the route (_VALID_EFFORTS in app.py).
+        if self.effort:
+            cmd += ["--effort", self.effort]
         # MIST's persona is NOT injected from a side file. It lives in the
         # Exobrain's CLAUDE.md ("Identity & Voice: MIST"), which `claude`
         # auto-loads because we run in the harness cwd (see HARNESS / cwd below).
@@ -634,6 +640,17 @@ class ClaudeSession:
         """Switch model. Goes dormant; next send revives with the new model and
         --resume (so conversation context carries over)."""
         self.model = model or None
+        if self.alive:
+            self._resume_tried = False
+            self.stop()
+
+    def set_effort(self, effort):
+        """Switch thinking depth. Goes dormant; next send revives with the new
+        effort and --resume (so conversation context carries over)."""
+        effort = effort or None
+        if effort == self.effort:
+            return
+        self.effort = effort
         if self.alive:
             self._resume_tried = False
             self.stop()

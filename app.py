@@ -142,6 +142,7 @@ def _save_meta():
                          "pin_order": s.pin_order,
                          "last_activity": s.last_activity, "model": s.model,
                          "permission_mode": s.permission_mode,
+                         "effort": s.effort,
                          "claude_session_id": s.claude_session_id,
                          "import_path": s.import_path, "cwd": s.cwd})
         # Atomic write (temp + fsync + os.replace): open(...,"w") truncates the
@@ -248,6 +249,7 @@ def _load_meta():
             pin_order=m.get("pin_order", 0),
             claude_session_id=csid, model=m.get("model"),
             permission_mode=m.get("permission_mode") or DEFAULT_PERMISSION_MODE,
+            effort=m.get("effort") or None,
             import_path=m.get("import_path"), cwd=m.get("cwd") or HARNESS,
             last_activity=m.get("last_activity"), autostart=False)  # dormant
         _order.append(sid)
@@ -288,7 +290,8 @@ def _session_list():
                         "pinned": s.pinned, "pin_order": s.pin_order,
                         "last_activity": s.last_activity,
                         "model": s.model or "",
-                        "permission_mode": s.permission_mode or ""})
+                        "permission_mode": s.permission_mode or "",
+                        "effort": s.effort or ""})
     return out
 
 
@@ -668,7 +671,8 @@ def create_session():
     sid = _new_session()
     s = _sessions[sid]
     return jsonify({"id": sid, "title": "New chat",
-                    "model": s.model or "", "permission_mode": s.permission_mode or ""})
+                    "model": s.model or "", "permission_mode": s.permission_mode or "",
+                    "effort": s.effort or ""})
 
 
 @app.route("/sessions/<sid>", methods=["DELETE"])
@@ -889,6 +893,26 @@ def set_model(sid):
 
 
 _VALID_PERMS = {"default", "acceptEdits", "plan", "bypassPermissions"}
+# `claude --effort <level>`. The CLI only WARNS on an unknown value and silently
+# falls back to its default, so a typo would look like it applied; validate here.
+# "" is allowed and means "omit the flag", i.e. let the CLI pick.
+_VALID_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+
+
+@app.route("/sessions/<sid>/effort", methods=["POST"])
+def set_effort(sid):
+    """Thinking depth for THIS chat. Like model and permission mode, it applies
+    on the next message: the switch puts the backend dormant and the next send
+    revives it with --resume, so the conversation carries over."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False}), 404
+    effort = (request.get_json(silent=True) or {}).get("effort", "")
+    if effort and effort not in _VALID_EFFORTS:
+        return jsonify({"ok": False, "error": "bad effort"}), 400
+    s.set_effort(effort or None)
+    _save_meta()
+    return jsonify({"ok": True, "effort": s.effort or ""})
 
 
 @app.route("/sessions/<sid>/permission", methods=["POST"])
