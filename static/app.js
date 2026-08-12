@@ -2239,8 +2239,7 @@ async function sendNote(note) {
 }
 function openNotes() {
   $("#capPanel").hidden = true;
-  $("#modelCard").hidden = true;
-  $("#permCard").hidden = true;
+  closeAnchoredCards();
   $("#notifPanel").hidden = true;
   $("#notesPanel").hidden = false;
   loadNotes();                               // re-read from disk every time it opens
@@ -2323,8 +2322,7 @@ async function openNotifTarget(n) {
 }
 async function openNotifs() {
   $("#capPanel").hidden = true;
-  $("#modelCard").hidden = true;
-  $("#permCard").hidden = true;
+  closeAnchoredCards();
   $("#notesPanel").hidden = true;
   $("#notifPanel").hidden = false;
   await loadNotifs();
@@ -2808,8 +2806,7 @@ $("#settingsBtn").addEventListener("click", () => {
   loadWatchers();                          // watchers section (launchd watch jobs)
   $("#notesPanel").hidden = true;
   $("#notifPanel").hidden = true;
-  $("#modelCard").hidden = true;
-  $("#permCard").hidden = true;
+  closeAnchoredCards();
   $("#capPanel").hidden = false;
 });
 
@@ -3268,19 +3265,40 @@ $("#capClose").addEventListener("click", () => { $("#capPanel").hidden = true; }
 // Drop the menu directly under the element that opened it (the badge or button),
 // so the selection UI belongs to its trigger instead of floating in the corner.
 // Clamp to the viewport so a left-edge trigger can't push the menu off-screen.
+// Every badge-anchored card in the top bar. One list so a new card can't be
+// forgotten by an opener that hides its siblings one id at a time.
+const ANCHORED_CARDS = [
+  { card: "#modelCard", trigger: "#model" },
+  { card: "#permCard",  trigger: "#perm"  },
+  { card: "#thinkCard", trigger: "#think" },
+];
+function closeAnchoredCards(except) {
+  ANCHORED_CARDS.forEach(({ card }) => {
+    if (card === except) return;
+    const c = $(card);
+    if (c) c.hidden = true;
+  });
+}
 function anchorCard(card, trigger) {
+  // getBoundingClientRect() and innerWidth are unzoomed viewport px; style.left
+  // and offsetWidth are zoomed CSS px. They only agree at 100%, so at any other
+  // text size (applyTextSize sets `zoom` on <html>) an uncorrected left/top puts
+  // the card visibly off its badge. Clamp in viewport px, divide by the measured
+  // zoom on the way out. Measured off the element so it degrades to 1 when unset.
+  card.style.left = "0px";
+  card.style.top = "0px";
+  const cr = card.getBoundingClientRect();
+  const z = (card.offsetWidth && cr.width / card.offsetWidth) || 1;
   const r = trigger.getBoundingClientRect();
-  const w = card.offsetWidth || 240;
-  let left = Math.min(r.left, window.innerWidth - w - 8);
-  left = Math.max(8, left);
-  card.style.left = left + "px";
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - cr.width - 8));
+  card.style.left = (left - cr.left) / z + "px";
+  card.style.top = (r.bottom + 4 - cr.top) / z + "px";
   card.style.right = "auto";
-  card.style.top = (r.bottom + 4) + "px";
 }
 function openModelCard(ev) {
   const card = $("#modelCard");
   if (!card.hidden) { card.hidden = true; return; }   // click the trigger again to dismiss
-  $("#permCard").hidden = true;
+  closeAnchoredCards("#modelCard");
   renderModelCard();
   card.hidden = false;
   anchorCard(card, (ev && ev.currentTarget) || $("#model"));
@@ -3294,13 +3312,25 @@ $("#model").addEventListener("click", openModelCard);
 function openPermCard(ev) {
   const card = $("#permCard");
   if (!card.hidden) { card.hidden = true; return; }   // click the trigger again to dismiss
-  $("#modelCard").hidden = true;
+  closeAnchoredCards("#permCard");
   renderPermCard();
   card.hidden = false;
   anchorCard(card, (ev && ev.currentTarget) || $("#perm"));
 }
 $("#perm").addEventListener("click", openPermCard);
 $("#permClose").addEventListener("click", () => { $("#permCard").hidden = true; });
+
+// The think badge opens the thinking-depth picker.
+function openThinkCard(ev) {
+  const card = $("#thinkCard");
+  if (!card.hidden) { card.hidden = true; return; }   // click the trigger again to dismiss
+  closeAnchoredCards("#thinkCard");
+  renderThinkCard();
+  card.hidden = false;
+  anchorCard(card, (ev && ev.currentTarget) || $("#think"));
+}
+$("#think").addEventListener("click", openThinkCard);
+$("#thinkClose").addEventListener("click", () => { $("#thinkCard").hidden = true; });
 
 /* ---------- overlay dismissal (Escape + outside click) ----------
    One ladder for every overlay: Esc closes the topmost open one (anchored cards
@@ -3325,9 +3355,10 @@ document.addEventListener("keydown", (e) => {
 // The two anchored cards also dismiss on a click anywhere outside them.
 document.addEventListener("pointerdown", (e) => {
   const t = e.target;
-  const mc = $("#modelCard"), pc = $("#permCard");
-  if (mc && !mc.hidden && !(t.closest && t.closest("#modelCard, #model"))) mc.hidden = true;
-  if (pc && !pc.hidden && !(t.closest && t.closest("#permCard, #perm"))) pc.hidden = true;
+  ANCHORED_CARDS.forEach(({ card, trigger }) => {
+    const c = $(card);
+    if (c && !c.hidden && !(t.closest && t.closest(card + ", " + trigger))) c.hidden = true;
+  });
 });
 
 // The repo badge lets you point MIST at a different repo/folder to work in.

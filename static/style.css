@@ -490,13 +490,14 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 /* ---- model / permission card ---- */
 /* top/left are set in JS so the menu drops directly under the badge or button
    that opened it (anchorCard), instead of floating detached in the corner. */
-#modelCard, #permCard {
+#modelCard, #permCard, #thinkCard {
   position: fixed; top: 44px; left: auto; right: 14px; width: 240px; z-index: 30;
   background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line);
 }
 #permCard { width: 268px; }
-#modelCard[hidden], #permCard[hidden] { display: none; }
-#modelList, #permList { padding: 4px 0; }
+#thinkCard { width: 276px; }
+#modelCard[hidden], #permCard[hidden], #thinkCard[hidden] { display: none; }
+#modelList, #permList, #thinkList { padding: 4px 0; }
 .modelrow {
   padding: 7px 12px; cursor: pointer; color: var(--text); font-size: 12px;
   display: flex; align-items: center; gap: 8px;
@@ -710,6 +711,7 @@ html[data-theme="solarpunk"] #composer,
 html[data-theme="solarpunk"] #slashMenu,
 html[data-theme="solarpunk"] #modelCard,
 html[data-theme="solarpunk"] #permCard,
+html[data-theme="solarpunk"] #thinkCard,
 html[data-theme="solarpunk"] #railToggle { background: var(--surface); }
 
 /* --- fields / small controls: clean white --- */
@@ -785,6 +787,7 @@ html[data-theme="solarpunk"] .body code,
 html[data-theme="solarpunk"] .chips span,
 html[data-theme="solarpunk"] #modelCard,
 html[data-theme="solarpunk"] #permCard,
+html[data-theme="solarpunk"] #thinkCard,
 html[data-theme="solarpunk"] #slashMenu,
 html[data-theme="solarpunk"] #railToggle,
 html[data-theme="solarpunk"] #jumpBtn { border-radius: var(--radius); }
@@ -798,6 +801,7 @@ html[data-theme="solarpunk"] .tool,
 html[data-theme="solarpunk"] .msg.user .body,
 html[data-theme="solarpunk"] #modelCard,
 html[data-theme="solarpunk"] #permCard,
+html[data-theme="solarpunk"] #thinkCard,
 html[data-theme="solarpunk"] .scratch-item { box-shadow: 0 1px 4px rgba(74,60,30,.10); }
 
 /* --- interactive permission cards (base is hard-coded dark; re-theme for cream) --- */
