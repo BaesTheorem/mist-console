@@ -93,6 +93,13 @@
   --md-sys-state-focus-state-layer-opacity: 0.12;
   --md-sys-state-pressed-state-layer-opacity: 0.12;
 
+  /* ---- type: the theme's own default body face ----
+     Lives here, not in style.css, because the quick-access overlay
+     (quickbox.html) is a separate document that loads ONLY this token layer.
+     style.css aliases --mono onto it; the font picker still wins by setting
+     --mono/--head inline on <html>. */
+  --mist-font-body: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
   /* md-* components: inherit the console's user-chosen font + Sharp icons */
   --md-ref-typeface-brand: var(--head, "SF Mono", monospace);
   --md-ref-typeface-plain: var(--mono, "SF Mono", monospace);
@@ -143,6 +150,10 @@ html[data-theme="solarpunk"] {
   --mist-ext-user:     #B5562F;   /* terracotta */
   --mist-ext-warn:     #C97A1C;
   --mist-ext-ok:       #2F6B3C;
+
+  /* humanist + Art-Nouveau-warm, system faces so nothing has to load.
+     Optima/Avenir read as elegant "normal text", not a terminal. */
+  --mist-font-body: "Optima", "Avenir Next", "Seravek", system-ui, -apple-system, sans-serif;
 
   /* shape: solarpunk keeps its soft organic corners, via the scale */
   --md-sys-shape-corner-none: 0px;

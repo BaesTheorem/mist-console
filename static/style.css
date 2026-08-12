@@ -29,7 +29,7 @@
   --active:    color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container-high));
   --leaf:      var(--mist-ext-ok);
   --focus:     0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
-  --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --mono: var(--mist-font-body);   /* the active theme's body face (md-tokens.css) */
 }
 * { box-sizing: border-box; }
 html, body {
@@ -668,9 +668,8 @@ html[data-theme="solarpunk"] {
   --amber:     #F4A93B;
   --focus:     0 0 0 3px rgba(224,177,0,.22);   /* warm gold focus ring (NOT neon) */
   --radius:    var(--md-sys-shape-corner-large);
-  /* humanist + Art-Nouveau-warm, system fonts so no web-font load.
-     Optima/Avenir read as elegant "normal text", not a terminal. */
-  --mono: "Optima", "Avenir Next", "Seravek", system-ui, -apple-system, sans-serif;
+  /* the body face is the theme's --mist-font-body (md-tokens.css), inherited
+     through the :root --mono alias; only the display face is theme-local */
   --head: "Cochin", "Palatino", "Hoefler Text", Georgia, serif;
 }
 /* dappled sunlight: warm gold + leaf-green + soft sky washes over cream */
