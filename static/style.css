@@ -391,7 +391,15 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .body ul,.body ol { margin: 4px 0 9px; padding-left: 22px; }
 .body a { color: var(--teal); }
 .body blockquote { border-left: 2px solid var(--line); margin: 6px 0; padding-left: 10px; color: var(--dim); }
-/* GFM tables — flat/sharp: hairline grid, square corners, no shadow */
+/* GFM tables — flat/sharp: hairline grid, square corners, no shadow.
+   The wrapper is width:max-content so the hover Copy button pins to the
+   table's own right edge, not the far side of the message column. */
+.body .tableblock { position: relative; width: max-content; max-width: 100%; margin: 22px 0 9px; }
+.body .tableblock .md-table { margin: 0; }
+.body .tableblock:hover .copy-btn { opacity: 1; }
+/* sits in the gap ABOVE the table, not over it — a header cell is nowrap and
+   the button would cover the last column's label exactly when you're reading it */
+.body .tableblock .copy-btn { top: -3px; right: 0; transform: translateY(-100%); }
 .body .md-table { border-collapse: collapse; margin: 9px 0; width: auto; max-width: 100%; display: block; overflow-x: auto; font-size: 12px; }
 .body .md-table th, .body .md-table td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; }
 .body .md-table th { background: var(--md-sys-color-surface-container-lowest); color: var(--teal); font-weight: 600; white-space: nowrap; }

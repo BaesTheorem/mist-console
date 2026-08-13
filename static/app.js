@@ -282,7 +282,14 @@ function extractTables(src, sink) {
       j++;
     }
     const thead = "<tr>" + head.map((h, k) => cell("th", h, aligns[k])).join("") + "</tr>";
-    sink.push('<table class="md-table"><thead>' + thead + "</thead><tbody>" + rows + "</tbody></table>");
+    // Copy hands back the ORIGINAL markdown rows, not the rendered cells, so a
+    // paste into Obsidian/GitHub is the table again rather than mashed text.
+    const mdSrc = lines.slice(i, j).join("\n");
+    sink.push('<div class="tableblock">' +
+      '<button class="copy-btn" type="button" aria-label="Copy table" data-md="' +
+        esc(mdSrc) + '">Copy</button>' +
+      '<table class="md-table"><thead>' + thead + "</thead><tbody>" + rows +
+      "</tbody></table></div>");
     out.push("\0" + (sink.length - 1) + "\0");
     i = j - 1;
   }
@@ -3741,8 +3748,10 @@ logs.addEventListener("click", async (e) => {
   if (handleRecipeClick(e)) return;
   const btn = e.target.closest(".copy-btn");
   if (btn) {
+    // Tables carry their markdown source on the button; code blocks copy the <pre>.
+    const md = btn.getAttribute("data-md");
     const pre = btn.parentElement.querySelector("pre");
-    await copyText(pre ? pre.textContent : "");
+    await copyText(md != null ? md : pre ? pre.textContent : "");
     btn.classList.add("copied");
     btn.textContent = "Copied";
     clearTimeout(btn._t);
@@ -3855,6 +3864,13 @@ logs.addEventListener("contextmenu", (e) => {
   if (pre) {
     const code = pre.matches("pre") ? pre : pre.querySelector("pre");
     if (code) items.push({ icon: "code", label: "Copy code block", run: () => copyText(code.textContent) });
+  }
+
+  const tbl = e.target.closest(".tableblock");
+  const tblBtn = tbl && tbl.querySelector(".copy-btn[data-md]");
+  if (tblBtn) {
+    items.push({ icon: "table", label: "Copy table",
+                 run: () => copyText(tblBtn.getAttribute("data-md")) });
   }
 
   items.push({ icon: "notes", label: "Copy message", run: () => copyText(messageSource(msg)) });
