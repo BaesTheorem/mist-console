@@ -38,6 +38,15 @@ html, body {
   font-family: var(--mono); font-size: 13px; line-height: 1.55;
 }
 body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+/* The grid rows must never dictate the window's width. Grid items default to
+   min-width:auto, which floors a row at its min-content width even when that is
+   wider than the window; intrinsic sizing ignores overflow, so .meta's
+   overflow-x scroll did not shield the topbar row, and every session chip laid
+   out unwrapped locked the document at chip-row width (1367px on a full rail).
+   Resizing the window then cropped the transcript instead of rewrapping it.
+   min-width:0 severs that floor: rows track the window, text reflows on every
+   resize, and the chip row falls back to its own horizontal scroll. */
+#topbar, #mid, #composer { min-width: 0; }
 
 /* ---- app wallpaper ----
    Georges Riom Art Nouveau lily collage, painted INTO the conversation area
