@@ -19,8 +19,11 @@ SK="$HOME/.claude/scheduled-tasks/$DIR/SKILL.md"
 [ -f "$SK" ] || { echo "no SKILL.md for routine '$DIR'"; exit 0; }
 
 HARNESS="/Users/alexhedtke/Documents/Exobrain harness"
-CLAUDE="$HOME/.npm-global/bin/claude"
-export PATH="$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+# Resolve the CLI rather than pinning an install path; it lives in ~/.local/bin
+# under the native installer and in the npm prefix under a global npm install.
+CLAUDE="$(command -v claude)"
+[ -n "$CLAUDE" ] || { echo "claude CLI not found on PATH"; exit 1; }
 
 # Strip the YAML frontmatter (everything up to and including the 2nd '---'),
 # pass the remaining body as the prompt.

@@ -9,6 +9,7 @@ starts its claude process lazily on the first send.
 import json
 import os
 import queue
+import shutil
 import subprocess
 import threading
 import time
@@ -16,7 +17,34 @@ import urllib.error
 import urllib.request
 
 HARNESS = "/Users/alexhedtke/Documents/Exobrain harness"
-CLAUDE = os.path.expanduser("~/.npm-global/bin/claude")
+
+
+def _find_claude():
+    """Locate the `claude` CLI instead of hardcoding one install path.
+
+    WHY: the CLI has moved homes before. It used to live in the npm-global
+    prefix; the native installer puts it at ~/.local/bin/claude. A hardcoded
+    path survives an upgrade but not a *reinstall by another method*, and the
+    failure is opaque — every session dies at spawn with a missing-file error
+    and the Console just says "error" on send. Probe the known homes, then
+    fall back to PATH.
+    """
+    candidates = [
+        os.path.expanduser("~/.local/bin/claude"),      # native installer
+        os.path.expanduser("~/.npm-global/bin/claude"),  # npm global prefix
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+    ]
+    for path in candidates:
+        if os.access(path, os.X_OK):
+            return path
+    return shutil.which("claude") or candidates[0]
+
+
+CLAUDE = _find_claude()
+# Every subprocess we spawn puts the CLI's own directory on PATH, so `claude`
+# is callable by name from anything the session shells out to.
+CLAUDE_BIN_DIR = os.path.dirname(CLAUDE)
 # Persona comes from the harness CLAUDE.md (auto-loaded via cwd=HARNESS), not a side file.
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -540,7 +568,8 @@ class ClaudeSession:
             if self.alive:
                 return
             env = dict(os.environ)
-            env["PATH"] = (os.path.expanduser("~/.npm-global/bin")
+            env["PATH"] = (CLAUDE_BIN_DIR
+                           + ":" + os.path.expanduser("~/.npm-global/bin")
                            + ":/opt/homebrew/bin:/usr/local/bin:" + CONSOLE_BIN
                            + ":" + env.get("PATH", ""))
             # Address THIS chat from anything the session shells out to. A script
@@ -1149,7 +1178,8 @@ class ClaudeSession:
     # to `claude auth ...`, stream its output into the chat as notices, and
     # restart this session on a successful (re-)login so the live process picks
     # up the fresh credentials. Without this, /login silently does nothing.
-    AUTH_PATH_PREFIX = (os.path.expanduser("~/.npm-global/bin")
+    AUTH_PATH_PREFIX = (CLAUDE_BIN_DIR
+                        + ":" + os.path.expanduser("~/.npm-global/bin")
                         + ":/opt/homebrew/bin:/usr/local/bin:")
 
     def maybe_auth_command(self, text):

@@ -24,7 +24,7 @@ import time
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
 import quickaccess
-from bridge import (ClaudeSession, DATA_DIR, HARNESS, RATE_LIVE_PATH,
+from bridge import (ClaudeSession, CLAUDE, DATA_DIR, HARNESS, RATE_LIVE_PATH,
                     RATE_UTIL_PATH, DEFAULT_PERMISSION_MODE, IDLE_REAP_SEC)
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -339,7 +339,7 @@ SPINNER_VERBS = _load_spinner_verbs()
 # the binary can't be read.
 import re as _re
 
-CLAUDE_BIN_LINK = os.path.expanduser("~/.npm-global/bin/claude")
+CLAUDE_BIN_LINK = CLAUDE   # resolved by bridge._find_claude(), not hardcoded
 _MODEL_FAMILIES = ["fable", "opus", "sonnet", "haiku"]   # also display order
 # 1-2 digit version groups only — rejects 8-digit date snapshots like
 # claude-opus-4-20250514 (which would otherwise read as version 4.20250514).
