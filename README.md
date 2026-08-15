@@ -222,7 +222,11 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 
 ## Dependencies
 
-- `claude` CLI at `~/.npm-global/bin/claude` (provides the stream-json protocol).
+- `claude` CLI (provides the stream-json protocol). The path is resolved at
+  import by `bridge._find_claude()`, which checks `~/.local/bin` (native
+  installer), the npm-global prefix, then Homebrew, then `PATH`. Do not hardcode
+  an install path -- the CLI has migrated homes before and took every pinned
+  caller down with it.
 - `uv` (self-installs `flask`, `pywebview`/`pyobjc` on first run).
 - Reuses `mist-terminal/mist-persona.md` from the harness for MIST's voice.
 
