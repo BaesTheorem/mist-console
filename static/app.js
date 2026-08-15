@@ -1095,15 +1095,28 @@ class Session {
       if (d.type === "thinking_delta") b.el.textContent += d.thinking || "";
       else if (d.type === "text_delta") {
         b.text += d.text || "";
-        b.el.innerHTML = md(b.text) + '<span class="cursor">&nbsp;</span>';
-        b.el._mdsrc = b.text;
+        // Throttle: md() over the WHOLE accumulated text on every few-char delta
+        // is quadratic and was the WebContent memory balloon (2026-08-14, 34GB).
+        // Coalesce to one re-render per 150ms; content_block_stop still does the
+        // final exact render.
+        if (!b._mdTimer) {
+          b._mdTimer = setTimeout(() => {
+            b._mdTimer = null;
+            b.el.innerHTML = md(b.text) + '<span class="cursor">&nbsp;</span>';
+            b.el._mdsrc = b.text;
+            this.scroll();
+          }, 150);
+        }
       } else if (d.type === "input_json_delta") {
         this.toolInputs[e.index] += d.partial_json || "";
         b.pre.textContent = this.toolInputs[e.index];
       }
     } else if (e.type === "content_block_stop") {
       const b = this.blocks[e.index];
-      if (b && b.type === "text") { b.el.innerHTML = md(b.text || ""); b.el._mdsrc = b.text || ""; }
+      if (b && b.type === "text") {
+        if (b._mdTimer) { clearTimeout(b._mdTimer); b._mdTimer = null; }
+        b.el.innerHTML = md(b.text || ""); b.el._mdsrc = b.text || "";
+      }
     }
     this.scroll();
   }
