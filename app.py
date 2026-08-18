@@ -24,6 +24,7 @@ import time
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
 import quickaccess
+import search as chat_search
 from bridge import (ClaudeSession, CLAUDE, DATA_DIR, HARNESS, RATE_LIVE_PATH,
                     RATE_UTIL_PATH, DEFAULT_PERMISSION_MODE, IDLE_REAP_SEC)
 
@@ -664,6 +665,34 @@ def font():
 @app.route("/sessions", methods=["GET"])
 def sessions():
     return jsonify(_session_list())
+
+
+@app.route("/search")
+def search_chats():
+    """Full-text search over every chat's log. Groups hits by chat, newest
+    first, and only returns chats that still exist in the session registry
+    (an orphaned data file with no meta entry can't be opened, so don't
+    surface it)."""
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify({"query": q, "groups": []})
+    hits = chat_search.search(q, limit=150)
+    groups, by_sid = [], {}
+    for h in hits:
+        s = _sessions.get(h["sid"])
+        if not s:
+            continue
+        g = by_sid.get(h["sid"])
+        if g is None:
+            if len(groups) >= 25:
+                continue
+            g = {"sid": h["sid"], "title": s.title or "New chat",
+                 "last_activity": s.last_activity, "hits": []}
+            by_sid[h["sid"]] = g
+            groups.append(g)
+        if len(g["hits"]) < 3:
+            g["hits"].append({"role": h["role"], "snippet": h["snippet"]})
+    return jsonify({"query": q, "groups": groups})
 
 
 @app.route("/sessions", methods=["POST"])
@@ -1386,8 +1415,6 @@ def notes_import():
 
 import itertools
 import plistlib
-import re
-import shutil
 
 SCHED_DIR = os.path.expanduser("~/.claude/scheduled-tasks")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1502,8 +1529,8 @@ def cron_to_calendar(cron):
         else:
             try:
                 axes.append([(key, v) for v in _cron_field(expr, lo, hi)])
-            except ValueError:
-                raise ValueError("Could not parse cron field %r" % expr)
+            except ValueError as err:
+                raise ValueError("Could not parse cron field %r" % expr) from err
     out = []
     for combo in itertools.product(*axes):
         d = {k: v for (k, v) in combo if v is not None}

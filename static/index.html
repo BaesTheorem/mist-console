@@ -67,6 +67,13 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
 
 <div id="mid">
   <nav id="tabrail">
+    <div id="railSearch">
+      <span class="msi">search</span>
+      <input id="chatSearch" type="search" placeholder="Search chats" autocomplete="off"
+             spellcheck="false" aria-label="Search all chats">
+      <button id="chatSearchClear" hidden title="Clear search" aria-label="Clear search"><span class="msi">close</span></button>
+    </div>
+    <div id="searchResults" hidden></div>
     <div id="tabs"></div>
     <button id="newTab"><span class="msi">add</span> new chat</button>
   </nav>

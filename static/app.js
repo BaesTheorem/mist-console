@@ -3951,3 +3951,95 @@ async function boot() {
   input.focus();
 }
 boot();
+
+/* ---------- chat search ----------
+   Full-text search over every chat's log (server-side FTS index). While a
+   query is live the results panel replaces the tab list; clicking a result
+   opens that chat. */
+const searchBox = $("#chatSearch");
+const searchClearBtn = $("#chatSearchClear");
+const searchResultsEl = $("#searchResults");
+let _searchTimer = null;
+let _searchSeq = 0;   // drop stale responses that resolve out of order
+
+// The server wraps matches in \x01…\x02 (chars that can't occur in chat text);
+// escape the snippet FIRST, then swap the markers for real <mark> tags.
+function markSnippet(s) {
+  return esc(s).replace(/\x01/g, "<mark>").replace(/\x02/g, "</mark>");
+}
+
+function clearChatSearch(refocus) {
+  clearTimeout(_searchTimer);
+  _searchSeq++;
+  searchBox.value = "";
+  searchClearBtn.hidden = true;
+  searchResultsEl.hidden = true;
+  searchResultsEl.innerHTML = "";
+  tabsEl.hidden = false;
+  if (refocus) searchBox.focus();
+}
+
+function renderSearchResults(groups) {
+  searchResultsEl.innerHTML = "";
+  if (!groups.length) {
+    searchResultsEl.appendChild(el("div", "srEmpty", "no matches"));
+    return;
+  }
+  const thisYear = new Date().getFullYear();
+  groups.forEach((g) => {
+    const item = el("div", "srItem");
+    item.tabIndex = 0;
+    item.setAttribute("role", "button");
+    const d = new Date(g.last_activity * 1000);
+    const date = d.toLocaleDateString([], d.getFullYear() === thisYear
+      ? { month: "short", day: "numeric" }
+      : { month: "short", day: "numeric", year: "numeric" });
+    item.appendChild(el("div", "srTitle",
+      '<span class="srName">' + esc(g.title) + '</span><span class="srDate">' + date + "</span>"));
+    g.hits.forEach((h) => {
+      item.appendChild(el("div", "srSnip",
+        '<span class="srRole">' + (h.role === "user" ? "you" : "mist") + "</span>" + markSnippet(h.snippet)));
+    });
+    const open = () => { const sid = g.sid; clearChatSearch(false); switchTo(sid); };
+    item.addEventListener("click", open);
+    item.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); }
+    });
+    searchResultsEl.appendChild(item);
+  });
+}
+
+async function runChatSearch() {
+  const q = searchBox.value.trim();
+  searchClearBtn.hidden = !searchBox.value;
+  if (q.length < 2) {
+    searchResultsEl.hidden = true;
+    searchResultsEl.innerHTML = "";
+    tabsEl.hidden = false;
+    return;
+  }
+  const seq = ++_searchSeq;
+  try {
+    const data = await (await fetch("/search?q=" + encodeURIComponent(q))).json();
+    if (seq !== _searchSeq) return;   // a newer query is already in flight
+    tabsEl.hidden = true;
+    searchResultsEl.hidden = false;
+    renderSearchResults(data.groups || []);
+  } catch (_) {}
+}
+
+searchBox.addEventListener("input", () => {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(runChatSearch, 250);
+});
+searchBox.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") {
+    ev.stopPropagation();   // clear the search, don't dismiss other overlays
+    clearChatSearch(false);
+    searchBox.blur();
+  } else if (ev.key === "Enter") {
+    clearTimeout(_searchTimer);
+    runChatSearch();
+  }
+});
+searchClearBtn.addEventListener("click", () => clearChatSearch(true));
