@@ -347,6 +347,9 @@ class ClaudeSession:
             cmd += ["--resume", self.claude_session_id]
         if self.model:
             cmd += ["--model", self.model]
+        # Current models default thinking display to "omitted" (empty thinking
+        # text in the stream); opt into readable summaries for the UI cards.
+        cmd += ["--thinking-display", "summarized"]
         cmd += ["--append-system-prompt", CONSOLE_SURFACE_PROMPT]
         return cmd
 

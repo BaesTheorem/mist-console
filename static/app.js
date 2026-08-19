@@ -1116,6 +1116,12 @@ class Session {
       if (b && b.type === "text") {
         if (b._mdTimer) { clearTimeout(b._mdTimer); b._mdTimer = null; }
         b.el.innerHTML = md(b.text || ""); b.el._mdsrc = b.text || "";
+      } else if (b && b.type === "thinking" && !b.el.textContent.trim()) {
+        // Thinking arrived with empty text (display "omitted" — the model
+        // default before we opted into "summarized", still replayed from old
+        // chats). A hollow THINKING card is noise; drop it.
+        const card = b.el.closest("details.think");
+        if (card) card.remove();
       }
     }
     this.scroll();

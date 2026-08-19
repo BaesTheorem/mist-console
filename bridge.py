@@ -547,6 +547,13 @@ class ClaudeSession:
         # the valid set is enforced at the route (_VALID_EFFORTS in app.py).
         if self.effort:
             cmd += ["--effort", self.effort]
+        # Thinking display. The current model family (Fable 5 / Opus 5 and
+        # kin) defaults thinking display to "omitted": the API streams
+        # thinking blocks whose text is EMPTY (only estimated_tokens ticks),
+        # so the UI's thinking cards render blank. "summarized" opts into a
+        # readable summary of the reasoning. Visibility only — thinking runs
+        # and bills the same either way; raw chain of thought is never sent.
+        cmd += ["--thinking-display", "summarized"]
         # MIST's persona is NOT injected from a side file. It lives in the
         # Exobrain's CLAUDE.md ("Identity & Voice: MIST"), which `claude`
         # auto-loads because we run in the harness cwd (see HARNESS / cwd below).
