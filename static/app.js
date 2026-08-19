@@ -4026,12 +4026,24 @@ async function runChatSearch() {
   }
   const seq = ++_searchSeq;
   try {
-    const data = await (await fetch("/search?q=" + encodeURIComponent(q))).json();
+    const r = await fetch("/search?q=" + encodeURIComponent(q));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
     if (seq !== _searchSeq) return;   // a newer query is already in flight
     tabsEl.hidden = true;
     searchResultsEl.hidden = false;
     renderSearchResults(data.groups || []);
-  } catch (_) {}
+  } catch (err) {
+    // Never fail silently: a 404 here means the detached :5014 server predates
+    // the /search route and needs a real restart, not just a window relaunch.
+    if (seq !== _searchSeq) return;
+    tabsEl.hidden = true;
+    searchResultsEl.hidden = false;
+    searchResultsEl.innerHTML = "";
+    searchResultsEl.appendChild(el("div", "srEmpty",
+      "search unavailable (" + esc(String(err && err.message || err)) +
+      ") — the Console server needs a restart"));
+  }
 }
 
 searchBox.addEventListener("input", () => {
