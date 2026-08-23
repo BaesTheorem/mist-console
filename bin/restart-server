@@ -1,0 +1,23 @@
+#!/bin/bash
+# Restart the detached MIST Console server (the process holding :5014) and
+# reopen the app. Needed after app.py/bridge.py/share.py edits: the server is
+# init-orphaned, so relaunching the window alone never reloads Python code.
+# Chats revive dormant via --resume, so nothing is lost.
+#
+# Run it DETACHED (launchctl submit, or from a Terminal that isn't a child of a
+# Console chat): a Console chat's shell is a descendant of the server, so
+# running this inline would kill the very chat that invoked it.
+#   launchctl submit -l com.exobrain.mist-console-restart -- "$(cd "$(dirname "$0")" && pwd)/restart-server"
+set -u
+sleep 2   # let the invoking chat finish its turn/response first
+pids=$(lsof -tiTCP:5014 -sTCP:LISTEN)
+[ -n "$pids" ] && kill $pids
+for _ in $(seq 1 20); do
+  lsof -tiTCP:5014 -sTCP:LISTEN >/dev/null 2>&1 || break
+  sleep 0.5
+done
+# The window process (desktop.py) is separate and may still be running; a plain
+# `open` raise-acks it without a server. Quit it first so reopen boots fresh.
+osascript -e 'tell application "MIST Console" to quit' >/dev/null 2>&1
+sleep 1
+open -a "MIST Console"
