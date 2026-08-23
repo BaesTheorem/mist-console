@@ -1587,3 +1587,28 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 .tab:focus-visible, button:focus-visible {
   outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px;
 }
+
+/* ---- share card (share-this-chat panel; snapshot page styles live in app.js) */
+#shareCard {
+  position: fixed; top: 44px; left: auto; right: 14px; width: 330px; z-index: 30;
+  background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line);
+}
+#shareCard[hidden] { display: none; }
+.share-body { padding: 10px 12px; font-size: 12px; color: var(--text);
+  display: flex; flex-direction: column; gap: 8px; }
+.share-note { color: var(--dim); line-height: 1.45; }
+.share-note b { color: var(--text); font-weight: 600; }
+.share-note code { font-size: 10px; }
+.share-note.err { color: var(--err); }
+.share-url {
+  border: 1px solid var(--line); padding: 6px 8px; font-size: 11px; color: var(--teal);
+  word-break: break-all; cursor: pointer; background: var(--md-sys-color-surface-container);
+}
+.share-url:hover { border-color: var(--teal); }
+.share-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.share-actions button {
+  border: 1px solid var(--line); background: none; color: var(--text);
+  font: inherit; font-size: 11px; padding: 5px 9px; cursor: pointer;
+}
+.share-actions button:hover { color: var(--teal); border-color: var(--teal); }
+.share-actions button.danger:hover { color: var(--err); border-color: var(--err); }

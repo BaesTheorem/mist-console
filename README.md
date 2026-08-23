@@ -191,6 +191,38 @@ caller's main executable against its bundle record, and the Console's
 script→python launch chain can never pass (UNErrorDomain Code=1). Details and
 the other macOS 26 landmines live in the harness `mist-notifier/README.md`.
 
+## Share links (public read-only snapshots)
+
+The **share** button in the top bar emulates claude.ai's "share chat": it
+publishes a read-only snapshot of the active conversation at an unguessable,
+revocable URL. Capture is client-side (`buildShareSnapshot` in app.js): the
+transcript DOM is cloned, everything interactive is stripped (buttons become
+inert spans, audio/video become labeled stubs), local images are inlined as
+data URIs (3 MB cap each), and the stylesheet + wallpaper ride along inline, so
+the result is one self-contained HTML file. Thinking and tool cards stay
+collapsible for free — they're native `<details>` elements. The icon font
+doesn't ship; a small override swaps the chevron/check glyphs for plain
+characters.
+
+- **Storage**: `share.py`. Canonical copy at `data/shares/<token>.html`
+  (`token` = 24 url-safe random chars, minted once per chat — updating a share
+  keeps its URL). Served locally at `/share/<token>` with a
+  scripts-forbidden CSP.
+- **Publishing**: a read-only Cloudflare Worker (`mist-share`) serving the
+  snapshot out of Workers KV at
+  `https://mist-share.<subdomain>.workers.dev/s/<token>`, `noindex` +
+  `no-store` so revocation is instant. The Worker accepts only GET; publish and
+  revoke go from `share.py` straight to the KV REST API. Deploy is lazy and
+  idempotent (first publish, or when the embedded worker source changes) and
+  needs a token with **Workers Scripts:Edit + Workers KV Storage:Edit** saved
+  as `CF_SHARE_API_TOKEN` in the harness `.env` (the mist-image token is
+  Workers AI-only). Without it, sharing still works local-only and the share
+  panel says exactly what to mint.
+- **UI states**: create (with a plain-language "anyone with the link" warning),
+  manage (copy / open / update snapshot / stop sharing), and
+  unpublished-with-reason. New messages are never auto-published; "update
+  snapshot" re-captures explicitly.
+
 ## MCP parity with the CLI
 
 The session loads **all** MCP scopes (no `--strict-mcp-config`), exactly like the interactive `claude` CLI: things3, fitbit, withings, linkedin, and the claude.ai connectors (Gmail/Calendar/Drive/MyChart). 8 servers, ~90 MCP tools.

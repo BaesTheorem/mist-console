@@ -25,6 +25,7 @@ from flask import Flask, Response, abort, jsonify, request, send_file, send_from
 
 import quickaccess
 import search as chat_search
+import share
 from bridge import (ClaudeSession, CLAUDE, DATA_DIR, HARNESS, RATE_LIVE_PATH,
                     RATE_UTIL_PATH, DEFAULT_PERMISSION_MODE, IDLE_REAP_SEC)
 
@@ -1035,6 +1036,58 @@ def rename_session(sid):
     s.title = title[:80]
     _save_meta()
     return jsonify({"ok": True, "title": s.title})
+
+
+# ---- share links (claude.ai-style public snapshots; see share.py) -----------
+
+@app.route("/sessions/<sid>/share", methods=["GET"])
+def share_status(sid):
+    if sid not in _sessions:
+        return jsonify({"ok": False}), 404
+    return jsonify({"ok": True, **share.status(sid)})
+
+
+@app.route("/sessions/<sid>/share", methods=["POST"])
+def share_create(sid):
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False}), 404
+    body = request.get_json(silent=True) or {}
+    html = body.get("html") or ""
+    if not html.strip():
+        return jsonify({"ok": False, "error": "empty snapshot"}), 400
+    try:
+        rec = share.create_or_update(sid, body.get("title") or s.title or "", html)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 413
+    return jsonify({"ok": True, **rec})
+
+
+@app.route("/sessions/<sid>/share", methods=["DELETE"])
+def share_revoke(sid):
+    if sid not in _sessions:
+        return jsonify({"ok": False}), 404
+    try:
+        return jsonify({"ok": True, **share.revoke(sid)})
+    except share.ShareCloudError as e:
+        # The public copy could not be deleted (offline / token trouble). Keep
+        # the record so revoke can be retried; tell the user plainly.
+        return jsonify({"ok": False, "error": str(e), "why": e.why}), 502
+
+
+@app.route("/share/<token>")
+def share_view(token):
+    """Local copy of a shared snapshot — same bytes the public link serves.
+    Works with zero cloud credentials (preview / same-machine viewing)."""
+    html = share.read_snapshot(token)
+    if html is None:
+        abort(404)
+    return Response(html, mimetype="text/html", headers={
+        "X-Robots-Tag": "noindex, nofollow",
+        "Content-Security-Policy":
+            "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; "
+            "media-src data:; base-uri 'none'; form-action 'none'",
+    })
 
 
 @app.route("/sessions/<sid>/pin", methods=["POST"])

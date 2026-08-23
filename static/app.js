@@ -3297,6 +3297,7 @@ const ANCHORED_CARDS = [
   { card: "#modelCard", trigger: "#model" },
   { card: "#permCard",  trigger: "#perm"  },
   { card: "#thinkCard", trigger: "#think" },
+  { card: "#shareCard", trigger: "#shareBtn" },
 ];
 function closeAnchoredCards(except) {
   ANCHORED_CARDS.forEach(({ card }) => {
@@ -3365,7 +3366,7 @@ $("#thinkClose").addEventListener("click", () => { $("#thinkCard").hidden = true
 function closeTopOverlay() {
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
-  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#capPanel", "#notesPanel"]) {
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#shareCard", "#capPanel", "#notesPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }
@@ -4061,3 +4062,281 @@ searchBox.addEventListener("keydown", (ev) => {
   }
 });
 searchClearBtn.addEventListener("click", () => clearChatSearch(true));
+
+/* ---------- share this chat (claude.ai-style public snapshot) ----------
+   The share button publishes a read-only, self-contained HTML snapshot of the
+   active conversation. Capture happens HERE, client-side: the transcript DOM is
+   already pixel-perfect in the page, so we clone it, strip everything
+   interactive, inline the stylesheet + local images, and POST the finished
+   page to the server. The server keeps the canonical copy (data/shares/) and
+   publishes it to a read-only Cloudflare Worker when credentials allow
+   (share.py). Thinking + tool cards stay collapsible for free: they're native
+   <details> elements, no JS needed in the snapshot. */
+
+const SHARE_INLINE_CSS_ASSETS = ["mist-wall.png", "an-corner.svg", "an-headpiece.svg", "an-tulip.svg"];
+const SHARE_PAGE_CSS = `
+body.sharepage { display: block; overflow: auto; height: auto; min-height: 100vh; padding: 26px 18px 40px; }
+.sharepage .session-log { position: static; overflow: visible; padding: 0; max-width: 860px; margin: 0 auto; }
+.share-head { max-width: 860px; margin: 0 auto 26px; display: flex; align-items: center; gap: 14px;
+  border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+.share-logo { width: 44px; height: 44px; object-fit: contain; }
+.share-title { color: var(--teal); font-size: 17px; font-weight: 700; }
+.share-sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+.share-foot { max-width: 860px; margin: 34px auto 0; color: var(--dim); font-size: 11px;
+  border-top: 1px solid var(--line); padding-top: 12px; }
+.share-omitted { border: 1px dashed var(--line); color: var(--dim); font-size: 11px;
+  padding: 8px 10px; margin: 6px 0; }
+/* The icon font doesn't ship with the snapshot: hide icon spans, swap the
+   pseudo-element glyphs for plain characters. */
+.msi, md-icon { display: none !important; }
+details.tool > summary.tool-head::before, .routine > summary::before { content: "▸"; font-family: inherit; }
+details.tool[open] > summary.tool-head::before, .routine[open] > summary::before { content: "▾"; }
+.modelrow.sel::before, .capBody h4::before { content: ""; font-family: inherit; }
+`;
+
+async function shareFetchDataURL(url, capBytes) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("fetch failed");
+  const b = await r.blob();
+  if (capBytes && b.size > capBytes) throw new Error("too big");
+  return await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(b);
+  });
+}
+
+let _shareCSSCache = null;
+async function shareCSS() {
+  if (_shareCSSCache) return _shareCSSCache;
+  let css = "";
+  for (const f of ["/md-tokens.css", "/style.css"]) {
+    css += (await (await fetch(f)).text()) + "\n";
+  }
+  // Small theme assets ride along as data URIs (the terminal wallpaper, the
+  // solarpunk ornaments); anything else local would 404 on the share host, so
+  // blank it rather than shipping broken references (riom-lilies is 12 MB).
+  for (const name of SHARE_INLINE_CSS_ASSETS) {
+    if (css.indexOf(name) === -1) continue;
+    try {
+      const d = await shareFetchDataURL("/" + name, 400 * 1024);
+      css = css.split('url("' + name + '")').join('url("' + d + '")');
+    } catch (_) { /* falls through to the blanket blank below */ }
+  }
+  css = css.replace(/url\("(?!data:|https?:)[^"]*"\)/g, "none");
+  _shareCSSCache = css;
+  return css;
+}
+
+async function buildShareSnapshot(s) {
+  const css = await shareCSS();
+  const clone = s.logEl.cloneNode(true);
+  clone.removeAttribute("hidden");
+  clone.removeAttribute("style");
+  // Interactive chrome that has no meaning in a read-only page.
+  clone.querySelectorAll(".spinner, .perm-actions, .copy-btn, .rc-cook-btn, .genimg-dl")
+    .forEach((e) => e.remove());
+  // Remaining buttons (recipe timer chips, etc.) keep their look, lose their life.
+  clone.querySelectorAll("button").forEach((b) => {
+    const sp = document.createElement("span");
+    sp.className = b.className;
+    sp.innerHTML = b.innerHTML;
+    b.replaceWith(sp);
+  });
+  clone.querySelectorAll("audio, video").forEach((m) => {
+    const d = document.createElement("div");
+    d.className = "share-omitted";
+    d.textContent = "media attachment · not included in the shared copy";
+    m.replaceWith(d);
+  });
+  // Local images become data URIs so the page is truly self-contained; remote
+  // embeds stay remote. Oversized/unreadable ones degrade to a labeled stub.
+  for (const img of Array.from(clone.querySelectorAll("img"))) {
+    const src = img.getAttribute("src") || "";
+    if (src.startsWith("data:") || /^https?:/i.test(src)) continue;
+    try {
+      img.src = await shareFetchDataURL(src, 3 * 1024 * 1024);
+      img.removeAttribute("loading");
+    } catch (_) {
+      const d = document.createElement("div");
+      d.className = "share-omitted";
+      d.textContent = "image · not included in the shared copy";
+      img.replaceWith(d);
+    }
+  }
+  clone.querySelectorAll("a[href]").forEach((a) => {
+    const h = a.getAttribute("href") || "";
+    if (/^https?:/i.test(h)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+    else { a.removeAttribute("href"); a.removeAttribute("target"); }  // /file, lightbox, local paths
+  });
+  clone.querySelectorAll("input, textarea, select").forEach((e) => { e.disabled = true; });
+  clone.querySelectorAll("[contenteditable]").forEach((e) => e.removeAttribute("contenteditable"));
+
+  const theme = document.documentElement.dataset.theme || "terminal";
+  const title = s.title || "MIST Console chat";
+  const when = new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  let logo = "";
+  try {
+    logo = '<img class="share-logo" src="' + (await shareFetchDataURL("/mist-logo.png", 300 * 1024)) + '" alt="MIST">';
+  } catch (_) { /* header just goes logoless */ }
+  return "<!DOCTYPE html>" +
+    '<html lang="en" data-theme="' + esc(theme) + '"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<meta name="robots" content="noindex, nofollow">' +
+    "<title>" + esc(title) + " · MIST Console</title>" +
+    "<style>" + css + "\n" + SHARE_PAGE_CSS + "</style></head>" +
+    '<body class="sharepage"><header class="share-head">' + logo +
+    '<div class="share-headtext"><div class="share-title">' + esc(title) + "</div>" +
+    '<div class="share-sub">a conversation with MIST · shared ' + esc(when) + "</div></div></header>" +
+    '<main class="session-log">' + clone.innerHTML + "</main>" +
+    '<footer class="share-foot">read-only snapshot shared from the MIST Console · ' +
+    "the live conversation may have moved on</footer></body></html>";
+}
+
+function shareCopyText(text) {
+  // WKWebView's async clipboard can be moody; execCommand is the reliable fallback.
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => shareCopyFallback(text));
+  }
+  return Promise.resolve(shareCopyFallback(text));
+}
+function shareCopyFallback(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch (_) {}
+  ta.remove();
+}
+
+let _shareBusy = false;
+function shareAbsoluteLocal(path) { return location.origin + path; }
+
+async function renderShareCard() {
+  const body = $("#shareBody");
+  const s = activeId && sessions.get(activeId);
+  if (!s) { body.innerHTML = '<div class="share-note">Open a chat first.</div>'; return; }
+  if (_shareBusy) return;
+  body.innerHTML = '<div class="share-note">checking…</div>';
+  let st = null;
+  try {
+    const r = await fetch("/sessions/" + s.id + "/share");
+    if (!r.ok && r.status === 404) throw new Error("no-route");
+    st = await r.json();
+  } catch (_) {
+    body.innerHTML = '<div class="share-note err">The running Console server predates share links. ' +
+      "Restart it (quit the app, <code>lsof -tiTCP:5014 -sTCP:LISTEN | xargs kill</code>, reopen) to enable sharing.</div>";
+    return;
+  }
+  body.innerHTML = "";
+  const note = (cls, html) => { const d = el("div", cls); d.innerHTML = html; body.appendChild(d); return d; };
+  const actions = el("div", "share-actions");
+
+  if (!st.shared) {
+    note("share-note",
+      "Publishes a <b>read-only snapshot</b> of this whole conversation at an unguessable link — " +
+      "anyone who has the link can read it. Audio/video stays out; images ride along. " +
+      "Updating later reuses the same link; you can stop sharing any time.");
+    if (!st.cloud || !st.cloud.has_creds) {
+      note("share-note", "No Cloudflare share credentials yet, so the link will be <b>local-only</b> " +
+        "(viewable on this Mac) until <code>CF_SHARE_API_TOKEN</code> lands in the harness .env. " +
+        "MIST can walk you through minting one.");
+    }
+    const b = el("button", null, "create link");
+    b.addEventListener("click", () => doShare(s));
+    actions.appendChild(b);
+    body.appendChild(actions);
+    return;
+  }
+
+  const url = st.published && st.url ? st.url : shareAbsoluteLocal(st.local_url);
+  const urlBox = el("div", "share-url", url);
+  urlBox.title = "Click to copy";
+  urlBox.addEventListener("click", async () => {
+    await shareCopyText(url);
+    urlBox.textContent = "copied ✓";
+    setTimeout(() => { urlBox.textContent = url; }, 900);
+  });
+  body.appendChild(urlBox);
+  if (!st.published) {
+    const why = (st.reason && st.reason.message) || "";
+    note("share-note err", "Not published to the public link yet — this URL only works on this Mac." +
+      (why ? "<br>" + esc(why) : ""));
+  }
+  const upd = st.updated ? new Date(st.updated * 1000).toLocaleString() : "";
+  if (upd) note("share-note", "snapshot from " + esc(upd) + " · new messages aren’t shared until you update");
+
+  const copyB = el("button", null, "copy link");
+  copyB.addEventListener("click", () => urlBox.click());
+  const openB = el("button", null, "open");
+  openB.addEventListener("click", () => window.open(url, "_blank"));
+  const updB = el("button", null, st.published ? "update snapshot" : "retry publish");
+  updB.addEventListener("click", () => doShare(s));
+  const stopB = el("button", "danger", "stop sharing");
+  stopB.addEventListener("click", () => doUnshare(s));
+  [copyB, openB, updB, stopB].forEach((x) => actions.appendChild(x));
+  body.appendChild(actions);
+}
+
+async function doShare(s) {
+  if (_shareBusy) return;
+  _shareBusy = true;
+  const body = $("#shareBody");
+  body.innerHTML = '<div class="share-note">capturing snapshot…</div>';
+  try {
+    const html = await buildShareSnapshot(s);
+    body.innerHTML = '<div class="share-note">publishing…</div>';
+    const r = await fetch("/sessions/" + s.id + "/share", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ html, title: s.title || "" }),
+    });
+    const j = await r.json();
+    _shareBusy = false;
+    if (!j.ok) {
+      body.innerHTML = '<div class="share-note err">' + esc(j.error || "share failed") + "</div>";
+      return;
+    }
+    await renderShareCard();
+    // Fresh link in hand: put it on the clipboard right away.
+    const link = j.published && j.url ? j.url : shareAbsoluteLocal(j.local_url);
+    shareCopyText(link);
+  } catch (e) {
+    _shareBusy = false;
+    body.innerHTML = '<div class="share-note err">' + esc(String(e && e.message || e)) + "</div>";
+  }
+}
+
+async function doUnshare(s) {
+  if (_shareBusy) return;
+  _shareBusy = true;
+  const body = $("#shareBody");
+  body.innerHTML = '<div class="share-note">removing the public copy…</div>';
+  try {
+    const r = await fetch("/sessions/" + s.id + "/share", { method: "DELETE" });
+    const j = await r.json();
+    _shareBusy = false;
+    if (!j.ok) {
+      body.innerHTML = '<div class="share-note err">' + esc(j.error || "couldn’t revoke") +
+        "<br>The share is still live; try again.</div>";
+      return;
+    }
+    await renderShareCard();
+  } catch (e) {
+    _shareBusy = false;
+    body.innerHTML = '<div class="share-note err">' + esc(String(e && e.message || e)) + "</div>";
+  }
+}
+
+function openShareCard(ev) {
+  const card = $("#shareCard");
+  if (!card.hidden) { card.hidden = true; return; }
+  closeAnchoredCards("#shareCard");
+  card.hidden = false;
+  anchorCard(card, (ev && ev.currentTarget) || $("#shareBtn"));
+  renderShareCard();
+}
+$("#shareBtn").addEventListener("click", openShareCard);
+$("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true; });
