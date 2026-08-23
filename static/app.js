@@ -3321,6 +3321,13 @@ function anchorCard(card, trigger) {
   card.style.left = (left - cr.left) / z + "px";
   card.style.top = (r.bottom + 4 - cr.top) / z + "px";
   card.style.right = "auto";
+  // Feedback pass: whatever units the math above got wrong (engines disagree on
+  // whether zoomed rects and innerWidth share a coordinate space), measure the
+  // RESULT and pull the card back inside the window. Only fires when the right
+  // edge actually overflows, so correctly-placed cards are untouched.
+  const after = card.getBoundingClientRect();
+  const over = after.right - window.innerWidth + 8;
+  if (over > 0) card.style.left = Math.max(8, parseFloat(card.style.left) - over / z) + "px";
 }
 function openModelCard(ev) {
   const card = $("#modelCard");
@@ -4335,8 +4342,10 @@ function openShareCard(ev) {
   if (!card.hidden) { card.hidden = true; return; }
   closeAnchoredCards("#shareCard");
   card.hidden = false;
-  anchorCard(card, (ev && ev.currentTarget) || $("#shareBtn"));
-  renderShareCard();
+  const trigger = (ev && ev.currentTarget) || $("#shareBtn");
+  anchorCard(card, trigger);
+  // The status fetch changes the card's size; re-anchor once content settles.
+  renderShareCard().then(() => { if (!card.hidden) anchorCard(card, trigger); });
 }
 $("#shareBtn").addEventListener("click", openShareCard);
 $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true; });

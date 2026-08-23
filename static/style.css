@@ -1612,3 +1612,9 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 }
 .share-actions button:hover { color: var(--teal); border-color: var(--teal); }
 .share-actions button.danger:hover { color: var(--err); border-color: var(--err); }
+
+/* Never let the share card outgrow the window (belt for engine zoom quirks);
+   long unbreakable strings (commands, URLs) wrap instead of pushing wider. */
+#shareCard { max-width: calc(100vw - 20px); }
+.share-body { overflow-wrap: anywhere; }
+.share-note code { white-space: normal; word-break: break-all; }
