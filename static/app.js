@@ -3307,19 +3307,28 @@ function anchorCard(card, trigger) {
   card.style.left = "0px";
   card.style.top = "0px";
   const cr = card.getBoundingClientRect();
-  const z = (card.offsetWidth && cr.width / card.offsetWidth) || 1;
+  // Engines disagree on whether rects include the root's CSS zoom: Chromium and
+  // upstream WebKit scale them (zr == the applied zoom), but Apple's SHIPPED
+  // WKWebView reports unzoomed rects while still painting zoomed pixels (probed
+  // on this machine 2026-08-23: a 330px fixed div at zoom 1.15 measures 330).
+  // window.innerWidth is real pixels either way, so a clamp that mixes the two
+  // spaces lets right-anchored cards hang past the window edge at any text size
+  // other than 100%. Express the window edge in rect units before clamping:
+  //   zr = rect px per CSS px (measured), ze = the zoom actually painted,
+  //   vw = the window's right edge in the same units the rects use.
+  const zr = (card.offsetWidth && cr.width / card.offsetWidth) || 1;
+  const ze = parseFloat(document.documentElement.style.zoom) || 1;
+  const vw = window.innerWidth * zr / ze;
   const r = trigger.getBoundingClientRect();
-  const left = Math.max(8, Math.min(r.left, window.innerWidth - cr.width - 8));
-  card.style.left = (left - cr.left) / z + "px";
-  card.style.top = (r.bottom + 4 - cr.top) / z + "px";
+  const left = Math.max(8, Math.min(r.left, vw - cr.width - 8));
+  card.style.left = (left - cr.left) / zr + "px";
+  card.style.top = (r.bottom + 4 - cr.top) / zr + "px";
   card.style.right = "auto";
-  // Feedback pass: whatever units the math above got wrong (engines disagree on
-  // whether zoomed rects and innerWidth share a coordinate space), measure the
-  // RESULT and pull the card back inside the window. Only fires when the right
-  // edge actually overflows, so correctly-placed cards are untouched.
+  // Feedback pass against the same vw ruler: measure the RESULT and pull the
+  // card back inside when the right edge still overflows.
   const after = card.getBoundingClientRect();
-  const over = after.right - window.innerWidth + 8;
-  if (over > 0) card.style.left = Math.max(8, parseFloat(card.style.left) - over / z) + "px";
+  const over = after.right - vw + 8;
+  if (over > 0) card.style.left = Math.max(8, parseFloat(card.style.left) - over / zr) + "px";
 }
 function openModelCard(ev) {
   const card = $("#modelCard");
