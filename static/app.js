@@ -4184,6 +4184,16 @@ async function buildShareSnapshot(s) {
   const theme = document.documentElement.dataset.theme || "terminal";
   const title = s.title || "MIST Console chat";
   const when = new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  // Provenance line: which model wrote this, at what thinking depth. The
+  // session's own id wins; a chat that never switched runs the CLI default,
+  // which the last init event reported.
+  const modelId = s.model || (typeof lastInit !== "undefined" && lastInit && lastInit.model) || "";
+  const mEntry = modelId && typeof MODELS !== "undefined" ? MODELS.find((m) => m.id === modelId) : null;
+  const modelLabel = (mEntry && mEntry.label) || modelId;
+  const subLine = ["a conversation with MIST",
+                   modelLabel ? "model: " + modelLabel : "",
+                   "thinking: " + (s.effort || "default"),
+                   "shared " + when].filter(Boolean).join(" · ");
   let logo = "";
   try {
     logo = '<img class="share-logo" src="' + (await shareFetchDataURL("/mist-logo.png", 300 * 1024)) + '" alt="MIST">';
@@ -4196,7 +4206,7 @@ async function buildShareSnapshot(s) {
     "<style>" + css + "\n" + SHARE_PAGE_CSS + "</style></head>" +
     '<body class="sharepage"><header class="share-head">' + logo +
     '<div class="share-headtext"><div class="share-title">' + esc(title) + "</div>" +
-    '<div class="share-sub">a conversation with MIST · shared ' + esc(when) + "</div></div></header>" +
+    '<div class="share-sub">' + esc(subLine) + "</div></div></header>" +
     '<main class="session-log">' + clone.innerHTML + "</main>" +
     '<footer class="share-foot">read-only snapshot shared from the MIST Console · ' +
     "the live conversation may have moved on</footer></body></html>";
