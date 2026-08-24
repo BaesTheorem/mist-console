@@ -169,7 +169,7 @@ thing to fix.
 - Reduce Motion is respected: the indeterminate sweep becomes a static hatched
   fill and jump-to-bar scrolling is instant.
 
-## Notifications (bell panel + inline reply)
+## Notifications (settings section + inline reply)
 
 The Console is the receiving end of the full-featured notification pipeline
 (`mist-notifier/` in the harness repo builds `/Applications/MIST Notifier.app`,
@@ -183,8 +183,9 @@ which posts native banners for `mist-notify`):
 - **`POST /notifications/open`** `{link}`: re-fires a click target from the
   bell panel (URLs/paths/`cmd:`; `console:*` targets are handled client-side by
   switching chats).
-- **The bell** (top-bar, next to notes): the notification feed, newest first,
-  with an unread tint on the icon (`notifSeen` timestamp in localStorage).
+- **The feed** lives as the top section of the settings panel (the dedicated
+  top-bar bell was crowding the actions row), newest first; unread state tints
+  the settings gear instead (`notifSeen` timestamp in localStorage).
 
 Why the Console doesn't post banners itself: usernoted validates a UN-API
 caller's main executable against its bundle record, and the Console's

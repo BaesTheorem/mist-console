@@ -42,7 +42,6 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
   </div>
   <div class="actions">
     <md-icon-button id="shareBtn" touch-target="none" title="Share this chat · publish a read-only snapshot at a private link" aria-label="Share this chat"><md-icon>share</md-icon></md-icon-button>
-    <md-icon-button id="notifBtn" touch-target="none" title="Notifications · everything MIST has pinged you about" aria-label="Notifications"><md-icon>notifications</md-icon></md-icon-button>
     <md-icon-button id="notesBtn" touch-target="none" title="Notes · a persistent scratchpad saved to disk" aria-label="Notes"><md-icon>edit_note</md-icon></md-icon-button>
     <md-icon-button id="settingsBtn" touch-target="none" title="Settings · active MCP servers + tools" aria-label="Settings"><md-icon>settings</md-icon></md-icon-button>
   </div>
@@ -98,6 +97,11 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
 <aside id="capPanel" hidden>
   <div class="capHead">settings <button id="capClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
   <div class="capBody">
+    <h4>notifications <span class="count" id="nNotifs"></span></h4>
+    <div id="notifSection">
+      <div class="notes-hint">Every banner MIST has sent, newest first. Click one to reopen what it pointed at.</div>
+      <div id="notifList"></div>
+    </div>
     <h4>watchers <span class="count" id="nWatchers"></span></h4>
     <div id="watchersSection">
       <div id="watchersBody"></div>
@@ -139,12 +143,6 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
       </div>
     </div>
   </div>
-</aside>
-
-<aside id="notifPanel" hidden>
-  <div class="capHead">notifications <span class="count" id="nNotifs"></span><button id="notifClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
-  <div class="notes-hint">Every banner MIST has sent, newest first. Click one to reopen what it pointed at.</div>
-  <div class="capBody" id="notifList"></div>
 </aside>
 
 <aside id="notesPanel" hidden>

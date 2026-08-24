@@ -626,14 +626,14 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   --md-icon-button-icon-color: var(--md-sys-color-primary);
   --md-icon-button-hover-icon-color: var(--md-sys-color-primary);
 }
-#notesPanel, #notifPanel {
+#notesPanel {
   position: fixed; top: var(--topbar-h, 0px); right: 0; width: 340px; height: calc(100% - var(--topbar-h, 0px));
   background: var(--md-sys-color-surface-container-low); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; z-index: 20;
 }
-#notesPanel[hidden], #notifPanel[hidden] { display: none; }   /* id selector beats UA [hidden] */
-#notifList { flex: 1 1 auto; min-height: 0; overflow-y: auto;
-  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+#notesPanel[hidden] { display: none; }   /* id selector beats UA [hidden] */
+#notifList { max-height: 320px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .notif-row {
   border: 1px solid var(--line-soft); padding: 7px 9px; cursor: pointer;
   background: var(--md-sys-color-surface-container-lowest);
@@ -646,7 +646,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .notif-body { color: var(--text); font-size: 11px; line-height: 1.45; margin-top: 2px;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .notif-sub { color: var(--dim); font-size: 10px; margin-top: 2px; }
-#notifBtn.has-new {
+#settingsBtn.has-new {
   --md-icon-button-icon-color: var(--md-sys-color-primary);
   --md-icon-button-hover-icon-color: var(--md-sys-color-primary);
 }
@@ -759,7 +759,6 @@ html[data-theme="solarpunk"] #topbar,
 html[data-theme="solarpunk"] #tabrail,
 html[data-theme="solarpunk"] #capPanel,
 html[data-theme="solarpunk"] #notesPanel,
-html[data-theme="solarpunk"] #notifPanel,
 html[data-theme="solarpunk"] #composer,
 html[data-theme="solarpunk"] #slashMenu,
 html[data-theme="solarpunk"] #modelCard,

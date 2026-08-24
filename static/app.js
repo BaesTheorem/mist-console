@@ -2266,7 +2266,6 @@ async function sendNote(note) {
 function openNotes() {
   $("#capPanel").hidden = true;
   closeAnchoredCards();
-  $("#notifPanel").hidden = true;
   $("#notesPanel").hidden = false;
   loadNotes();                               // re-read from disk every time it opens
   $("#notesInput").focus();
@@ -2289,10 +2288,12 @@ $("#notesInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); }
 });
 
-/* ---------- notification history (bell) ----------
+/* ---------- notification history (settings section) ----------
    mist-notify appends every banner it sends to a history JSONL; /notifications
-   serves the tail. The bell shows the feed and re-fires a row's click target:
-   console links switch chats right here, everything else goes to the backend. */
+   serves the tail. The feed lives in the settings panel (the dedicated topbar
+   bell was crowding the actions row); the unread tint rides the gear instead.
+   A row re-fires its click target: console links switch chats right here,
+   everything else goes to the backend. */
 let notifs = [];
 function fmtAgo(ts) {
   const d = Math.max(0, Date.now() / 1000 - ts);
@@ -2304,7 +2305,7 @@ function fmtAgo(ts) {
 function notifDot() {
   const seen = parseFloat(localStorage.getItem("notifSeen") || "0");
   const newest = notifs.length ? notifs[0].ts || 0 : 0;
-  $("#notifBtn").classList.toggle("has-new", newest > seen);
+  $("#settingsBtn").classList.toggle("has-new", newest > seen);
 }
 async function loadNotifs() {
   try { notifs = await (await fetch("/notifications?limit=50")).json(); }
@@ -2346,21 +2347,12 @@ async function openNotifTarget(n) {
     });
   } catch (_) {}
 }
-async function openNotifs() {
-  $("#capPanel").hidden = true;
-  closeAnchoredCards();
-  $("#notesPanel").hidden = true;
-  $("#notifPanel").hidden = false;
+async function refreshNotifsSection() {
   await loadNotifs();
   renderNotifs();
   if (notifs.length) localStorage.setItem("notifSeen", String(notifs[0].ts || 0));
   notifDot();
 }
-$("#notifBtn").addEventListener("click", () => {
-  const p = $("#notifPanel");
-  if (p.hidden) openNotifs(); else p.hidden = true;
-});
-$("#notifClose").addEventListener("click", () => { $("#notifPanel").hidden = true; });
 loadNotifs();                                  // paint the unread dot on boot
 setInterval(loadNotifs, 120000);               // keep it honest while open all day
 
@@ -2831,7 +2823,7 @@ $("#settingsBtn").addEventListener("click", () => {
   loadRoutines();                          // routines now live as a settings section
   loadWatchers();                          // watchers section (launchd watch jobs)
   $("#notesPanel").hidden = true;
-  $("#notifPanel").hidden = true;
+  refreshNotifsSection();                  // notifications live as a settings section
   closeAnchoredCards();
   $("#capPanel").hidden = false;
 });
