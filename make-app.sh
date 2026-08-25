@@ -54,7 +54,15 @@ echo "  installing deps (flask pywebview setproctitle) into the bundle ..."
 # so running it through the symlink works unchanged. (exec-in-place alone is NOT
 # enough — proven 2026-06-28: the OLD launcher exec'd Resources/.../python3.13 and
 # lsappinfo still reported bundlepath=python3.13 → two Dock icons.)
-ln -sf ../Resources/python/bin/python3.13 "$APP/Contents/MacOS/python-bin"
+# Real copy of the interpreter named after the app: the kernel names the
+# process after the RESOLVED executable file (setproctitle only rewrites argv,
+# which ps shows but Activity Monitor / lsof do not), so launching through a
+# binary literally called "MIST Console" is the only way the process lists as
+# the app instead of "python3.13". A copy inside python/bin keeps
+# @executable_path/../lib dylib+stdlib resolution intact; verified 2026-08-25
+# that standalone CPython boots fine under any binary name.
+cp "$APP/Contents/Resources/python/bin/python3.13" "$APP/Contents/Resources/python/bin/MIST Console"
+ln -sf "../Resources/python/bin/MIST Console" "$APP/Contents/MacOS/python-bin"
 
 cat > "$APP/Contents/MacOS/launch" <<EOF
 #!/bin/zsh
