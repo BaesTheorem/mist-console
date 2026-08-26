@@ -2505,15 +2505,29 @@ window.addEventListener("focus", pollUsage);   // refresh the instant MIST is re
 pollUsage();
 
 // When a clickable notification (briefing/triage with a "console:<sid>" link)
-// raises the app, the backend has stashed which chat to surface. Claim it on
-// focus and switch there. One-shot: the backend clears it as we read.
+// raises the app, the backend has stashed which chat to surface. Claim it and
+// switch there. One-shot: the backend clears it as we read. Polled on the same
+// 1.5s cadence as /pending-open, NOT only on window "focus": WKWebView doesn't
+// reliably fire that event when the app is activated (and never fires it when
+// the Console was already frontmost), which left clicks landing on the wrong
+// chat. The focus listener stays as a fast path.
 async function claimPendingFocus() {
   try {
     const j = await (await fetch("/focus/peek")).json();
-    if (j && j.sid && sessions.has(j.sid) && j.sid !== activeId) switchTo(j.sid);
+    if (!j || !j.sid || j.sid === activeId) return;
+    if (!sessions.has(j.sid)) {
+      // A chat this front-end hasn't learned about yet (e.g. created after our
+      // last /sessions load): fetch it the same way the quick-entry poll does.
+      const list = await (await fetch("/sessions")).json();
+      const info = list.find((x) => x.id === j.sid);
+      if (!info) return;
+      sessions.set(j.sid, new Session(j.sid, info.title, info));
+    }
+    switchTo(j.sid);
   } catch (_) {}
 }
 window.addEventListener("focus", claimPendingFocus);
+setInterval(claimPendingFocus, 1500);
 claimPendingFocus();
 
 /* ---------- active-chat beacon ---------- */
