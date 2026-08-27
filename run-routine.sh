@@ -30,8 +30,68 @@ CLAUDE="$(command -v claude)"
 PROMPT="$(awk 'BEGIN{fm=0} /^---[[:space:]]*$/{fm++; next} fm>=2{print}' "$SK")"
 [ -n "$PROMPT" ] || PROMPT="$(cat "$SK")"
 
+# Connector preflight, prepended to every routine.
+#
+# The network gate below runs BEFORE claude launches, so it can't cover DNS
+# dying in the seconds between the gate passing and the remote MCP connectors
+# attaching. A session that loses that race never retries the attach, runs to
+# completion, and exits 0 having silently skipped calendar and email. Nothing
+# downstream can tell that apart from a real success.
+#
+# So let the session check its own tools and say so. The sentinel turns a silent
+# degraded run into the transient case, which the retry machinery already knows
+# how to re-fire.
+PREFLIGHT='PREFLIGHT (do this first, before any other work):
+
+If the routine below needs Google Calendar or Gmail, confirm those tools are
+actually attached to THIS session. Search by keyword, not by exact name:
+ToolSearch "+calendar" and ToolSearch "+gmail". Keyword search finds them under
+whatever prefix they currently carry; an exact-name "select:" miss only proves
+the name is stale, not that the connector is down.
+
+If a connector this routine needs is genuinely absent, do NOT continue and do
+NOT write a partial briefing, note, or message. Print exactly this token and
+nothing else, then stop:
+
+ROUTINE_ABORT_CONNECTORS_MISSING
+
+A run that quietly skips the calendar or the email scan is worse than no run:
+it looks finished, so nobody re-runs it. Aborting lets a later fire retry.
+
+--- ROUTINE BEGINS ---
+
+'
+PROMPT="${PREFLIGHT}${PROMPT}"
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] running routine: $DIR"
 cd "$HARNESS"
+
+# Gate on a usable network before launching claude. Eight standalone harness
+# scripts already do this; run-routine.sh is the chokepoint EVERY scheduled
+# routine passes through, and it was the one path with no gate.
+#
+# This matters more here than for a plain HTTP script, because of how the
+# claude.ai connectors (Google Calendar, Gmail, Drive, MyChart) attach. They are
+# remote HTTP MCP servers resolved at session start. If DNS is still dead in the
+# seconds after a wake, they fail to attach and the session NEVER retries them
+# for its whole life. The routine then runs to completion and exits 0 while
+# silently missing calendar and email, so it looks like a success. That is the
+# 2026-08-26 failure: both the morning briefing and the evening wind-down ran
+# without a verified schedule and without an email scan, on a day when
+# `claude mcp list` reported every connector healthy.
+#
+# So `claude mcp list` is NOT a valid readiness probe: it runs in its own
+# process and says "Connected" for connectors the routine's session never got.
+# Probe DNS + TCP + TLS to the actual endpoint hosts instead.
+for host in api.anthropic.com calendarmcp.googleapis.com; do
+	if ! "$HARNESS/scripts/wait-for-network.sh" "$host" 300; then
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — $host unreachable after 300s; skipping rather than running a routine with dead connectors."
+		# Same contract as a transient API failure: tell the on-time wrapper to
+		# leave today's marker unstamped so a later fire in the window retries.
+		[ "${ROUTINE_SIGNAL_TRANSIENT:-0}" = "1" ] && exit 75
+		exit 0
+	fi
+done
 
 # Don't `exec` claude directly: its exit code becomes the launchd job's sticky
 # LAST_EXIT, and the session-start hook flags ANY nonzero as a hard FAIL until
@@ -64,6 +124,21 @@ while :; do
 	RC=$?
 	set -e
 	printf '%s\n' "$OUT"
+
+	# Checked BEFORE the rc=0 path on purpose: a session that lost its connectors
+	# still exits 0. Treat it exactly like a transient network failure, because
+	# that is what it is -- the run is incomplete and a later fire should retry.
+	if printf '%s' "$OUT" | grep -q 'ROUTINE_ABORT_CONNECTORS_MISSING'; then
+		if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+			backoff=$((attempt * 30))
+			echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — aborted: required connectors missing from the session, attempt $attempt/$MAX_ATTEMPTS; retrying in ${backoff}s."
+			sleep "$backoff"
+			continue
+		fi
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — required connectors still missing after $MAX_ATTEMPTS attempts; incomplete rather than failed."
+		[ "${ROUTINE_SIGNAL_TRANSIENT:-0}" = "1" ] && exit 75
+		exit 0
+	fi
 
 	if [ "$RC" -eq 0 ]; then
 		exit 0
