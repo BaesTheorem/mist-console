@@ -127,6 +127,17 @@ def _fit_main_window():
         # on hover at the top; we just leave the window alone while it's fullscreen.
         if fs:
             return True
+        # NEVER clamp mid-drag either: macOS window tiling ("snap" to a half) needs
+        # the window held at the screen edge, and setFrame_ during the drag yanks it
+        # back inside, killing the gesture. The guard's real targets (post-maximize,
+        # window-manager nudges) aren't live drags, so defer until the button is up.
+        try:
+            from AppKit import NSEvent
+            if NSEvent.pressedMouseButtons() & 1:
+                _reclamp_after_drag()
+                return True
+        except Exception:
+            pass
         scr = win.screen() or NSScreen.mainScreen()
         vf = scr.visibleFrame()           # bottom-left origin; excludes menu bar + Dock
         f = win.frame()
@@ -154,6 +165,34 @@ def _fit_main_window():
 
 _win_guard_token = None   # retained NSNotificationCenter observers (else they're freed)
 _fs_busy = False          # True during a fullscreen enter/exit animation
+_drag_timer = None        # NSTimer polling for the end of a live window drag
+
+
+def _reclamp_after_drag():
+    """A move/resize arrived mid-drag and was skipped; poll until the mouse button
+    is released, then clamp once. There is no NSWindowDidEndMoveNotification, so a
+    short timer is the only end-of-drag signal. Idempotent while a drag is in
+    flight. Main thread only (the notification blocks run there)."""
+    global _drag_timer
+    if _drag_timer is not None:
+        return
+    try:
+        from AppKit import NSEvent, NSTimer
+
+        def _tick(timer):
+            global _drag_timer
+            if NSEvent.pressedMouseButtons() & 1:
+                return   # still dragging
+            try:
+                timer.invalidate()
+            finally:
+                _drag_timer = None
+            _fit_main_window()
+
+        _drag_timer = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+            0.25, True, _tick)
+    except Exception as e:
+        print("drag reclamp skipped:", e, flush=True)
 
 
 def _install_window_guard():
