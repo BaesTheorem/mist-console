@@ -262,12 +262,18 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab:hover .tclose { opacity: 1; }
 .tab .tclose:hover { color: var(--err); }
 
-/* section headers in the rail (only shown when something is pinned) */
+/* section headers in the rail — pinned first, then date buckets (today, yesterday, …) */
 .tabsection {
   padding: 8px 9px 5px; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
   color: var(--dim); border-bottom: 1px solid var(--line-soft); user-select: none;
 }
 .tabsection.pinned { color: var(--teal); }
+.tabsection.collapsible { cursor: pointer; display: flex; align-items: center; gap: 4px; }
+.tabsection.collapsible:not(.pinned):hover { color: var(--text); }
+.tabsection.collapsible:focus-visible { outline: 1px solid var(--teal); outline-offset: -1px; }
+.tabsection .sec-chev { font-size: 13px; }
+.tabsection.collapsed .sec-chev { transform: rotate(-90deg); }
+.tabsection .sec-count { margin-left: auto; letter-spacing: 0; }
 
 /* pinned conversations get a tinted band + a teal edge so they read as a group */
 .tab.pinned { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container-low)); border-left-color: var(--teal); }

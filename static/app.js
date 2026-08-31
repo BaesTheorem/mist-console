@@ -1893,30 +1893,68 @@ function sortedSessions() {
 }
 let renaming = false;   // true while a tab rename is in progress — don't rebuild the rail
 let _tabsSig = "";      // last-rendered rail signature — skip identical rebuilds
+// Date buckets for the unpinned rail. The label doubles as the collapse key, so
+// "yesterday" stays collapsed as chats age into and out of it.
+function railBucket(ts) {
+  const d = new Date(ts), now = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day(now) - day(d)) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return "this week";
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) return "this month";
+  return d.toLocaleString(undefined, { month: "long", year: "numeric" }).toLowerCase();
+}
+const COLLAPSED_LS = "mist.railCollapsed";
+let collapsedSections = new Set(JSON.parse(localStorage.getItem(COLLAPSED_LS) || "[]"));
+function toggleSection(label) {
+  if (!collapsedSections.delete(label)) collapsedSections.add(label);
+  localStorage.setItem(COLLAPSED_LS, JSON.stringify([...collapsedSections]));
+  _tabsSig = "";
+  renderTabs();
+}
 function renderTabs() {
   if (renaming || _draggingPins) return;   // the 1.5s refresh must not clobber an edit box or an in-progress drag
   const list = sortedSessions();
   // Rebuilding tears down every node (hover states flicker, clicks that straddle
   // a rebuild die, and hundreds of tabs churn every 1.5s). Only rebuild when
-  // something the rail shows actually changed.
+  // something the rail shows actually changed. The bucket is in the signature so
+  // the day rollover (and a collapse toggle) forces a rebuild.
   const sig = list.map((s) =>
-    s.id + "|" + s.title + "|" + (s.pinned ? 1 : 0) + "|" + (s.id === activeId ? 1 : 0)
-    + "|" + (s.bgActiveCount() > 0 ? "bg" : s.statusState)).join("\n");
+    s.id + "|" + s.title + "|" + (s.pinned ? "pinned" : railBucket(s.lastActivity)) + "|" + (s.id === activeId ? 1 : 0)
+    + "|" + (s.bgActiveCount() > 0 ? "bg" : s.statusState)).join("\n")
+    + "\n#" + [...collapsedSections].join(",");
   if (sig === _tabsSig) return;
   _tabsSig = sig;
   tabsEl.innerHTML = "";
-  const anyPinned = list.some((s) => s.pinned);
-  let section = null;   // which header we've emitted so far: "pinned" | "recent"
+  const counts = {};   // chats per section, shown on collapsed headers
   list.forEach((s) => {
-    if (anyPinned) {
-      const want = s.pinned ? "pinned" : "recent";
-      if (want !== section) {
-        const h = el("div", "tabsection" + (s.pinned ? " pinned" : ""),
-          s.pinned ? (PIN_ICON + " pinned") : "recent");
-        tabsEl.appendChild(h);
-        section = want;
-      }
+    const k = s.pinned ? "pinned" : railBucket(s.lastActivity);
+    counts[k] = (counts[k] || 0) + 1;
+  });
+  let section = null;   // which header we've emitted so far
+  list.forEach((s) => {
+    const want = s.pinned ? "pinned" : railBucket(s.lastActivity);
+    if (want !== section) {
+      const closed = collapsedSections.has(want);
+      const h = el("div", "tabsection collapsible" + (s.pinned ? " pinned" : "") + (closed ? " collapsed" : ""),
+        '<span class="msi sec-chev">expand_more</span>'
+        + (s.pinned ? (PIN_ICON + " pinned") : esc(want))
+        + (closed ? '<span class="sec-count">' + counts[want] + "</span>" : ""));
+      h.tabIndex = 0;
+      h.setAttribute("role", "button");
+      h.setAttribute("aria-expanded", closed ? "false" : "true");
+      h.setAttribute("aria-label", (closed ? "Expand " : "Collapse ") + want + " section");
+      h.addEventListener("click", () => toggleSection(want));
+      h.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleSection(want); }
+      });
+      tabsEl.appendChild(h);
+      section = want;
     }
+    // A collapsed section hides its chats, except the one you're looking at —
+    // the active tab stays visible so the rail never loses your place.
+    if (collapsedSections.has(want) && s.id !== activeId) return;
     const t = el("div", "tab" + (s.id === activeId ? " active" : "") + (s.pinned ? " pinned" : ""));
     t.dataset.sid = s.id;
     // keyboard access: tabs are focusable and Enter/Space switches to them
