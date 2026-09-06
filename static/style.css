@@ -1511,6 +1511,42 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 .perm-btn.deny:hover { border-color: var(--err); }
 .perm-btn:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
 
+/* ---------- question cards (AskUserQuestion) ---------- */
+.perm-card.question { border-color: var(--gold); }
+.perm-card.question .perm-head { color: var(--gold); }
+.perm-body.q-body { padding: 2px 11px 10px; max-height: 60vh; }
+.q-block { padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.q-block:last-child { border-bottom: 0; }
+.q-title { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+.q-chip {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--gold); border: 1px solid var(--line); padding: 1px 6px; white-space: nowrap;
+}
+.q-text { font-size: 13px; color: var(--text); }
+.q-opts { display: flex; flex-direction: column; gap: 4px; }
+.q-opt {
+  display: flex; gap: 8px; align-items: flex-start; text-align: left; font: inherit; font-size: 13px;
+  background: var(--md-sys-color-surface-container-lowest); color: var(--text);
+  border: 1px solid var(--line); padding: 6px 10px; cursor: pointer;
+}
+.q-opt:hover { border-color: var(--teal); }
+.q-opt.on { border-color: var(--gold); background: var(--hover); }
+.q-opt:disabled { cursor: default; opacity: 0.8; }
+.q-opt:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
+.q-mark { font-size: 16px; color: var(--dim); flex: none; }
+.q-opt.on .q-mark { color: var(--gold); }
+.q-lab { display: flex; flex-direction: column; gap: 1px; }
+.q-desc { font-size: 11px; color: var(--md-sys-color-on-surface-variant); }
+.q-other, .q-num, .q-textarea {
+  margin-top: 6px; width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+  color: var(--text); background: var(--md-sys-color-surface-container-lowest);
+  border: 1px solid var(--line); padding: 6px 10px; border-radius: 0; resize: vertical;
+}
+.q-num { width: 9em; }
+.q-numwrap { display: flex; align-items: center; gap: 6px; }
+.q-unit { font-size: 12px; color: var(--dim); }
+.q-other:focus, .q-num:focus, .q-textarea:focus { outline: none; border-color: var(--teal); }
+
 /* the send button doubles as an interrupt while a turn runs (md-filled-icon-button:
    recolor its container via component tokens, host color rules can't reach it) */
 #sendBtn[data-mode="stop"] {

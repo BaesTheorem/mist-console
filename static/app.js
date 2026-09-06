@@ -755,6 +755,152 @@ class Session {
       try { allow.focus(); } catch (_) {}
     }, 0);
   }
+  /* AskUserQuestion card: one block per question, "Send answers" / "Dismiss".
+     Shares permCards with the permission cards so interrupt / replay treat
+     both the same way. */
+  renderQuestion(o) {
+    if (!this.permCards) this.permCards = new Map();
+    if (this.permCards.has(o.request_id)) return;   // dedupe on replay
+    const qs = Array.isArray(o.questions) ? o.questions : [];
+    const card = el("div", "perm-card question");
+    const head = el("div", "perm-head");
+    head.innerHTML = '<span class="perm-icon msi">help</span> MIST has '
+      + (qs.length === 1 ? "a question" : qs.length + " questions");
+    card.appendChild(head);
+    const body = el("div", "perm-body q-body");
+    const blocks = qs.map((q, i) => this._questionBlock(q, i));
+    blocks.forEach((b) => body.appendChild(b.node));
+    card.appendChild(body);
+    const row = el("div", "perm-actions");
+    const send = el("button", "perm-btn allow", "Send answers");
+    const dismiss = el("button", "perm-btn deny", "Dismiss");
+    const finish = (verdict, payload) => {
+      if (card._answered) return;
+      card._answered = true;
+      card.classList.add("answered");
+      row.remove();
+      blocks.forEach((b) => b.freeze());
+      head.appendChild(el("span", "perm-verdict", verdict));
+      if (this.permCards) this.permCards.delete(o.request_id);
+      fetch("/sessions/" + this.id + "/permission-response", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ request_id: o.request_id }, payload)),
+      }).catch(() => {});
+    };
+    const submit = () => {
+      const answers = {};
+      blocks.forEach((b) => { const a = b.answer(); if (a) answers[b.question] = a; });
+      finish(Object.keys(answers).length ? "answered" : "sent blank",
+             { decision: "allow", answers });
+    };
+    send.addEventListener("click", submit);
+    dismiss.addEventListener("click", () => finish("dismissed", { decision: "deny" }));
+    // Enter in a one-line field submits; textareas keep Enter for newlines.
+    body.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.target && e.target.tagName === "INPUT") {
+        e.preventDefault();
+        submit();
+      }
+    });
+    row.appendChild(send);
+    row.appendChild(dismiss);
+    card.appendChild(row);
+    (this.current && this.current.body ? this.current.body : this.logEl).appendChild(card);
+    this.permCards.set(o.request_id, card);
+    this.scroll();
+  }
+  /* One question inside a question card. Choice questions get option buttons
+     (radio or checkbox semantics per multiSelect) plus an "Other" box so the
+     user can type their own answer; kind:"text" gets a textarea; kind:"number"
+     a number field honouring min/max/step/defaultValue/unit. answer() returns
+     the chosen labels joined with ", ", or the typed text (typed text wins),
+     or "" when unanswered. */
+  _questionBlock(q, idx) {
+    const node = el("div", "q-block");
+    const title = el("div", "q-title");
+    if (q.header) title.appendChild(el("span", "q-chip", esc(q.header)));
+    title.appendChild(el("span", "q-text", esc(q.question || "")));
+    node.appendChild(title);
+    const hasOpts = Array.isArray(q.options) && q.options.length > 0;
+    const kind = q.kind || (hasOpts ? "choice" : "text");
+    const multi = !!q.multiSelect;
+    const chosen = new Set();
+    const opts = [];
+    let field = null;
+    const paint = () => {
+      opts.forEach((o) => {
+        const on = chosen.has(o.label);
+        o.btn.classList.toggle("on", on);
+        o.btn.querySelector(".q-mark").textContent = multi
+          ? (on ? "check_box" : "check_box_outline_blank")
+          : (on ? "radio_button_checked" : "radio_button_unchecked");
+      });
+    };
+    if (kind === "choice" && hasOpts) {
+      const list = el("div", "q-opts");
+      q.options.forEach((opt) => {
+        const label = typeof opt === "string" ? opt : String(opt.label || "");
+        const desc = typeof opt === "string" ? "" : String(opt.description || "");
+        const b = el("button", "q-opt");
+        b.type = "button";
+        b.innerHTML = '<span class="q-mark msi">'
+          + (multi ? "check_box_outline_blank" : "radio_button_unchecked") + '</span>'
+          + '<span class="q-lab">' + esc(label)
+          + (desc ? '<span class="q-desc">' + esc(desc) + '</span>' : "") + '</span>';
+        b.addEventListener("click", () => {
+          if (node._frozen) return;
+          if (multi) { if (chosen.has(label)) chosen.delete(label); else chosen.add(label); }
+          else { chosen.clear(); chosen.add(label); }
+          if (field) field.value = "";   // a click supersedes typed text
+          paint();
+        });
+        opts.push({ label, btn: b });
+        list.appendChild(b);
+      });
+      node.appendChild(list);
+      field = el("input", "q-other");
+      field.type = "text";
+      field.placeholder = "Other…";
+      field.addEventListener("input", () => {
+        if (!field.value) return;
+        chosen.clear();
+        paint();
+      });
+      node.appendChild(field);
+    } else if (kind === "number") {
+      field = el("input", "q-num");
+      field.type = "number";
+      if (q.min != null) field.min = q.min;
+      if (q.max != null) field.max = q.max;
+      if (q.step != null) field.step = q.step;
+      if (q.defaultValue != null) field.value = q.defaultValue;
+      const range = [q.min, q.max].filter((v) => v != null);
+      if (range.length) field.placeholder = range.join(" to ");
+      const wrap = el("div", "q-numwrap");
+      wrap.appendChild(field);
+      if (q.unit) wrap.appendChild(el("span", "q-unit", esc(String(q.unit))));
+      node.appendChild(wrap);
+    } else {
+      field = el("textarea", "q-textarea");
+      field.rows = 2;
+      field.placeholder = "Type your answer…";
+      node.appendChild(field);
+    }
+    return {
+      node,
+      question: q.question || ("Question " + (idx + 1)),
+      answer() {
+        const typed = field ? String(field.value || "").trim() : "";
+        if (typed) return typed;
+        return chosen.size ? Array.from(chosen).join(", ") : "";
+      },
+      freeze() {
+        node._frozen = true;
+        if (field) field.disabled = true;
+        opts.forEach((o) => { o.btn.disabled = true; });
+      },
+    };
+  }
   clearPermCards() {
     if (!this.permCards) return;
     this.permCards.forEach((card) => {
@@ -1282,6 +1428,11 @@ class Session {
         // The CLI is asking to run a tool in a non-bypass mode: render an
         // Allow / Allow-for-session / Deny card the user answers.
         this.renderPermission(o);
+        break;
+      case "question_request":
+        // AskUserQuestion in a non-bypass mode: a form card whose answers go
+        // back to the CLI inside the same permission-response channel.
+        this.renderQuestion(o);
         break;
       case "progress":
         // A download/upload/install reporting itself. Same id = same element.

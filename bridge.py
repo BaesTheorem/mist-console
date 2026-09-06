@@ -527,11 +527,16 @@ class ClaudeSession:
             # Allow/Deny cards in the UI instead of silently auto-running (as
             # bypassPermissions does — which stays untouched, no prompt tool).
             cmd += ["--permission-prompt-tool", "stdio"]
-        # AskUserQuestion is an interactive picker the CLI resolves itself; in this
-        # headless stream-json process there's no TTY, so it auto-dismisses with no
-        # answer. Disable it so the model asks in plain text, which the user can
-        # answer by typing a normal reply.
-        cmd += ["--disallowed-tools", "AskUserQuestion"]
+        # AskUserQuestion is an interactive picker. In the non-bypass modes it
+        # arrives over the same control protocol as any other ask (a can_use_tool
+        # with requires_user_interaction) and the answers ride back inside
+        # updatedInput, so the Console renders it as a question card (see
+        # _handle_control_request / respond_permission; confirmed live against
+        # claude 2.1.261). With --dangerously-skip-permissions there is no prompt
+        # tool and no TTY, so the picker would auto-dismiss with no answer:
+        # disable it there so the model asks in plain text instead.
+        if self.permission_mode == "bypassPermissions" or not self.permission_mode:
+            cmd += ["--disallowed-tools", "AskUserQuestion"]
         # Full MCP parity with the interactive CLI: load every scope (user +
         # project + local) — the local stdio servers (things3/fitbit/withings),
         # linkedin (uvx @latest), and the claude.ai OAuth connectors
@@ -812,10 +817,26 @@ class ClaudeSession:
         sub = req.get("subtype")
         req_id = obj.get("request_id")
         if sub == "can_use_tool":
+            tool_name = req.get("tool_name")
+            tool_input = req.get("input") or {}
             self._pending_perms[req_id] = {
-                "input": req.get("input") or {},
+                "tool_name": tool_name,
+                "input": tool_input,
                 "suggestions": req.get("permission_suggestions") or [],
             }
+            if tool_name == "AskUserQuestion":
+                # Not a yes/no: the model wants answers. Own event type so the
+                # UI renders a form instead of Allow/Deny, and the banner
+                # carries the first question with its options as buttons.
+                questions = tool_input.get("questions") or []
+                self._broadcast({
+                    "type": "question_request",
+                    "request_id": req_id,
+                    "tool_use_id": req.get("tool_use_id"),
+                    "questions": questions,
+                })
+                self._notify_question(req_id, questions)
+                return True
             self._broadcast({
                 "type": "permission_request",
                 "request_id": req_id,
@@ -849,6 +870,53 @@ class ClaudeSession:
                 return f"{tool_name or 'A tool'}: {val}"
         return f"{tool_name or 'A tool'} wants to run."
 
+    @staticmethod
+    def _curl_button(label, url, payload):
+        """A mist-notify --action that POSTs `payload` to `url` when tapped.
+        Single-quoted for sh -c, so any embedded quote is broken out; '=' is
+        the label/target separator, so it can't appear in the label."""
+        body = json.dumps(payload).replace("'", "'\\''")
+        label = str(label).replace("=", " ")
+        return (f"{label}=cmd:/usr/bin/curl -sS -X POST {url} "
+                f"-H 'Content-Type: application/json' -d '{body}'")
+
+    def _notify_question(self, req_id, questions):
+        """Banner for a pending AskUserQuestion, same reasoning as
+        _notify_permission: the card only exists inside the window, so away
+        from the machine the turn would sit parked on it. A single plain choice
+        question with two or three options gets those options as buttons, each
+        POSTing the answer straight back. Anything richer (several questions,
+        multi-select, free text, a number) gets the plain banner, and tapping
+        it raises the Console where the full form is."""
+        if not req_id or not questions:
+            return
+        try:
+            url = f"{CONSOLE_URL}/sessions/{self.id}/permission-response"
+            first = questions[0] if isinstance(questions[0], dict) else {}
+            body = " ".join(str(first.get("question") or "").split())
+            if len(body) > 140:
+                body = body[:139] + "…"
+            args = [NOTIFY_BIN, body or "MIST has a question.",
+                    "MIST has a question", "Purr", f"console:{self.id}",
+                    "--subtitle", str(first.get("header") or "Question"),
+                    "--urgency", "timeSensitive",
+                    "--group", f"perm-{self.id}",
+                    "--id", f"perm-{req_id}",
+                    "--no-voice"]
+            opts = first.get("options") or []
+            simple = (len(questions) == 1 and not first.get("multiSelect")
+                      and not first.get("kind") and 2 <= len(opts) <= 3
+                      and all(isinstance(o, dict) and o.get("label") for o in opts))
+            if simple:
+                for o in opts:
+                    args += ["--action", self._curl_button(
+                        str(o["label"])[:24], url,
+                        {"request_id": req_id, "decision": "allow",
+                         "answers": {first.get("question"): o["label"]}})]
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass   # a missing/broken notifier must never swallow the question card
+
     def _notify_permission(self, req_id, tool_name, tool_input):
         """Put a blocking permission ask on a banner with the decision buttons
         wired straight back to /permission-response.
@@ -867,10 +935,7 @@ class ClaudeSession:
             url = f"{CONSOLE_URL}/sessions/{self.id}/permission-response"
 
             def button(label, payload):
-                # Single-quoted for sh -c, so any embedded quote must be broken out.
-                body = json.dumps(payload).replace("'", "'\\''")
-                return (f"{label}=cmd:/usr/bin/curl -sS -X POST {url} "
-                        f"-H 'Content-Type: application/json' -d '{body}'")
+                return self._curl_button(label, url, payload)
 
             subprocess.Popen(
                 [NOTIFY_BIN, self._perm_summary(tool_name, tool_input),
@@ -1144,20 +1209,41 @@ class ClaudeSession:
             return False
 
     def respond_permission(self, request_id, decision, remember=False,
-                           updated_input=None, message=None):
+                           updated_input=None, message=None, answers=None,
+                           response=None):
         """Answer a can_use_tool permission request the UI surfaced. `decision`
         is "allow" or "deny". `remember=True` returns the CLI's own suggestions
         as updatedPermissions (the "don't ask again this session" affordance).
-        Sends the control_response the CLI is blocked waiting on."""
+        Sends the control_response the CLI is blocked waiting on.
+
+        For an AskUserQuestion request, `answers` maps each question's text to
+        the chosen option label (multi-select joined with ", ", or whatever the
+        user typed for "Other"), and `response` is an optional freeform reply
+        in place of per-question answers. Both ride back inside updatedInput
+        next to the original questions, which is how the CLI expects them.
+        Denying a question does not interrupt the turn: the model is told the
+        card was dismissed and carries on."""
         pend = self._pending_perms.pop(request_id, None)
         if pend is None:
             return False   # stale / already answered
+        is_question = pend.get("tool_name") == "AskUserQuestion"
         if decision == "allow":
-            result = {"behavior": "allow",
-                      "updatedInput": updated_input if updated_input is not None
-                      else pend.get("input", {})}
+            new_input = (updated_input if updated_input is not None
+                         else pend.get("input", {}))
+            if is_question:
+                new_input = dict(new_input)
+                new_input["answers"] = answers if isinstance(answers, dict) else {}
+                if response:
+                    new_input["response"] = str(response)
+            result = {"behavior": "allow", "updatedInput": new_input}
             if remember and pend.get("suggestions"):
                 result["updatedPermissions"] = pend["suggestions"]
+        elif is_question:
+            result = {"behavior": "deny",
+                      "message": message or ("The user dismissed the question card "
+                                             "without answering. Use your best "
+                                             "judgment, or ask in plain text."),
+                      "interrupt": False}
         else:
             result = {"behavior": "deny",
                       "message": message or "Denied by the user.",

@@ -963,18 +963,23 @@ def set_permission(sid):
 
 @app.route("/sessions/<sid>/permission-response", methods=["POST"])
 def permission_response(sid):
-    """Answer a can_use_tool permission card (Allow / Allow-for-session / Deny).
-    Body: {request_id, decision:"allow"|"deny", remember?:bool, message?:str}.
+    """Answer a can_use_tool permission card (Allow / Allow-for-session / Deny)
+    or an AskUserQuestion card (answers). Body: {request_id,
+    decision:"allow"|"deny", remember?:bool, message?:str,
+    answers?:{question text: label or typed text}, response?:str}.
     Relays the control_response the CLI is blocked waiting on."""
     s = _sessions.get(sid)
     if not s:
         return jsonify({"ok": False, "error": "no such session"}), 404
     d = request.get_json(silent=True) or {}
+    answers = d.get("answers")
     ok = s.respond_permission(
         d.get("request_id"),
         d.get("decision", "deny"),
         remember=bool(d.get("remember")),
-        message=d.get("message"))
+        message=d.get("message"),
+        answers=answers if isinstance(answers, dict) else None,
+        response=d.get("response"))
     return jsonify({"ok": ok})
 
 
