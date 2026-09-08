@@ -4,10 +4,11 @@
    below. The active theme lives in <html data-theme> (set pre-paint in index.html
    and persisted to localStorage as "theme").
    Colors ride on the Material Design 3 token layer (md-tokens.css, loaded
-   first): the legacy vars below are now aliases onto --md-sys-color-* roles, so
-   both themes share one system — surfaces step up the surface-container ladder,
-   hairlines are outline-variant, accents are primary. The flat/sharp skin is
-   the shape scale (all 0 in terminal), not a departure from MD3. */
+   first): the legacy vars below are aliases onto --md-sys-color-* roles, so a
+   theme gets the whole system by restating the scheme and nothing else. Surfaces
+   step up the surface-container ladder, hairlines are outline-variant, accents
+   are primary. The flat/sharp skin is the shape scale (all 0), not a departure
+   from MD3. */
 :root {
   --bg:        var(--md-sys-color-surface);            /* deep Cloud night */
   --bg-2:      #11233440;                              /* translucent panel */
@@ -21,8 +22,8 @@
   --warn:      var(--mist-ext-warn);
   --err:       var(--md-sys-color-error);
   --ok:        var(--mist-ext-ok);            /* usage headroom (green) */
-  /* these five used to exist only in the solarpunk block, leaving terminal
-     rules that reference them (todos, perm icon, image chrome) unstyled */
+  /* five aliases the rules below reference by name (todos, perm icon, image
+     chrome). They live here so every rule resolves against the base sheet. */
   --gold:      var(--mist-ext-warn);
   --surface:   var(--md-sys-color-surface-container-low);
   --hover:     var(--md-sys-color-surface-container-high);
@@ -49,14 +50,13 @@ body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
 #topbar, #mid, #composer { min-width: 0; }
 
 /* ---- app wallpaper ----
-   Georges Riom Art Nouveau lily collage, painted INTO the conversation area
-   (#logs) rather than behind the whole window. This is the same slot the old
-   Morris band used: the wallpaper sits at z-index:0 and the scrolling messages
-   layer (.session-log) sits at z-index:1 just above it, so the lilies show
-   through the transparent chat while staying behind the text. (A body::before at
-   z-index:-1 looked fine on dark themes but vanished on the cream solarpunk
-   theme, whose opaque body background paints over any negative-z child.)
-   --wp-* are the knobs; each theme tunes size/blend/opacity to its own ground. */
+   Painted INTO the conversation area (#logs) rather than behind the whole
+   window: the wallpaper sits at z-index:0 and the scrolling messages layer
+   (.session-log) sits at z-index:1 just above it, so the mark shows through the
+   transparent chat while staying behind the text. Do not move this to a
+   body::before at z-index:-1. That works on a dark ground but disappears under
+   any theme whose opaque body background paints over a negative-z child.
+   --wp-* are the knobs; a theme tunes size/blend/opacity to its own ground. */
 :root {
   /* Terminal: a black field with MIST's own mark on it, nothing else. The logo
      is bright (a white-hot core), so it is held low and large — a watermark to
@@ -90,27 +90,6 @@ html[data-theme="terminal"] #logs { background: #000; }
 }
 /* messages ride above the wallpaper in every theme */
 .session-log { z-index: 1; }
-/* Dark themes show the whole collage as one centered composition — the pale
-   lilies glow against the night ground. The cream solarpunk theme can't do that:
-   a `cover` crop parks the near-white lily blooms over the reading area, and you
-   can't darken white onto cream. So on cream we tile the panel into a repeating
-   green lattice and `multiply` it onto the paper like printed ink — the foliage
-   and borders read clearly while the whites stay light. */
-html[data-theme="solarpunk"] {
-  --wp-image: url("riom-lilies.png");
-  --wp-opacity: .55; --wp-blend: multiply;
-  --wp-size: 660px auto; --wp-repeat: repeat; --wp-pos: top left;
-}
-/* Readability mask (cream theme only): hold the wallpaper at ~30% everywhere the
-   text runs, so it reads as a soft ghost of the pattern behind near-clean paper
-   rather than competing with the words. This used to ramp back to full strength
-   past 1010px, back when messages were capped at a 900px column and the right
-   side was empty; messages now run the full width, so there is no empty margin
-   left to decorate and the dim is uniform. */
-html[data-theme="solarpunk"] #logs::after {
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.30) 0, rgba(0,0,0,.30) 100%);
-          mask-image: linear-gradient(to right, rgba(0,0,0,.30) 0, rgba(0,0,0,.30) 100%);
-}
 
 /* ---- top bar ---- */
 #topbar {
@@ -414,10 +393,6 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 /* MIST's rhombus, wherever it's drawn as an icon (the thinking spinner today) */
 .mist-ico { width: 8px; height: 15px; display: block; fill: currentColor; }
 .spinner .mist-ico { width: 9px; height: 16px; }
-/* Clawd's mark sits in the same slot but is wide where MIST's is tall, so it
-   gets its own sizing rather than inheriting a portrait box. */
-.clawd-ico { width: 14px; height: 8px; display: block; fill: currentColor; }
-.spinner .clawd-ico { width: 16px; height: 9px; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* markdown body */
@@ -694,377 +669,6 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--md-sys-color-surface-variant); }
 ::-webkit-scrollbar-track { background: transparent; }
-
-/* ============================================================
-   Solarpunk theme — bright, warm, daylit greenhouse.
-   Art-Nouveau-by-way-of-Ghibli: a warm cream daylight base,
-   green + gold signature, terracotta human, humanist (non-mono)
-   text, rounded organic edges, dappled sunlight, and living
-   botanical vines. The deliberate OPPOSITE of a dark terminal.
-   Overrides the variables AND every hardcoded dark surface from
-   the Terminal sheet above, so no dark patches leak through.
-   (The previous "solarpunk" theme was really lunarpunk — dark
-   phthalo night + blue neon sigils — and has been fully replaced.)
-   ============================================================ */
-html[data-theme="solarpunk"] {
-  /* legacy vars re-aliased onto the theme's own MD3 scheme (md-tokens.css) */
-  --bg:        var(--md-sys-color-surface-container);       /* warm cream daylight */
-  --bg-2:      #FBF8EFcc;
-  --line:      var(--md-sys-color-outline-variant);         /* soft hairline */
-  --line-soft: color-mix(in srgb, var(--md-sys-color-outline-variant) 50%, transparent);
-  --text:      var(--md-sys-color-on-surface);              /* deep bark, never cold */
-  --dim:       var(--md-sys-color-on-surface-variant);      /* olive secondary text */
-  --teal:      var(--md-sys-color-primary);                 /* PRIMARY = forest green */
-  --violet:    var(--mist-ext-thinking);                    /* thinking = warm gold */
-  --user:      var(--mist-ext-user);                        /* the human = terracotta */
-  --warn:      var(--mist-ext-warn);                        /* amber */
-  --err:       var(--md-sys-color-error);                   /* warm brick */
-  --ok:        var(--mist-ext-ok);                          /* forest green */
-  /* theme-local surfaces — the MD3 surface-container ladder, warm */
-  --surface:   var(--md-sys-color-surface-container-high);     /* bars & panels: wheat */
-  --surface-2: var(--md-sys-color-surface-container-lowest);   /* fields / raised chips */
-  --code-bg:   var(--md-sys-color-surface-container-high);     /* parchment code blocks */
-  --hover:     var(--md-sys-color-surface-container-highest);  /* deeper wheat */
-  --active:    #DCEBCF;   /* pale leaf-green selection */
-  --user-bg:   #F8EBD2;   /* pale terracotta-cream bubble */
-  --leaf:      #5BB247;   /* bright foliage — the "working" pulse */
-  --gold:      #E0B100;   /* sunbeam gold */
-  --amber:     #F4A93B;
-  --focus:     0 0 0 3px rgba(224,177,0,.22);   /* warm gold focus ring (NOT neon) */
-  --radius:    var(--md-sys-shape-corner-large);
-  /* the body face is the theme's --mist-font-body (md-tokens.css), inherited
-     through the :root --mono alias; only the display face is theme-local */
-  --head: "Cochin", "Palatino", "Hoefler Text", Georgia, serif;
-}
-/* dappled sunlight: warm gold + leaf-green + soft sky washes over cream */
-html[data-theme="solarpunk"] body {
-  font-size: 14px; line-height: 1.62;
-  background:
-    radial-gradient(1100px 620px at 86% -12%, rgba(224,177,0,.20), transparent 60%),
-    radial-gradient(840px 540px at -8% 8%, rgba(91,178,71,.16), transparent 58%),
-    radial-gradient(980px 680px at 50% 122%, rgba(135,206,235,.14), transparent 62%),
-    var(--bg);
-  background-attachment: fixed;
-}
-/* keep code monospace even though the UI font is now humanist */
-html[data-theme="solarpunk"] .body pre,
-html[data-theme="solarpunk"] .body code,
-html[data-theme="solarpunk"] .tool pre,
-html[data-theme="solarpunk"] .body .copy-btn {
-  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-}
-/* Art-Nouveau serif for display type: logo, headings, panel titles */
-html[data-theme="solarpunk"] .logo,
-html[data-theme="solarpunk"] .body h1,
-html[data-theme="solarpunk"] .body h2,
-html[data-theme="solarpunk"] .body h3,
-html[data-theme="solarpunk"] .capHead,
-html[data-theme="solarpunk"] .greet {
-  font-family: var(--head); letter-spacing: .2px;
-}
-html[data-theme="solarpunk"] .logo { letter-spacing: 3px; }
-
-/* --- panels & bars get the wheat surface --- */
-html[data-theme="solarpunk"] #topbar,
-html[data-theme="solarpunk"] #tabrail,
-html[data-theme="solarpunk"] #capPanel,
-html[data-theme="solarpunk"] #notesPanel,
-html[data-theme="solarpunk"] #composer,
-html[data-theme="solarpunk"] #slashMenu,
-html[data-theme="solarpunk"] #modelCard,
-html[data-theme="solarpunk"] #permCard,
-html[data-theme="solarpunk"] #thinkCard,
-html[data-theme="solarpunk"] #railToggle { background: var(--surface); }
-
-/* --- fields / small controls: clean white --- */
-html[data-theme="solarpunk"] #input,
-html[data-theme="solarpunk"] #notesInput,
-html[data-theme="solarpunk"] .rt-field input,
-html[data-theme="solarpunk"] .rt-field textarea,
-html[data-theme="solarpunk"] .rt-new,
-html[data-theme="solarpunk"] .rt-actions button,
-html[data-theme="solarpunk"] .qa-rec,
-html[data-theme="solarpunk"] .scratch-item,
-html[data-theme="solarpunk"] .scratch-edit,
-html[data-theme="solarpunk"] .tab .trename,
-html[data-theme="solarpunk"] .body .copy-btn { background: var(--surface-2); }
-
-/* --- code / parchment surfaces (light, not dark) --- */
-html[data-theme="solarpunk"] .body pre,
-html[data-theme="solarpunk"] .body code,
-html[data-theme="solarpunk"] .body .md-table th,
-html[data-theme="solarpunk"] .body .md-table code {
-  background: var(--code-bg); color: var(--text);
-}
-html[data-theme="solarpunk"] .body .md-table tbody tr:nth-child(even) td { background: #EEF3DF; }
-
-/* --- hover / active fills (were dark blues) --- */
-html[data-theme="solarpunk"] details.tool > summary.tool-head,
-html[data-theme="solarpunk"] .tab:hover { background: var(--hover); }
-html[data-theme="solarpunk"] .tab.active,
-html[data-theme="solarpunk"] .modelrow:hover,
-html[data-theme="solarpunk"] .slash-item.sel { background: var(--active); }
-html[data-theme="solarpunk"] #jumpBtn { background: var(--active); color: var(--teal); }
-html[data-theme="solarpunk"] #jumpBtn:hover { background: #C7DFAC; }
-html[data-theme="solarpunk"] .tab.pinned { background: #E6EFD7; }
-html[data-theme="solarpunk"] .tab.pinned:hover { background: #DCEBCF; }
-html[data-theme="solarpunk"] .tab.pinned.active { background: #D2E6C2; }
-html[data-theme="solarpunk"] .tab .dot.idle { background: #B6BE96; }
-html[data-theme="solarpunk"] .tab .dot.working { background: var(--leaf); }
-html[data-theme="solarpunk"] .spinner .sv-glyph { color: var(--leaf); }   /* color only — a background here painted a green box behind the glyph */
-
-/* --- user message bubble: warm cream, terracotta edge, bark text --- */
-html[data-theme="solarpunk"] .msg.user .body {
-  color: var(--text); background: var(--user-bg);
-  border: 1px solid #E6CBA8; border-left: 3px solid var(--user);
-}
-
-/* --- secondary text that was cool light-gray → dark sage so it reads on cream --- */
-html[data-theme="solarpunk"] .think .think-body,
-html[data-theme="solarpunk"] .tool .tsummary,
-html[data-theme="solarpunk"] .tool .tool-result,
-html[data-theme="solarpunk"] .tool pre,
-html[data-theme="solarpunk"] .chips span,
-html[data-theme="solarpunk"] .routines-note code,
-html[data-theme="solarpunk"] .badge.usage,
-html[data-theme="solarpunk"] .badge.repo { color: #5E6B4B; }
-
-/* --- soft organic edges everywhere (the opposite of sharp) --- */
-html[data-theme="solarpunk"] .badge { border-radius: var(--md-sys-shape-corner-full); padding: 2px 10px; }
-html[data-theme="solarpunk"] button,
-html[data-theme="solarpunk"] #input,
-html[data-theme="solarpunk"] #notesInput,
-html[data-theme="solarpunk"] .rt-field input,
-html[data-theme="solarpunk"] .rt-field textarea,
-html[data-theme="solarpunk"] .rt-new,
-html[data-theme="solarpunk"] .scratch-item,
-html[data-theme="solarpunk"] .scratch-edit,
-html[data-theme="solarpunk"] .tool,
-html[data-theme="solarpunk"] details.tool > summary.tool-head,
-html[data-theme="solarpunk"] .think,
-html[data-theme="solarpunk"] .msg.user .body,
-html[data-theme="solarpunk"] .notice,
-html[data-theme="solarpunk"] .body pre,
-html[data-theme="solarpunk"] .body code,
-html[data-theme="solarpunk"] .chips span,
-html[data-theme="solarpunk"] #modelCard,
-html[data-theme="solarpunk"] #permCard,
-html[data-theme="solarpunk"] #thinkCard,
-html[data-theme="solarpunk"] #slashMenu,
-html[data-theme="solarpunk"] #railToggle,
-html[data-theme="solarpunk"] #jumpBtn { border-radius: var(--radius); }
-html[data-theme="solarpunk"] .tool,
-html[data-theme="solarpunk"] details.tool > summary.tool-head { border-radius: var(--md-sys-shape-corner-medium); }
-html[data-theme="solarpunk"] details.tool[open] > summary.tool-head { border-radius: var(--md-sys-shape-corner-medium) var(--md-sys-shape-corner-medium) 0 0; }
-html[data-theme="solarpunk"] .body pre,
-html[data-theme="solarpunk"] .body code { border-radius: var(--md-sys-shape-corner-small); }
-/* gentle warm depth instead of hard hairlines */
-html[data-theme="solarpunk"] .tool,
-html[data-theme="solarpunk"] .msg.user .body,
-html[data-theme="solarpunk"] #modelCard,
-html[data-theme="solarpunk"] #permCard,
-html[data-theme="solarpunk"] #thinkCard,
-html[data-theme="solarpunk"] .scratch-item { box-shadow: 0 1px 4px rgba(74,60,30,.10); }
-
-/* --- interactive permission cards (base is hard-coded dark; re-theme for cream) --- */
-html[data-theme="solarpunk"] .perm-card {
-  background: var(--surface);
-  border-radius: var(--md-sys-shape-corner-medium); box-shadow: 0 1px 4px rgba(74,60,30,.10);
-}
-html[data-theme="solarpunk"] .perm-body .perm-sum,
-html[data-theme="solarpunk"] .perm-cmd { color: #5E6B4B; }
-html[data-theme="solarpunk"] .perm-btn { background: var(--hover); border-radius: var(--radius); }
-html[data-theme="solarpunk"] .perm-btn:hover { background: var(--active); }
-html[data-theme="solarpunk"] #capPanel,
-html[data-theme="solarpunk"] #notesPanel { box-shadow: -2px 0 16px rgba(74,60,30,.10); }
-
-/* --- accents: forest green + warm gold, NO neon glow --- */
-html[data-theme="solarpunk"] .msg.mist .who { color: var(--teal); }
-html[data-theme="solarpunk"] .cursor { background: var(--leaf); border-radius: 2px; }
-html[data-theme="solarpunk"] .body a { color: var(--teal); text-decoration: none; border-bottom: 1px solid rgba(47,107,60,.35); }
-html[data-theme="solarpunk"] .body a:hover { color: #245431; border-bottom-color: var(--gold); }
-/* warm gold "sunlight" focus ring + send glow */
-html[data-theme="solarpunk"] #input:focus,
-html[data-theme="solarpunk"] #notesInput:focus,
-html[data-theme="solarpunk"] .rt-field input:focus,
-html[data-theme="solarpunk"] .rt-field textarea:focus {
-  border-color: var(--gold); box-shadow: var(--focus);
-}
-html[data-theme="solarpunk"] #sendBtn:not(:disabled):hover { border-color: var(--gold); box-shadow: 0 0 10px rgba(224,177,0,.30); }
-html[data-theme="solarpunk"] .tab.active { box-shadow: inset 2px 0 0 0 var(--teal); }
-
-/* selection + scrollbar: warm gold + sage */
-html[data-theme="solarpunk"] ::selection { background: rgba(224,177,0,.26); color: var(--text); }
-html[data-theme="solarpunk"] ::-webkit-scrollbar-thumb { background: #B6C795; border-radius: var(--md-sys-shape-corner-full); }
-
-/* --- living vines creeping along the margins & borders --- */
-/* anchor the pseudo-elements, and lift real content above the decoration */
-html[data-theme="solarpunk"] #topbar,
-html[data-theme="solarpunk"] #tabrail { position: relative; }
-/* .session-log must KEEP position:absolute/inset:0 or its scroll breaks — only
-   raise its stacking, don't change positioning. */
-html[data-theme="solarpunk"] .session-log { z-index: 1; }
-html[data-theme="solarpunk"] #tabs,
-html[data-theme="solarpunk"] #newTab,
-html[data-theme="solarpunk"] #topbar .brand,
-html[data-theme="solarpunk"] #topbar .meta,
-html[data-theme="solarpunk"] #topbar .actions,
-html[data-theme="solarpunk"] #composer > * { position: relative; z-index: 1; }
-/* ...but #slashMenu is also a direct child of #composer and MUST stay an
-   absolutely-positioned overlay — otherwise the rule above turns it into an
-   in-flow flex item that balloons the composer row and warps the whole UI. */
-html[data-theme="solarpunk"] #slashMenu { position: absolute; z-index: 40; }
-/* …and #attachPreview is the same shape of direct child — without this carve-out
-   the `#composer > *` relative rule turns the floating image preview into an
-   in-flow flex item that balloons the composer row. */
-html[data-theme="solarpunk"] #attachPreview { position: absolute; z-index: 41; }
-html[data-theme="solarpunk"] #logs::before,
-html[data-theme="solarpunk"] #tabrail::after,
-html[data-theme="solarpunk"] #composer::before,
-html[data-theme="solarpunk"] #topbar::after {
-  content: ""; position: absolute; pointer-events: none; z-index: 0;
-  background-repeat: no-repeat;
-}
-/* All decorative art below is genuine public-domain Arts & Crafts / Art Nouveau
-   work, recolored to the theme. See ART-CREDITS.md for sources + licenses. */
-/* Art Nouveau corner bracket framing the top-left of the conversation
-   (flipped vertically: the source piece is drawn as a bottom-left corner) */
-html[data-theme="solarpunk"] #logs::before {
-  top: 0; left: 0; width: 150px; height: 150px;
-  background-image: url("an-corner.svg"); background-size: contain; background-position: top left;
-  transform: scaleY(-1); transform-origin: top left; opacity: .5;
-}
-/* (The William Morris "Venetian" band that used to tile down the chat's right
-   column was removed — the Georges Riom lily wallpaper behind the whole app now
-   fills that role. morris-venetian.svg is kept in static/ for reference.) */
-/* slender Art Nouveau tulip column running down the rail / chat seam —
-   fade both ends so it never looks chopped */
-html[data-theme="solarpunk"] #tabrail::after {
-  top: 0; right: 1px; width: 38px; height: 100%;
-  background-image: url("an-tulip.svg"); background-size: 38px auto; background-repeat: repeat-y;
-  background-position: top center; opacity: .32;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 72px, #000 calc(100% - 52px), transparent 100%);
-          mask-image: linear-gradient(to bottom, transparent 0, #000 72px, #000 calc(100% - 52px), transparent 100%);
-}
-/* a single Art Nouveau headpiece, centered, as a divider above the composer */
-html[data-theme="solarpunk"] #composer::before {
-  top: -17px; left: 0; right: 0; height: 16px;
-  background-image: url("an-headpiece.svg"); background-size: auto 16px; background-repeat: no-repeat;
-  background-position: center top; opacity: .5;
-}
-/* matching headpiece divider just below the top bar */
-html[data-theme="solarpunk"] #topbar::after {
-  bottom: -17px; left: 0; right: 0; height: 16px;
-  background-image: url("an-headpiece.svg"); background-size: auto 16px; background-repeat: no-repeat;
-  background-position: center bottom; opacity: .42;
-}
-
-/* --- top-bar chips/buttons + sidebar tabs read as raised cards --- */
-html[data-theme="solarpunk"] .badge {
-  background: var(--surface-2); box-shadow: 0 1px 2px rgba(74,60,30,.10);
-}
-html[data-theme="solarpunk"] #newTab {
-  background: var(--surface-2); border-color: #B6C795;
-  box-shadow: 0 1px 2px rgba(74,60,30,.10);
-}
-html[data-theme="solarpunk"] #newTab:hover {
-  border-color: var(--gold); color: var(--teal);
-  box-shadow: 0 0 10px rgba(224,177,0,.30);
-}
-/* the topbar/composer buttons are md components now — recolor via their tokens */
-html[data-theme="solarpunk"] .actions md-icon-button,
-html[data-theme="solarpunk"] #scratchBtn,
-html[data-theme="solarpunk"] #fileBtn {
-  --md-icon-button-icon-color: var(--md-sys-color-on-surface-variant);
-  --md-icon-button-hover-icon-color: var(--md-sys-color-primary);
-}
-/* each tab is a distinct rounded chip with its own ground */
-html[data-theme="solarpunk"] .tab {
-  margin: 4px 8px; padding: 7px 10px; border-radius: var(--md-sys-shape-corner-medium);
-  border: 1px solid var(--line); background: var(--surface-2);
-  box-shadow: 0 1px 2px rgba(74,60,30,.08);
-  color: #4A4636;   /* bark-on-cream, easy to read on the light chip */
-}
-html[data-theme="solarpunk"] .tab .ttitle { color: #4A4636; }
-html[data-theme="solarpunk"] .tab.active .ttitle,
-html[data-theme="solarpunk"] .tab.pinned .ttitle { color: var(--text); }
-html[data-theme="solarpunk"] .tab:hover { background: var(--hover); border-color: #B6C795; }
-html[data-theme="solarpunk"] .tab.active {
-  background: var(--active); color: var(--text);
-  border: 1px solid var(--teal); padding-left: 10px;
-  box-shadow: 0 0 0 1px rgba(47,107,60,.30), 0 1px 4px rgba(74,60,30,.12);
-}
-html[data-theme="solarpunk"] .tab.pinned { border-left: 3px solid var(--gold); }
-html[data-theme="solarpunk"] .tab.pinned.active { border: 1px solid var(--teal); border-left: 3px solid var(--gold); }
-/* pin: outlined SQUARE chip so it's clearly a button against the light tab.
-   Fixed equal width/height (the 11px pushpin centers via the base inline-flex
-   rules) so it reads as a square, not the squished pill that padding+line-height
-   produced. */
-html[data-theme="solarpunk"] .tab .tpin {
-  color: var(--dim); border: 1px solid var(--line); border-radius: var(--md-sys-shape-corner-extra-small);
-  width: 18px; height: 18px; padding: 0; box-sizing: border-box;
-  background: var(--surface);
-}
-html[data-theme="solarpunk"] .tab:hover .tpin { border-color: var(--gold); color: var(--teal); }
-html[data-theme="solarpunk"] .tab .tpin.on {
-  color: var(--gold); border-color: var(--gold);
-}
-
-/* ---- warmer, more alive rail (the drab beige field, re-lit) ----
-   The rail was a flat wheat column of near-white chips: low contrast, color only
-   on the active tab. Here it catches the same dappled sunlight as the body and
-   every conversation gets a living leaf, so the resting state reads as a sunlit
-   shelf of cards instead of a monotonous beige list. Gradients + soft glows are
-   the solarpunk idiom (the opposite of the terminal theme's flat/sharp rule). */
-html[data-theme="solarpunk"] #tabrail {
-  background:
-    linear-gradient(180deg, rgba(224,177,0,.13), transparent 44%),   /* gold sunlight pools at the top */
-    linear-gradient(0deg,   rgba(91,178,71,.12), transparent 40%),   /* foliage green rises from the floor */
-    var(--surface);
-}
-/* resting chips are warm sunlit paper (not dead white) with a hair more depth */
-html[data-theme="solarpunk"] .tab {
-  background: linear-gradient(180deg, #FFFDF5, #FBF6E7);
-  border-color: #DCD6BC;
-  box-shadow: 0 1px 3px rgba(74,60,30,.10);
-}
-html[data-theme="solarpunk"] .tab:hover {
-  background: linear-gradient(180deg, #FBF4DF, #F3EBCF);
-  border-color: var(--gold);
-  box-shadow: 0 2px 7px rgba(224,177,0,.18);
-}
-/* the current chat looks illuminated — a soft sunbeam glow around the leaf-green
-   selection, keeping the forest-green spine it already had */
-html[data-theme="solarpunk"] .tab.active {
-  background: linear-gradient(180deg, #E4F1D6, #D6E9C4);
-  box-shadow: 0 0 0 1px rgba(47,107,60,.35), 0 3px 12px rgba(224,177,0,.26);
-}
-/* pinned chips get a faint gold wash behind their gold spine so the group glows */
-html[data-theme="solarpunk"] .tab.pinned { background: linear-gradient(180deg, #FBF3DA, #F6EAC8); }
-html[data-theme="solarpunk"] .tab.pinned.active { background: linear-gradient(180deg, #E7F0D2, #D9E8BF); }
-
-/* Status markers keep MIST's rhombus here too (it's her mark, not a theme
-   flourish) — the solarpunk voice comes through in color and glow instead:
-   sage = idle, gold = thinking, foliage = working, brick = error. */
-html[data-theme="solarpunk"] .tab .dot {
-  width: 9px; height: 14px; flex-basis: 9px;
-}
-html[data-theme="solarpunk"] .tab .dot.idle { background: #8FB06B; }   /* living sage, not muted */
-html[data-theme="solarpunk"] .tab .dot.thinking { box-shadow: 0 0 6px rgba(224,177,0,.75); }
-html[data-theme="solarpunk"] .tab .dot.working { box-shadow: 0 0 6px rgba(91,178,71,.85); }
-html[data-theme="solarpunk"] .tab .dot.error { background: var(--err); box-shadow: 0 0 6px rgba(181,64,42,.55); }
-
-/* "+ new chat" becomes a gentle sunbeam call-to-action, not another white card */
-html[data-theme="solarpunk"] #newTab {
-  background: linear-gradient(180deg, #FBF1D2, #F4E6BE);
-  border-color: var(--gold); color: #6A5410;
-}
-html[data-theme="solarpunk"] #newTab:hover {
-  background: linear-gradient(180deg, #FBEBBE, #F0DCA6);
-  box-shadow: 0 0 10px rgba(224,177,0,.30);
-}
-/* the "pinned" section-header pin is gold too (matches the pinned-tab pin) */
-html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 
 /* ---------- generated images (mist-image) ---------- */
 /* Inline thumbnail in chat: flat, square, hairline border, click to enlarge. */
@@ -1564,8 +1168,8 @@ html[data-theme="solarpunk"] .tabsection.pinned .pin-ico { fill: var(--gold); }
 /* ============================================================
    Material Design 3 components + Sharp icons (facelift 2026-07)
    md-* elements read --md-sys-color-* from md-tokens.css and the
-   shape scale (all 0 in terminal, soft in solarpunk). This block
-   is layout/sizing glue + icon alignment for both themes.
+   shape scale (all 0). This block is layout/sizing glue and icon
+   alignment, and is theme-independent.
    ============================================================ */
 /* topbar actions: compact icon buttons */
 .actions md-icon-button {
@@ -1663,84 +1267,3 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 #shareCard { max-width: calc(100vw - 20px); }
 .share-body { overflow-wrap: anywhere; }
 .share-note code { white-space: normal; word-break: break-all; }
-
-/* ============================================================
-   Clawd theme — Claude Code, not MIST.
-   Warm espresso ground, crab-coral accent, the terminal face,
-   and the same flat/sharp shape scale the Terminal theme uses.
-   This one needs far fewer overrides than Solarpunk did: the
-   base sheet is already a DARK theme, so the variable aliases
-   below carry almost the whole skin and there are no light
-   surfaces to fight. Only the four places the base sheet
-   hardcodes a cool value need touching.
-   Palette provenance and the licensing line on the upstream
-   artwork are in ART-CREDITS.md.
-   ============================================================ */
-html[data-theme="clawd"] {
-  /* legacy vars re-aliased onto the theme's own MD3 scheme (md-tokens.css) */
-  --bg:        var(--md-sys-color-surface);              /* warm espresso */
-  --bg-2:      #2b1c17cc;                                /* translucent panel, warm */
-  --line:      var(--md-sys-color-outline-variant);
-  --line-soft: color-mix(in srgb, var(--md-sys-color-outline-variant) 55%, transparent);
-  --text:      var(--md-sys-color-on-surface);
-  --dim:       var(--md-sys-color-outline);
-  --teal:      var(--md-sys-color-primary);   /* the accent is Clawd's coral now */
-  --violet:    var(--mist-ext-thinking);      /* thinking = the bubble cyan */
-  --user:      var(--mist-ext-user);          /* the human = sparkle gold */
-  --warn:      var(--mist-ext-warn);
-  --err:       var(--md-sys-color-error);
-  --ok:        var(--mist-ext-ok);
-  --gold:      var(--mist-ext-warn);
-  --surface:   var(--md-sys-color-surface-container-low);
-  --surface-2: var(--md-sys-color-surface-container);
-  --hover:     var(--md-sys-color-surface-container-high);
-  --active:    color-mix(in srgb, var(--md-sys-color-primary) 14%, var(--md-sys-color-surface-container-high));
-  --leaf:      var(--md-sys-color-primary);   /* the "working" pulse is coral here */
-  --focus:     0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 32%, transparent);
-}
-/* The conversation canvas: the darkest rung of the ladder, so the transcript
-   sits in a well below the chrome. Terminal drops to flat #000 here; on a warm
-   scheme a true black reads as a cold hole punched in the page, so this keeps
-   the theme's own hue all the way down. */
-html[data-theme="clawd"] #logs { background: var(--md-sys-color-surface-container-lowest); }
-/* Clawd itself as the watermark, in place of MIST's mark. Same lesson the
-   Terminal theme wrote up: the ceiling is not the body text, it is the DIMMEST
-   chrome text in the transcript (outline #aa8980 — timestamps, tool summaries).
-   The asset is therefore already inked in the art's shadow shade rather than
-   its body coral, which buys enough headroom for .22 to leave that text at
-   4.91:1 and the body at 12:1, both past AA. Darken clawd-wall.svg if it ever
-   needs to read stronger; do not raise this number. */
-html[data-theme="clawd"] {
-  --wp-image: url("clawd-wall.svg");
-  --wp-opacity: .22; --wp-blend: normal;
-  /* Small on purpose. MIST's mark is a smooth glyph and survives being blown up
-     to 70% of the pane; a pixel crab does not — scaled that far its own squares
-     become the size of words and the whole thing reads as brown rectangles
-     behind the text instead of as a crab. Kept near a fifth of the pane it
-     resolves as one small animal sitting low in the transcript, which is the
-     entire idea. The opacity ceiling is per-pixel, so shrinking it does not buy
-     room to raise .22. */
-  --wp-size: auto 21%; --wp-repeat: no-repeat; --wp-pos: center 72%;
-}
-/* a low warm glow, as if the terminal were lit by something off-screen */
-html[data-theme="clawd"] body {
-  background:
-    radial-gradient(900px 520px at 50% 108%, rgba(222,136,109,.10), transparent 62%),
-    var(--bg);
-  background-attachment: fixed;
-}
-/* the spinner's crab pulses in the coral, not the thinking cyan */
-html[data-theme="clawd"] .spinner .sv-glyph { color: var(--teal); }
-/* Errors vs. the accent: --err is a red only 14 degrees of hue off the coral
-   primary, which is fine everywhere it appears WITH chrome (badges, notices and
-   chips all set color and border-color together). The one place it appears bare
-   is the session dot, sitting inches from a coral .working dot on the same rail.
-   A glow separates them by something other than hue. */
-html[data-theme="clawd"] .tab .dot.error { box-shadow: 0 0 6px 1px rgba(255,82,82,.75); }
-/* MIST's rhombus reads as MIST wherever it appears, including the 8px session
-   dots and the recipe-card pager. A crab is illegible at that size, so this
-   theme squares them off instead: a pixel dot belongs to the same vocabulary as
-   the mascot and is honest about what it can show at 8px. */
-html[data-theme="clawd"] .tab .dot,
-html[data-theme="clawd"] .ck-dot { clip-path: none; }
-html[data-theme="clawd"] .tab .dot { width: 9px; height: 9px; flex: 0 0 9px; }

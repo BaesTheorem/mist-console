@@ -12,7 +12,7 @@ Mac-specific machinery.
   Windows ports of the macOS originals. Same routes, same front-end, same
   multi-session persistence (under `%APPDATA%\MIST Console`). WebView2
   window via pywebview; falls back to the default browser if WebView2 is
-  missing. Solarpunk is the default theme.
+  missing.
 - **Setup wizard** (`setup.html`): served at `/` until setup completes.
   Detects/installs Claude Code (official PowerShell installer), checks Git
   for Windows, runs `claude auth login` with streamed output, picks a

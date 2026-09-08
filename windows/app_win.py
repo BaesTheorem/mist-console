@@ -48,7 +48,7 @@ _pending_open = None
 
 THEME_PATH = os.path.join(DATA_DIR, "theme.json")
 _VALID_THEME = re.compile(r"^[a-z0-9_-]{1,40}$")
-DEFAULT_THEME = "solarpunk"
+DEFAULT_THEME = "terminal"
 
 
 def _load_theme():

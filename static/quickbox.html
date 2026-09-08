@@ -37,7 +37,7 @@ if(_fs)_d.style.setProperty("--q-font",_fs);}catch(e){}</script>
     --q-dim:   var(--md-sys-color-outline, #8392a7);
     --q-err:   var(--md-sys-color-error, #ffb4ab);
     --q-font:  var(--mist-font-body, "SF Mono", "JetBrains Mono", Menlo, monospace);
-    /* shape rides the MD3 scale: square in terminal, soft in solarpunk */
+    /* shape rides the MD3 scale, so a theme can soften it in one place */
     --q-r-lg: var(--md-sys-shape-corner-large, 0px);
     --q-r-md: var(--md-sys-shape-corner-small, 0px);
     --q-r-sm: var(--md-sys-shape-corner-extra-small, 0px);
@@ -141,21 +141,6 @@ if(_fs)_d.style.setProperty("--q-font",_fs);}catch(e){}</script>
   .picker .plist::-webkit-scrollbar { width: 8px; }
   .picker .plist::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--q-acc) 30%, transparent); border-radius: var(--q-r-sm); }
 
-  /* Solarpunk: gilded Art Nouveau flourishes spilling over the summon box's top
-     corners (genuine public-domain art — see ART-CREDITS.md) */
-  html[data-theme="solarpunk"] .box { overflow: visible; }
-  /* sit ENTIRELY above the box (bottom edge ~6px into the top border) so the art
-     never overlaps the input row, which lives near the top of the box */
-  html[data-theme="solarpunk"] .box::before,
-  html[data-theme="solarpunk"] .box::after {
-    content: ""; position: absolute; bottom: calc(100% - 6px); width: 172px; height: 74px;
-    background-image: url("an-flourish.svg"); background-repeat: no-repeat; background-size: contain;
-    pointer-events: none; z-index: 5; opacity: .9;
-  }
-  /* top-left: flip vertical so the spray grows up out of the corner */
-  html[data-theme="solarpunk"] .box::before { left: -14px; background-position: left bottom; transform: scaleY(-1); }
-  /* top-right: mirror it */
-  html[data-theme="solarpunk"] .box::after  { right: -14px; background-position: right bottom; transform: scale(-1,-1); }
 </style>
 </head>
 <body>

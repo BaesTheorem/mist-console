@@ -511,22 +511,6 @@ const PIN_ICON = '<svg class="pin-ico" viewBox="0 0 24 24" aria-hidden="true"><p
    above all. The rail's status markers get the same silhouette from CSS
    (clip-path), where a background-color already carried the state. */
 const MIST_MARK = '<svg class="mist-ico" viewBox="0 0 12 22" aria-hidden="true"><path d="M6 0 12 11 6 22 0 11Z"/></svg>';
-
-/* Clawd's mark: the same slot as MIST_MARK, for the Clawd theme. A pixel crab
-   reduced to the silhouette that still survives at 16px — shell, two claws, two
-   eyestalks, four legs. Drawn here rather than lifted from the clawd-on-desk
-   sprites, whose art is All Rights Reserved (ART-CREDITS.md). `fill:currentColor`
-   again, so the theme tints it. */
-const CLAWD_MARK = '<svg class="clawd-ico" viewBox="0 0 14 8" aria-hidden="true" shape-rendering="crispEdges">'
-  + '<path d="M4 0h1v2H4zM9 0h1v2H9zM4 2h6v1H4zM3 3h8v1H3zM2 4h10v2H2zM3 6h8v1H3z'
-  + 'M0 3h2v2H0zM12 3h2v2h-2zM3 7h1v1H3zM5 7h1v1H5zM8 7h1v1H8zM10 7h1v1h-1z"/></svg>';
-
-/* Which mascot the chrome wears. Read at call time, not cached, so switching
-   theme mid-turn re-marks a spinner that is already on screen. */
-function themeMark() {
-  return document.documentElement.dataset.theme === "clawd" ? CLAWD_MARK : MIST_MARK;
-}
-
 /* ---------- timestamps ---------- */
 /* Every message shows the wall-clock time it was sent. ts is epoch ms; live
    messages stamp Date.now(), replayed ones use the server `ts` carried on each
@@ -553,31 +537,7 @@ function makeTs(ts) {
 /* ---------- session registry ---------- */
 const sessions = new Map();
 let activeId = null;
-/* ---------- spinner verbs ----------
-   The default set is server-side: app.py reads the CLI's own settings.json, so
-   the chat spinner says whatever the terminal says. The Clawd theme carries its
-   own list instead, because the whole point of that theme is that the thing
-   working is Claude Code rather than MIST. verbsForTheme() is the one place
-   that decides, so a late-arriving server config and a mid-session theme switch
-   both resolve the same way. */
-let SERVER_VERBS = ["Thinking it through, properly"];
-const CLAWD_VERBS = [
-  "Havin' a proper think", "Sortin' it out", "On it like a car bonnet",
-  "Workin' a blinder", "Havin' a butcher's", "Crackin' on", "Sussing it out",
-  "Beaverin' away", "Graftin'", "Giving it some welly", "Having a gander",
-  "Cobbling it together", "Pottering about in the code",
-  "Right then, sorting this mess", "Putting the kettle on",
-  "Tidying up the gaff", "Fitting it up proper", "Working out the dodgy bits",
-  "Bolting it together", "Giving it a proper go",
-  "Fixin' to figure this out", "Chewin' on it", "Workin' it like a rented mule",
-  "Plowin' through", "Whittlin' away", "Puttin' lipstick on this pig",
-  "Burnin' daylight here", "Wranglin' the code", "Cookin' with gas now",
-  "Hitchin' up the wagon", "Barrelin' through", "Rustlin' up an answer",
-  "Mosey-in' through the logic", "Tinkerin' under the hood", "Kickin' the tires",
-  "Splittin' kindling", "Raisin' the barn", "Doin' the Lord's work",
-];
-function verbsForTheme(id) { return id === "clawd" ? CLAWD_VERBS : SERVER_VERBS; }
-let SPINNER_VERBS = SERVER_VERBS;
+let SPINNER_VERBS = ["Thinking it through, properly"];
 let MODELS = [];
 let spinnerIdx = 0;
 let lastInit = null;
@@ -718,12 +678,8 @@ class Session {
   showSpinner() {
     if (!this.spinnerEl) {
       this.spinnerEl = el("div", "spinner",
-        '<span class="sv-glyph"></span> <span class="sv"></span>');
+        '<span class="sv-glyph">' + MIST_MARK + '</span> <span class="sv"></span>');
     }
-    // Re-stamp the mark every call, not just on create: the element is cached
-    // for the length of a turn, so a theme switch mid-turn would otherwise leave
-    // the old mascot spinning until the turn ended.
-    this.spinnerEl.querySelector(".sv-glyph").innerHTML = themeMark();
     this.spinnerEl.querySelector(".sv").textContent =
       (SPINNER_VERBS[spinnerIdx % SPINNER_VERBS.length] || "Thinking") + "…";
     this.logEl.appendChild(this.spinnerEl);   // move to bottom
@@ -3080,37 +3036,10 @@ $("#settingsBtn").addEventListener("click", () => {
    data-theme attribute is set pre-paint by an inline <head> script. */
 const THEMES = [
   { id: "terminal", label: "Terminal", desc: "Flat, sharp terminal — the original MIST look." },
-  { id: "solarpunk", label: "Solarpunk", desc: "Warm cream daylight, living greenery, Art Nouveau vines — the opposite of a terminal." },
-  { id: "clawd", label: "Clawd", desc: "Claude Code instead of MIST: warm espresso terminal, crab-coral accent, and Clawd's own spinner verbs.",
-    brand: { name: "Clawd", logo: "clawd-logo.svg" } },
 ];
-/* Whose console this is. Colors alone don't do it: with the default brand the
-   Clawd theme still wore MIST's wordmark and asked you to "Talk to MIST", which
-   is the one thing the theme exists to change. A theme without `brand` gets the
-   default, so Terminal and Solarpunk are untouched. */
-const DEFAULT_BRAND = { name: "MIST", logo: "mist-logo.png" };
-function applyBrand(b) {
-  const img = $("#logoImg"), txt = $("#logoText"), sub = $(".sub"), input = $("#input");
-  if (sub) sub.textContent = b.name;
-  if (txt) txt.textContent = b.name.toUpperCase().split("").join(" ");
-  if (img) {
-    // The <img> carries an onerror that swaps in the text wordmark. Re-show it on
-    // every brand change, or a single earlier load failure would leave the whole
-    // console permanently wordmark-less no matter which theme you pick next.
-    img.style.display = "";
-    if (txt) txt.style.display = "none";
-    img.alt = b.name;
-    img.src = b.logo;
-  }
-  if (input) input.placeholder = "Talk to " + b.name + "…  (Enter to send · Shift+Enter for newline)";
-}
 function applyTheme(id, persist) {
   const t = THEMES.find((x) => x.id === id) || THEMES[0];
   document.documentElement.dataset.theme = t.id;
-  // The verb list and the wordmark belong to the theme, so they move with it.
-  SPINNER_VERBS = verbsForTheme(t.id);
-  spinnerIdx = Math.floor(Math.random() * SPINNER_VERBS.length);
-  applyBrand(t.brand || DEFAULT_BRAND);
   try { localStorage.setItem("theme", t.id); } catch (_) {}
   // Also persist server-side so the choice survives a full app close/reopen even
   // if the WebView's localStorage gets wiped. Only on real user changes.
@@ -4222,10 +4151,7 @@ window.addEventListener("blur", hideCtxMenu);
 async function boot() {
   try {
     const cfg = await (await fetch("/config")).json();
-    // The server's verbs land well after boot, so they update the SERVER set and
-    // then re-resolve — otherwise they would stomp the Clawd theme's own list.
-    if (cfg.spinner_verbs && cfg.spinner_verbs.length) SERVER_VERBS = cfg.spinner_verbs;
-    SPINNER_VERBS = verbsForTheme(document.documentElement.dataset.theme);
+    if (cfg.spinner_verbs && cfg.spinner_verbs.length) SPINNER_VERBS = cfg.spinner_verbs;
     MODELS = cfg.models || [];
   } catch (_) {}
   const existing = await (await fetch("/sessions")).json();
@@ -4356,7 +4282,7 @@ searchClearBtn.addEventListener("click", () => clearChatSearch(true));
    (share.py). Thinking + tool cards stay collapsible for free: they're native
    <details> elements, no JS needed in the snapshot. */
 
-const SHARE_INLINE_CSS_ASSETS = ["mist-wall.png", "an-corner.svg", "an-headpiece.svg", "an-tulip.svg"];
+const SHARE_INLINE_CSS_ASSETS = ["mist-wall.png"];
 const SHARE_PAGE_CSS = `
 body.sharepage { display: block; overflow: auto; height: auto; min-height: 100vh; padding: 26px 18px 40px; }
 .sharepage .session-log { position: static; overflow: visible; padding: 0; max-width: 860px; margin: 0 auto; }
@@ -4397,9 +4323,9 @@ async function shareCSS() {
   for (const f of ["/md-tokens.css", "/style.css"]) {
     css += (await (await fetch(f)).text()) + "\n";
   }
-  // Small theme assets ride along as data URIs (the terminal wallpaper, the
-  // solarpunk ornaments); anything else local would 404 on the share host, so
-  // blank it rather than shipping broken references (riom-lilies is 12 MB).
+  // Small theme assets ride along as data URIs (the wallpaper). Anything else
+  // local would 404 on the share host, so blank it rather than shipping a broken
+  // reference; the size cap below also keeps a huge asset out of the snapshot.
   for (const name of SHARE_INLINE_CSS_ASSETS) {
     if (css.indexOf(name) === -1) continue;
     try {
