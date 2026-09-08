@@ -3081,14 +3081,36 @@ $("#settingsBtn").addEventListener("click", () => {
 const THEMES = [
   { id: "terminal", label: "Terminal", desc: "Flat, sharp terminal — the original MIST look." },
   { id: "solarpunk", label: "Solarpunk", desc: "Warm cream daylight, living greenery, Art Nouveau vines — the opposite of a terminal." },
-  { id: "clawd", label: "Clawd", desc: "Claude Code instead of MIST: warm espresso terminal, crab-coral accent, and Clawd's own spinner verbs." },
+  { id: "clawd", label: "Clawd", desc: "Claude Code instead of MIST: warm espresso terminal, crab-coral accent, and Clawd's own spinner verbs.",
+    brand: { name: "Clawd", logo: "clawd-logo.svg" } },
 ];
+/* Whose console this is. Colors alone don't do it: with the default brand the
+   Clawd theme still wore MIST's wordmark and asked you to "Talk to MIST", which
+   is the one thing the theme exists to change. A theme without `brand` gets the
+   default, so Terminal and Solarpunk are untouched. */
+const DEFAULT_BRAND = { name: "MIST", logo: "mist-logo.png" };
+function applyBrand(b) {
+  const img = $("#logoImg"), txt = $("#logoText"), sub = $(".sub"), input = $("#input");
+  if (sub) sub.textContent = b.name;
+  if (txt) txt.textContent = b.name.toUpperCase().split("").join(" ");
+  if (img) {
+    // The <img> carries an onerror that swaps in the text wordmark. Re-show it on
+    // every brand change, or a single earlier load failure would leave the whole
+    // console permanently wordmark-less no matter which theme you pick next.
+    img.style.display = "";
+    if (txt) txt.style.display = "none";
+    img.alt = b.name;
+    img.src = b.logo;
+  }
+  if (input) input.placeholder = "Talk to " + b.name + "…  (Enter to send · Shift+Enter for newline)";
+}
 function applyTheme(id, persist) {
   const t = THEMES.find((x) => x.id === id) || THEMES[0];
   document.documentElement.dataset.theme = t.id;
-  // The verb list belongs to the theme, so it has to move with it.
+  // The verb list and the wordmark belong to the theme, so they move with it.
   SPINNER_VERBS = verbsForTheme(t.id);
   spinnerIdx = Math.floor(Math.random() * SPINNER_VERBS.length);
+  applyBrand(t.brand || DEFAULT_BRAND);
   try { localStorage.setItem("theme", t.id); } catch (_) {}
   // Also persist server-side so the choice survives a full app close/reopen even
   // if the WebView's localStorage gets wiped. Only on real user changes.

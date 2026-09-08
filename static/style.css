@@ -1713,7 +1713,14 @@ html[data-theme="clawd"] #logs { background: var(--md-sys-color-surface-containe
 html[data-theme="clawd"] {
   --wp-image: url("clawd-wall.svg");
   --wp-opacity: .22; --wp-blend: normal;
-  --wp-size: auto 52%; --wp-repeat: no-repeat; --wp-pos: center 58%;
+  /* Small on purpose. MIST's mark is a smooth glyph and survives being blown up
+     to 70% of the pane; a pixel crab does not — scaled that far its own squares
+     become the size of words and the whole thing reads as brown rectangles
+     behind the text instead of as a crab. Kept near a fifth of the pane it
+     resolves as one small animal sitting low in the transcript, which is the
+     entire idea. The opacity ceiling is per-pixel, so shrinking it does not buy
+     room to raise .22. */
+  --wp-size: auto 21%; --wp-repeat: no-repeat; --wp-pos: center 72%;
 }
 /* a low warm glow, as if the terminal were lit by something off-screen */
 html[data-theme="clawd"] body {
