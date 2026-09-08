@@ -1699,8 +1699,19 @@ def routines_save():
             return jsonify({"ok": False, "error": str(e)}), 400
     rdir = os.path.join(SCHED_DIR, d)
     os.makedirs(rdir, exist_ok=True)
-    fm = "---\nname: %s\ndescription: %s\n---\n\n%s\n" % (
-        json.dumps(name), json.dumps(desc), prompt)
+    # Keep a per-routine `model:` line (run-routine.sh passes it as --model)
+    # across saves: the editor does not know the field, and dropping it would
+    # silently move a routine back to the default model.
+    model = (b.get("model") or "").strip()
+    if not model:
+        try:
+            with open(os.path.join(rdir, "SKILL.md")) as f:
+                m = re.search(r"^model:\s*\"?([^\"\n]+)\"?\s*$", f.read().split("\n---", 2)[0], re.M)
+            model = m.group(1).strip() if m else ""
+        except Exception:
+            model = ""
+    fm = "---\nname: %s\ndescription: %s\n%s---\n\n%s\n" % (
+        json.dumps(name), json.dumps(desc), ("model: %s\n" % model) if model else "", prompt)
     with open(os.path.join(rdir, "SKILL.md"), "w") as f:
         f.write(fm)
     _rt_save_meta(d, cron, enabled)

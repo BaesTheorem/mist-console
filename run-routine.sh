@@ -30,6 +30,15 @@ CLAUDE="$(command -v claude)"
 PROMPT="$(awk 'BEGIN{fm=0} /^---[[:space:]]*$/{fm++; next} fm>=2{print}' "$SK")"
 [ -n "$PROMPT" ] || PROMPT="$(cat "$SK")"
 
+# Optional per-routine model. A `model: <id>` line in the SKILL.md frontmatter
+# (or ROUTINE_MODEL in the environment) is passed as --model; otherwise the
+# CLI's default applies. Added 2026-09-07 so the fantasy-football routines run
+# on Fable as Alex asked, without changing what every other routine gets.
+MODEL="$(awk 'BEGIN{fm=0} /^---[[:space:]]*$/{fm++; next} fm==1 && /^model:/{sub(/^model:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$SK")"
+MODEL="${MODEL:-${ROUTINE_MODEL:-}}"
+MODEL_ARGS=()
+[ -n "$MODEL" ] && MODEL_ARGS=(--model "$MODEL")
+
 # Connector preflight, prepended to every routine.
 #
 # The network gate below runs BEFORE claude launches, so it can't cover DNS
@@ -120,7 +129,7 @@ attempt=0
 while :; do
 	attempt=$((attempt + 1))
 	set +e
-	OUT="$("$CLAUDE" -p --dangerously-skip-permissions "$PROMPT" 2>&1)"
+	OUT="$("$CLAUDE" -p --dangerously-skip-permissions "${MODEL_ARGS[@]}" "$PROMPT" 2>&1)"
 	RC=$?
 	set -e
 	printf '%s\n' "$OUT"
