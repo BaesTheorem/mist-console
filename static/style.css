@@ -414,6 +414,10 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 /* MIST's rhombus, wherever it's drawn as an icon (the thinking spinner today) */
 .mist-ico { width: 8px; height: 15px; display: block; fill: currentColor; }
 .spinner .mist-ico { width: 9px; height: 16px; }
+/* Clawd's mark sits in the same slot but is wide where MIST's is tall, so it
+   gets its own sizing rather than inheriting a portrait box. */
+.clawd-ico { width: 14px; height: 8px; display: block; fill: currentColor; }
+.spinner .clawd-ico { width: 16px; height: 9px; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* markdown body */
@@ -1659,3 +1663,77 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 #shareCard { max-width: calc(100vw - 20px); }
 .share-body { overflow-wrap: anywhere; }
 .share-note code { white-space: normal; word-break: break-all; }
+
+/* ============================================================
+   Clawd theme — Claude Code, not MIST.
+   Warm espresso ground, crab-coral accent, the terminal face,
+   and the same flat/sharp shape scale the Terminal theme uses.
+   This one needs far fewer overrides than Solarpunk did: the
+   base sheet is already a DARK theme, so the variable aliases
+   below carry almost the whole skin and there are no light
+   surfaces to fight. Only the four places the base sheet
+   hardcodes a cool value need touching.
+   Palette provenance and the licensing line on the upstream
+   artwork are in ART-CREDITS.md.
+   ============================================================ */
+html[data-theme="clawd"] {
+  /* legacy vars re-aliased onto the theme's own MD3 scheme (md-tokens.css) */
+  --bg:        var(--md-sys-color-surface);              /* warm espresso */
+  --bg-2:      #2b1c17cc;                                /* translucent panel, warm */
+  --line:      var(--md-sys-color-outline-variant);
+  --line-soft: color-mix(in srgb, var(--md-sys-color-outline-variant) 55%, transparent);
+  --text:      var(--md-sys-color-on-surface);
+  --dim:       var(--md-sys-color-outline);
+  --teal:      var(--md-sys-color-primary);   /* the accent is Clawd's coral now */
+  --violet:    var(--mist-ext-thinking);      /* thinking = the bubble cyan */
+  --user:      var(--mist-ext-user);          /* the human = sparkle gold */
+  --warn:      var(--mist-ext-warn);
+  --err:       var(--md-sys-color-error);
+  --ok:        var(--mist-ext-ok);
+  --gold:      var(--mist-ext-warn);
+  --surface:   var(--md-sys-color-surface-container-low);
+  --surface-2: var(--md-sys-color-surface-container);
+  --hover:     var(--md-sys-color-surface-container-high);
+  --active:    color-mix(in srgb, var(--md-sys-color-primary) 14%, var(--md-sys-color-surface-container-high));
+  --leaf:      var(--md-sys-color-primary);   /* the "working" pulse is coral here */
+  --focus:     0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 32%, transparent);
+}
+/* The conversation canvas: the darkest rung of the ladder, so the transcript
+   sits in a well below the chrome. Terminal drops to flat #000 here; on a warm
+   scheme a true black reads as a cold hole punched in the page, so this keeps
+   the theme's own hue all the way down. */
+html[data-theme="clawd"] #logs { background: var(--md-sys-color-surface-container-lowest); }
+/* Clawd itself as the watermark, in place of MIST's mark. Same lesson the
+   Terminal theme wrote up: the ceiling is not the body text, it is the DIMMEST
+   chrome text in the transcript (outline #aa8980 — timestamps, tool summaries).
+   The asset is therefore already inked in the art's shadow shade rather than
+   its body coral, which buys enough headroom for .22 to leave that text at
+   4.91:1 and the body at 12:1, both past AA. Darken clawd-wall.svg if it ever
+   needs to read stronger; do not raise this number. */
+html[data-theme="clawd"] {
+  --wp-image: url("clawd-wall.svg");
+  --wp-opacity: .22; --wp-blend: normal;
+  --wp-size: auto 52%; --wp-repeat: no-repeat; --wp-pos: center 58%;
+}
+/* a low warm glow, as if the terminal were lit by something off-screen */
+html[data-theme="clawd"] body {
+  background:
+    radial-gradient(900px 520px at 50% 108%, rgba(222,136,109,.10), transparent 62%),
+    var(--bg);
+  background-attachment: fixed;
+}
+/* the spinner's crab pulses in the coral, not the thinking cyan */
+html[data-theme="clawd"] .spinner .sv-glyph { color: var(--teal); }
+/* Errors vs. the accent: --err is a red only 14 degrees of hue off the coral
+   primary, which is fine everywhere it appears WITH chrome (badges, notices and
+   chips all set color and border-color together). The one place it appears bare
+   is the session dot, sitting inches from a coral .working dot on the same rail.
+   A glow separates them by something other than hue. */
+html[data-theme="clawd"] .tab .dot.error { box-shadow: 0 0 6px 1px rgba(255,82,82,.75); }
+/* MIST's rhombus reads as MIST wherever it appears, including the 8px session
+   dots and the recipe-card pager. A crab is illegible at that size, so this
+   theme squares them off instead: a pixel dot belongs to the same vocabulary as
+   the mascot and is honest about what it can show at 8px. */
+html[data-theme="clawd"] .tab .dot,
+html[data-theme="clawd"] .ck-dot { clip-path: none; }
+html[data-theme="clawd"] .tab .dot { width: 9px; height: 9px; flex: 0 0 9px; }

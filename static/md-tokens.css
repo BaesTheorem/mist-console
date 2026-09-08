@@ -6,6 +6,8 @@
    each theme keeps its identity (navy night / warm cream).
      terminal : seed #2bd4d4 (MIST teal), neutrals hue 253 chroma 14
      solarpunk: seed #2F6B3C (forest),    neutrals hue 106 chroma 8
+     clawd    : seed #DE886D (crab coral), neutrals hue 35 chroma 10
+                (SchemeFidelity, so the seed survives as primary-container)
    House rule (option B): MD3 is the engineering foundation; the
    skin is flat/sharp — shape scale 0, no shadows, hairline
    outlines. Solarpunk opts back into soft corners via the same
@@ -163,4 +165,77 @@ html[data-theme="solarpunk"] {
   --md-sys-shape-corner-large: 14px;
   --md-sys-shape-corner-extra-large: 20px;
   --md-sys-shape-corner-full: 999px;
+}
+
+html[data-theme="clawd"] {
+  /* ---- color: clawd (dark) — crab-coral seed, warm charcoal neutrals ----
+     Accents: SchemeFidelity seeded on #DE886D, the exact body-color fill of
+     the clawd-on-desk crab sprites, which is why the seed survives verbatim
+     as primary-container. Neutrals: rebuilt at hue 35 / chroma 10 (surfaces)
+     and chroma 14 (variants), so the ground is a warm espresso rather than
+     the Terminal theme's navy or a dead gray. */
+  --md-sys-color-primary: #ffb59e;
+  --md-sys-color-on-primary: #571e0b;
+  --md-sys-color-primary-container: #de886d;
+  --md-sys-color-on-primary-container: #5e230f;
+  --md-sys-color-secondary: #edbbad;
+  --md-sys-color-on-secondary: #47281f;
+  --md-sys-color-secondary-container: #613e33;
+  --md-sys-color-on-secondary-container: #daaa9c;
+  --md-sys-color-tertiary: #7bd6c9;
+  --md-sys-color-on-tertiary: #003732;
+  --md-sys-color-tertiary-container: #50ada1;
+  --md-sys-color-on-tertiary-container: #003d37;
+  /* Error is NOT the generated role. Fidelity hands back #ffb4ab, a salmon
+     11 degrees of hue from the coral primary at an identical 10.9:1 on the
+     ground — measured, not guessed — so every error would have read as
+     ordinary accent text. This is the crab art's own alarm red instead:
+     deeper, far more saturated, and unmistakably not the primary. */
+  --md-sys-color-error: #ff5252;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-error-container: #7d1a1a;
+  --md-sys-color-on-error-container: #ffdad6;
+  --md-sys-color-background: #1e100c;
+  --md-sys-color-on-background: #f9dcd5;
+  --md-sys-color-surface: #1e100c;
+  --md-sys-color-on-surface: #f9dcd5;
+  --md-sys-color-surface-variant: #5b4139;
+  --md-sys-color-on-surface-variant: #e3beb4;
+  --md-sys-color-outline: #aa8980;
+  --md-sys-color-outline-variant: #5b4139;
+  --md-sys-color-shadow: #000000;
+  --md-sys-color-scrim: #000000;
+  --md-sys-color-inverse-surface: #f9dcd5;
+  --md-sys-color-inverse-on-surface: #3d2c28;
+  --md-sys-color-inverse-primary: #914a33;
+  --md-sys-color-surface-dim: #1e100c;
+  --md-sys-color-surface-bright: #473530;
+  --md-sys-color-surface-container-lowest: #180b07;
+  --md-sys-color-surface-container-low: #271814;
+  --md-sys-color-surface-container: #2b1c17;
+  --md-sys-color-surface-container-high: #372621;
+  --md-sys-color-surface-container-highest: #42312c;
+
+  /* ---- extended brand colors: lifted straight off the crab sprites ----
+     Every value below is a hex that appears in the clawd-on-desk artwork, so
+     the chrome agrees with the mascot. thinking = the cyan of Clawd's thought
+     bubble and yawn-tear; user = the warm gold of its sparkles; warn = the
+     amber of its tool glow. ok has no source (there is no green anywhere in
+     that art), so it borrows the scheme's own seafoam tertiary. */
+  --mist-ext-thinking: #40c4ff;
+  --mist-ext-user:     #ffe066;
+  --mist-ext-warn:     #ffb000;
+  --mist-ext-ok:       #7bd6c9;
+
+  /* shape: flat/sharp, the house default — Claude Code is a terminal app */
+  --md-sys-shape-corner-none: 0px;
+  --md-sys-shape-corner-extra-small: 0px;
+  --md-sys-shape-corner-small: 0px;
+  --md-sys-shape-corner-medium: 0px;
+  --md-sys-shape-corner-large: 0px;
+  --md-sys-shape-corner-extra-large: 0px;
+  --md-sys-shape-corner-full: 0px;
+
+  /* the terminal face, because that is where Claude Code actually lives */
+  --mist-font-body: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
