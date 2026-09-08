@@ -39,6 +39,21 @@ MODEL="${MODEL:-${ROUTINE_MODEL:-}}"
 MODEL_ARGS=()
 [ -n "$MODEL" ] && MODEL_ARGS=(--model "$MODEL")
 
+# Fallback model, used only when the chosen model is out of usage credits.
+# A `fallback_model: <id>` line in the frontmatter overrides it; so does
+# ROUTINE_FALLBACK_MODEL. Set `fallback_model: none` to opt a routine out and
+# let it fail instead of running on a different model.
+#
+# Added 2026-09-08, after fantasy-lineup and fantasy-tuesday both died the same
+# evening on "You're out of usage credits" while pointed at Fable. Credit
+# exhaustion is per-model, the CLI's own message says "Switch to another
+# model", and a routine that does not run at all is strictly worse than one
+# that runs on Opus. The retry-with-backoff path could never fix this: waiting
+# 30 seconds does not refill a credit balance.
+FALLBACK_MODEL="$(awk 'BEGIN{fm=0} /^---[[:space:]]*$/{fm++; next} fm==1 && /^fallback_model:/{sub(/^fallback_model:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$SK")"
+FALLBACK_MODEL="${FALLBACK_MODEL:-${ROUTINE_FALLBACK_MODEL:-claude-opus-5}}"
+[ "$FALLBACK_MODEL" = "none" ] && FALLBACK_MODEL=""
+
 # Connector preflight, prepended to every routine.
 #
 # The network gate below runs BEFORE claude launches, so it can't cover DNS
@@ -125,6 +140,10 @@ done
 #     leave its per-day marker unstamped, letting the next fire re-attempt.
 MAX_ATTEMPTS="${ROUTINE_MAX_ATTEMPTS:-3}"
 TRANSIENT_RE='connection closed|failedtoopensocket|unable to connect|session limit|rate limit|overloaded|timed out|econnreset|api error'
+# Credit exhaustion on the selected model. Deliberately NOT in TRANSIENT_RE:
+# retrying the same model is pointless, and the fix is a different model.
+CREDITS_RE='out of usage credits|usage credits|credit balance is too low|insufficient credits'
+FELL_BACK=0
 attempt=0
 while :; do
 	attempt=$((attempt + 1))
@@ -158,6 +177,38 @@ while :; do
 	if [ "$RC" -eq 78 ] || printf '%s' "$OUT" | grep -qiE 'not logged in|invalid api key|authentication_error|please run .*login'; then
 		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — genuine config/auth failure (rc=$RC); leaving FAIL flag for investigation."
 		exit "$RC"
+	fi
+
+	# Out of usage credits on the selected model: switch models, don't wait.
+	# Checked before the transient block because the two want opposite
+	# handling. Applies to routines on the CLI default too: the worst case
+	# there is one wasted re-run when the default already is the fallback.
+	#
+	# Sits below the rc=0 early exit on purpose. The CLI exits 1 on credit
+	# exhaustion (verified against claude -p on 2026-09-08), so nothing is
+	# missed, and keeping it here means a routine that merely WRITES the
+	# phrase in its output can never trigger a duplicate run.
+	if printf '%s' "$OUT" | grep -qiE "$CREDITS_RE"; then
+		if [ "$FELL_BACK" -eq 0 ] && [ -n "$FALLBACK_MODEL" ] && [ "$MODEL" != "$FALLBACK_MODEL" ]; then
+			echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: out of usage credits on ${MODEL:-the default model}; falling back to $FALLBACK_MODEL and re-running."
+			MODEL="$FALLBACK_MODEL"
+			MODEL_ARGS=(--model "$FALLBACK_MODEL")
+			FELL_BACK=1
+			# The model switch is not a retry of the same thing, so it does not
+			# spend one of the transient attempts.
+			attempt=$((attempt - 1))
+			continue
+		fi
+		# Nothing left to fall back to. Credits refill on their own, so this is
+		# transient rather than broken, but it kills every routine until it
+		# clears, which is worth a banner.
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: out of usage credits on $MODEL with no fallback left (rc=$RC); incomplete rather than failed."
+		NOTIFY="$HOME/Documents/Exobrain harness/mist-voice/bin/mist-notify"
+		[ -x "$NOTIFY" ] && "$NOTIFY" \
+			"$DIR could not run: out of usage credits on $MODEL and on the fallback." \
+			"MIST routine blocked" Basso "https://claude.ai/settings/usage" || true
+		[ "${ROUTINE_SIGNAL_TRANSIENT:-0}" = "1" ] && exit 75
+		exit 0
 	fi
 
 	# Known-transient API/network/usage failure — retry before giving up.
