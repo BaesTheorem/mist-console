@@ -133,7 +133,23 @@ def _save_textsize(pct):
         pass
 
 
+_meta_dirty = threading.Event()
+_meta_io_lock = threading.Lock()
+
+
 def _save_meta():
+    """Schedule a write of sessions.json. The write itself (json + fsync) is
+    50-130ms with 1200 chats, and it used to run inline on every request that
+    touched a chat (create, retitle, pin, model switch), so the new-chat POST
+    paid it before it could answer. Now callers only flip a flag; the saver
+    thread coalesces a burst of changes into one write a quarter second later."""
+    _meta_dirty.set()
+
+
+def _save_meta_now():
+    # Snapshot under _meta_lock (fast, memory only), then write under a separate
+    # I/O lock: _new_session also takes _meta_lock, and holding it across an
+    # fsync stalled chat creation behind whichever save happened to be running.
     with _meta_lock:
         data = []
         for sid in _order:
@@ -147,13 +163,14 @@ def _save_meta():
                          "effort": s.effort,
                          "claude_session_id": s.claude_session_id,
                          "import_path": s.import_path, "cwd": s.cwd})
-        # Atomic write (temp + fsync + os.replace): open(...,"w") truncates the
-        # file to zero before writing, so a concurrent reader — another desktop.py
-        # process, or _load_meta() on a restart — could catch it empty/half-written,
-        # hit its except branch, and load ZERO sessions (every chat vanishes from
-        # the sidebar until the next clean save). os.replace is atomic on the same
-        # filesystem, so a reader always sees a complete, valid file. The temp name
-        # is PID-suffixed so two processes never stomp the same scratch file.
+    # Atomic write (temp + fsync + os.replace): open(...,"w") truncates the
+    # file to zero before writing, so a concurrent reader — another desktop.py
+    # process, or _load_meta() on a restart — could catch it empty/half-written,
+    # hit its except branch, and load ZERO sessions (every chat vanishes from
+    # the sidebar until the next clean save). os.replace is atomic on the same
+    # filesystem, so a reader always sees a complete, valid file. The temp name
+    # is PID-suffixed so two processes never stomp the same scratch file.
+    with _meta_io_lock:
         try:
             tmp = f"{SESSIONS_META}.tmp.{os.getpid()}"
             with open(tmp, "w") as f:
@@ -2021,9 +2038,15 @@ def _import_existing():
 
 
 def _periodic_save():
+    """The only writer of sessions.json. Wakes when a change is flagged, waits a
+    beat so a burst (create + init + retitle) becomes one write, and otherwise
+    writes every 10s regardless: last_activity moves on every send and result
+    without flagging, and the 10s cadence is what persists it."""
     while True:
-        time.sleep(10)
-        _save_meta()
+        if _meta_dirty.wait(10):
+            time.sleep(0.25)
+        _meta_dirty.clear()   # before the snapshot: a change landing mid-write re-flags
+        _save_meta_now()
 
 
 def _reaper():
