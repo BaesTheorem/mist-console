@@ -277,9 +277,25 @@ def _new_session():
         # work, not a new global default, so it deliberately does not carry over.
         # Reopening an existing chat still restores its own saved mode.
         _sessions[sid] = ClaudeSession(id=sid, model=_new_chat_model() or None, cwd=HARNESS,
-                                       permission_mode=DEFAULT_PERMISSION_MODE)
+                                       permission_mode=DEFAULT_PERMISSION_MODE,
+                                       autostart=False)
         _order.append(sid)
     _save_meta()
+    # Warm the backend a beat AFTER the click, not on it. Forking claude spawns
+    # the CLI plus its MCP servers (~1s of CPU across 8 processes), and doing
+    # that synchronously with the POST put the burst right under the WebView's
+    # new-chat paint, so the button felt stuck. The pre-spawn is still worth
+    # having (MCP connects while you type, so the first reply starts sooner);
+    # it just waits until the UI has settled. send() calls ensure_started
+    # itself, so a message typed before the timer fires is not delayed, and
+    # ensure_started is idempotent, so the timer firing afterwards is a no-op.
+    # The membership check keeps a chat closed within the window from being
+    # resurrected as an orphan backend.
+    def _warm():
+        s = _sessions.get(sid)
+        if s is not None:
+            s.ensure_started()
+    threading.Timer(1.5, _warm).start()
     return sid
 
 

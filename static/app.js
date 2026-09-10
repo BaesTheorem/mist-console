@@ -2045,16 +2045,41 @@ let renaming = false;   // true while a tab rename is in progress — don't rebu
 let _tabsSig = "";      // last-rendered rail signature — skip identical rebuilds
 // Date buckets for the unpinned rail. The label doubles as the collapse key, so
 // "yesterday" stays collapsed as chats age into and out of it.
-function railBucket(ts) {
+function railBucket(ts, today) {
   const d = new Date(ts), now = new Date();
   const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((day(now) - day(d)) / 86400000);
+  const days = Math.round(((today == null ? day(now) : today) - day(d)) / 86400000);
   if (days <= 0) return "today";
   if (days === 1) return "yesterday";
   if (days < 7) return "this week";
   if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) return "this month";
   return d.toLocaleString(undefined, { month: "long", year: "numeric" }).toLowerCase();
 }
+function todayKey() {
+  const n = new Date();
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+}
+// Bucket memoized on the session. toLocaleString is the slow part, and the rail
+// asked for it three times per chat per rebuild (signature, counts, rows): over
+// a thousand chats that was ~30ms of date formatting on every switch.
+function railKey(s, today) {
+  if (s.pinned) return "pinned";
+  if (s._bucketTs !== s.lastActivity || s._bucketDay !== today) {
+    s._bucketTs = s.lastActivity;
+    s._bucketDay = today;
+    s._bucket = railBucket(s.lastActivity, today);
+  }
+  return s._bucket;
+}
+// The rail renders the newest RAIL_PAGE unpinned chats and folds the rest behind
+// one "older chats" row. Every row costs layout on every rebuild, and with 1200+
+// chats a full rebuild (new chat, retitle) took a third of a second in Chromium
+// and longer in WebKit. The last couple hundred is what the window ever scrolls
+// to; search covers the tail. Clicking the row pages more in, and the active
+// chat is always rendered wherever it sorts.
+const RAIL_PAGE = 200;
+let _railLimit = RAIL_PAGE;
+let _tabsActive = null;   // the active id the rail was last rendered for
 const COLLAPSED_LS = "mist.railCollapsed";
 let collapsedSections = new Set(JSON.parse(localStorage.getItem(COLLAPSED_LS) || "[]"));
 function toggleSection(label) {
@@ -2066,27 +2091,52 @@ function toggleSection(label) {
 function renderTabs() {
   if (renaming || _draggingPins) return;   // the 1.5s refresh must not clobber an edit box or an in-progress drag
   const list = sortedSessions();
+  const today = todayKey();
+  // Structural signature: everything the rail shows EXCEPT which tab is active.
   // Rebuilding tears down every node (hover states flicker, clicks that straddle
-  // a rebuild die, and hundreds of tabs churn every 1.5s). Only rebuild when
-  // something the rail shows actually changed. The bucket is in the signature so
-  // the day rollover (and a collapse toggle) forces a rebuild.
+  // a rebuild die, and hundreds of tabs churn every 1.5s), so it only happens
+  // when something structural changed. The bucket is in the signature so the
+  // day rollover (and a collapse toggle) forces a rebuild. The active tab used
+  // to be in it too, so every chat switch rebuilt every row; a plain switch now
+  // just moves the .active class.
   const sig = list.map((s) =>
-    s.id + "|" + s.title + "|" + (s.pinned ? "pinned" : railBucket(s.lastActivity)) + "|" + (s.id === activeId ? 1 : 0)
+    s.id + "|" + s.title + "|" + railKey(s, today)
     + "|" + (s.bgActiveCount() > 0 ? "bg" : s.statusState)).join("\n")
-    + "\n#" + [...collapsedSections].join(",");
-  if (sig === _tabsSig) return;
+    + "\n#" + [...collapsedSections].join(",") + "#" + _railLimit;
+  if (sig === _tabsSig) {
+    if (activeId === _tabsActive) return;
+    // Fast path: only the active chat changed. Both tabs must be ordinary rows.
+    // A row that is rendered ONLY because it is active (inside a collapsed
+    // section, or past the page limit) has to appear or vanish, and a target
+    // that is not in the DOM at all has to be built, so those take the rebuild.
+    const cur = tabsEl.querySelector('.tab[data-sid="' + CSS.escape(activeId) + '"]');
+    const prev = _tabsActive && tabsEl.querySelector('.tab[data-sid="' + CSS.escape(_tabsActive) + '"]');
+    if (cur && !cur.dataset.onlyActive && !(prev && prev.dataset.onlyActive)) {
+      if (prev) { prev.classList.remove("active"); prev.setAttribute("aria-selected", "false"); }
+      cur.classList.add("active");
+      cur.setAttribute("aria-selected", "true");
+      _tabsActive = activeId;
+      return;
+    }
+  }
   _tabsSig = sig;
-  tabsEl.innerHTML = "";
+  _tabsActive = activeId;
   const counts = {};   // chats per section, shown on collapsed headers
   list.forEach((s) => {
-    const k = s.pinned ? "pinned" : railBucket(s.lastActivity);
+    const k = railKey(s, today);
     counts[k] = (counts[k] || 0) + 1;
   });
+  const frag = document.createDocumentFragment();   // one insert, one layout
   let section = null;   // which header we've emitted so far
+  let shown = 0;        // unpinned rows rendered so far (the page limit counts these)
+  let folded = 0;       // unpinned chats past the limit, summed into the "older" row
   list.forEach((s) => {
-    const want = s.pinned ? "pinned" : railBucket(s.lastActivity);
-    if (want !== section) {
-      const closed = collapsedSections.has(want);
+    const want = railKey(s, today);
+    const isActive = s.id === activeId;
+    const closed = collapsedSections.has(want);
+    const past = !s.pinned && shown >= _railLimit;
+    if (past && !isActive) { folded++; return; }
+    if (want !== section && !past) {
       const h = el("div", "tabsection collapsible" + (s.pinned ? " pinned" : "") + (closed ? " collapsed" : ""),
         '<span class="msi sec-chev">expand_more</span>'
         + (s.pinned ? (PIN_ICON + " pinned") : esc(want))
@@ -2099,18 +2149,20 @@ function renderTabs() {
       h.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleSection(want); }
       });
-      tabsEl.appendChild(h);
+      frag.appendChild(h);
       section = want;
     }
-    // A collapsed section hides its chats, except the one you're looking at —
+    // A collapsed section hides its chats, except the one you're looking at:
     // the active tab stays visible so the rail never loses your place.
-    if (collapsedSections.has(want) && s.id !== activeId) return;
-    const t = el("div", "tab" + (s.id === activeId ? " active" : "") + (s.pinned ? " pinned" : ""));
+    if (closed && !isActive) return;
+    if (!s.pinned && !past) shown++;
+    const t = el("div", "tab" + (isActive ? " active" : "") + (s.pinned ? " pinned" : ""));
     t.dataset.sid = s.id;
+    if (isActive && (past || closed)) t.dataset.onlyActive = "1";   // see the fast path above
     // keyboard access: tabs are focusable and Enter/Space switches to them
     t.tabIndex = 0;
     t.setAttribute("role", "tab");
-    t.setAttribute("aria-selected", s.id === activeId ? "true" : "false");
+    t.setAttribute("aria-selected", isActive ? "true" : "false");
     t.setAttribute("aria-label", s.title);
     t.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); switchTo(s.id); }
@@ -2137,8 +2189,24 @@ function renderTabs() {
     t.addEventListener("contextmenu", (ev) => { ev.preventDefault(); startRename(s, t); });
     t.addEventListener("dblclick", (ev) => { ev.preventDefault(); startRename(s, t); });
     if (s.pinned) wirePinDrag(t, s.id);   // pinned chats are drag-sortable
-    tabsEl.appendChild(t);
+    frag.appendChild(t);
   });
+  if (folded) {
+    const more = el("div", "tab tabmore",
+      '<span class="msi">expand_more</span><span class="ttitle">'
+      + folded + " older chat" + (folded === 1 ? "" : "s") + "</span>");
+    more.tabIndex = 0;
+    more.setAttribute("role", "button");
+    more.setAttribute("aria-label", "Show " + folded + " older chats");
+    const page = () => { _railLimit += RAIL_PAGE; _tabsSig = ""; renderTabs(); };
+    more.addEventListener("click", page);
+    more.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); page(); }
+    });
+    frag.appendChild(more);
+  }
+  tabsEl.innerHTML = "";
+  tabsEl.appendChild(frag);
 }
 let _suppressTabClick = false;   // set after a drag so the trailing click doesn't switch tabs
 let _draggingPins = false;       // true mid-drag so the periodic refresh won't rebuild the rail
