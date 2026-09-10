@@ -312,7 +312,9 @@ def _new_session():
         s = _sessions.get(sid)
         if s is not None:
             s.ensure_started()
-    threading.Timer(1.5, _warm).start()
+    warm = threading.Timer(1.5, _warm)
+    warm.daemon = True   # never hold a server shutdown for a warm-up
+    warm.start()
     return sid
 
 
