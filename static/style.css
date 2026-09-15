@@ -1186,7 +1186,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 }
 /* composer: icons pin to the bottom as the textarea grows */
 #composer { align-items: flex-end; }
-#scratchBtn, #fileBtn {
+#shareBtn, #scratchBtn, #fileBtn {
   --md-icon-button-state-layer-width: 38px;
   --md-icon-button-state-layer-height: 38px;
   --md-icon-button-icon-size: 20px;
@@ -1243,7 +1243,9 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 
 /* ---- share card (share-this-chat panel; snapshot page styles live in app.js) */
 #shareCard {
-  position: fixed; top: 44px; left: auto; right: 14px; width: 330px; z-index: 30;
+  /* anchorCard() sets left/top inline against the composer share button; these
+     are only the pre-anchor defaults */
+  position: fixed; top: 44px; left: 14px; right: auto; width: 330px; z-index: 30;
   background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line);
 }
 #shareCard[hidden] { display: none; }

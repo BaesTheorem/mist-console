@@ -2531,7 +2531,6 @@ function toggleNotes() {
   if (p.hidden) openNotes(); else p.hidden = true;
 }
 $("#scratchBtn").addEventListener("click", toggleNotes);
-$("#notesBtn").addEventListener("click", toggleNotes);
 $("#notesClose").addEventListener("click", () => { $("#notesPanel").hidden = true; });
 $("#notesAdd").addEventListener("click", addNote);
 $("#notesInput").addEventListener("input", () => {
@@ -3591,7 +3590,14 @@ function anchorCard(card, trigger) {
   const r = trigger.getBoundingClientRect();
   const left = Math.max(8, Math.min(r.left, vw - cr.width - 8));
   card.style.left = (left - cr.left) / zr + "px";
-  card.style.top = (r.bottom + 4 - cr.top) / zr + "px";
+  // Under the trigger by default. The share button lives in the composer at the
+  // bottom of the window, where "under" is off-screen, so flip above it when the
+  // card doesn't fit below and does fit above. Same rect-unit ruler as vw.
+  const vh = window.innerHeight * zr / ze;
+  const below = r.bottom + 4;
+  const above = r.top - 4 - cr.height;
+  const top = (below + cr.height > vh - 8 && above >= 8) ? above : below;
+  card.style.top = (top - cr.top) / zr + "px";
   card.style.right = "auto";
   // Feedback pass against the same vw ruler: measure the RESULT and pull the
   // card back inside when the right edge still overflows.
