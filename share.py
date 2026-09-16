@@ -386,15 +386,24 @@ def _og_head(title, summary, page_url, card_url):
 
 
 _HEAD_RE = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
+_CHARSET_RE = re.compile(r"<meta\s+charset=[^>]*>", re.IGNORECASE)
 
 
 def _with_og(html, title, summary, page_url, card_url):
-    """Splice the preview tags in right after <head>. A snapshot without a
-    <head> (shouldn't happen) is stored untouched rather than mangled."""
+    """Splice the preview tags into <head>, after the charset declaration.
+
+    Order matters: the spec wants charset inside the first 1024 bytes, and this
+    block is about 1 kB on its own, so injecting ahead of it would push the
+    declaration out of range and leave a parser guessing the encoding on every
+    curly quote in a title. A snapshot without a <head> (shouldn't happen) is
+    stored untouched rather than mangled."""
     m = _HEAD_RE.search(html)
     if not m:
         return html
     i = m.end()
+    charset = _CHARSET_RE.match(html, i) or _CHARSET_RE.search(html, i, i + 200)
+    if charset:
+        i = charset.end()
     return html[:i] + _og_head(title, summary, page_url, card_url) + html[i:]
 
 
