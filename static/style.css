@@ -1273,3 +1273,9 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 #shareCard { max-width: calc(100vw - 20px); }
 .share-body { overflow-wrap: anywhere; }
 .share-note code { white-space: normal; word-break: break-all; }
+
+/* Share panel: the link-preview card as recipients will see it. */
+.share-preview { border: 1px solid var(--line); margin: 8px 0 2px; }
+.share-preview img { display: block; width: 100%; height: auto; }
+.share-preview-cap { color: var(--dim); font-size: 11px; padding: 6px 8px;
+  border-top: 1px solid var(--line); }

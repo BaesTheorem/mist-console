@@ -4465,18 +4465,20 @@ async function buildShareSnapshot(s) {
   const modelId = s.model || (typeof lastInit !== "undefined" && lastInit && lastInit.model) || "";
   const mEntry = modelId && typeof MODELS !== "undefined" ? MODELS.find((m) => m.id === modelId) : null;
   const modelLabel = (mEntry && mEntry.label) || modelId;
-  const subLine = ["a conversation with MIST",
-                   modelLabel ? "model: " + modelLabel : "",
-                   "thinking: " + (s.effort || "default"),
-                   "shared " + when].filter(Boolean).join(" · ");
-  let logo = "";
+  // The page header can afford the lead-in; the card's footer line cannot, and
+  // the date is the part that gets cut when it doesn't fit.
+  const provenance = [modelLabel ? "model: " + modelLabel : "",
+                      "thinking: " + (s.effort || "default"),
+                      "shared " + when].filter(Boolean).join(" · ");
+  const subLine = "a conversation with MIST · " + provenance;
+  let logo = "", logoSrc = "";
   try {
-    logo = '<img class="share-logo" src="' + (await shareFetchDataURL("/mist-logo.png", 300 * 1024)) + '" alt="MIST">';
+    logoSrc = await shareFetchDataURL("/mist-logo.png", 300 * 1024);
+    logo = '<img class="share-logo" src="' + logoSrc + '" alt="MIST">';
   } catch (_) { /* header just goes logoless */ }
-  return "<!DOCTYPE html>" +
+  const html = "<!DOCTYPE html>" +
     '<html lang="en" data-theme="' + esc(theme) + '"><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-    '<meta name="robots" content="noindex, nofollow">' +
     "<title>" + esc(title) + " · MIST Console</title>" +
     "<style>" + css + "\n" + SHARE_PAGE_CSS + "</style></head>" +
     '<body class="sharepage"><header class="share-head">' + logo +
@@ -4485,6 +4487,118 @@ async function buildShareSnapshot(s) {
     '<main class="session-log">' + clone.innerHTML + "</main>" +
     '<footer class="share-foot">read-only snapshot shared from the MIST Console · ' +
     "the live conversation may have moved on</footer></body></html>";
+  return { html, title, subLine, cardSub: provenance, logoDataURL: logoSrc };
+}
+
+// ---- link previews ---------------------------------------------------------
+// Pasted into Discord/Slack/iMessage, a share link should say what the chat is
+// rather than showing a bare URL. The description is the opening prompt (what
+// the reader is about to walk into) and the card is drawn here, in the live
+// page, so it inherits the theme the chat was actually read in.
+
+function shareSummary(s) {
+  const first = s.logEl.querySelector(".msg.user .body") || s.logEl.querySelector(".msg .body");
+  const text = (first ? first.textContent : "").replace(/\s+/g, " ").trim();
+  return text.slice(0, 400);
+}
+
+function shareCssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+// Greedy wrap, hard-capped at maxLines with an ellipsis on the last one.
+function shareWrap(ctx, text, maxWidth, maxLines) {
+  const words = (text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const next = line ? line + " " + w : w;
+    if (ctx.measureText(next).width <= maxWidth || !line) { line = next; continue; }
+    lines.push(line);
+    line = w;
+    if (lines.length === maxLines) break;
+  }
+  if (lines.length < maxLines && line) lines.push(line);
+  if (lines.length === maxLines && words.length) {
+    let last = lines[maxLines - 1];
+    const consumed = lines.join(" ").split(/\s+/).length;
+    if (consumed < words.length) {
+      while (last && ctx.measureText(last + "…").width > maxWidth) {
+        last = last.replace(/\s*\S$/, "");
+      }
+      lines[maxLines - 1] = last + "…";
+    }
+  }
+  return lines;
+}
+
+async function shareCardPNG(title, subLine, snippet, logoDataURL) {
+  try {
+    const c = document.createElement("canvas");
+    c.width = 1200; c.height = 630;
+    const ctx = c.getContext("2d");
+    if (!ctx) return null;
+    try { await document.fonts.ready; } catch (_) {}
+
+    const bg = shareCssVar("--bg", "#0b1620");
+    const teal = shareCssVar("--teal", "#7fd6c8");
+    const text = shareCssVar("--text", "#dfe7ea");
+    const dim = shareCssVar("--dim", "#7e8f96");
+    const line = shareCssVar("--line", "#2a3b44");
+    const font = getComputedStyle(document.body).fontFamily ||
+                 "ui-monospace, SFMono-Regular, monospace";
+
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, 1200, 630);
+    // Flat and sharp: one accent edge and a hairline, no rounding, no shadow.
+    ctx.fillStyle = teal;
+    ctx.fillRect(0, 0, 10, 630);
+
+    const L = 84, R = 1116;
+    let y = 96;
+    let logoW = 0;
+    if (logoDataURL) {
+      try {
+        const img = new Image();
+        img.src = logoDataURL;
+        await img.decode();
+        const h = 54, w = Math.round(h * (img.width / img.height || 1));
+        ctx.drawImage(img, L, y - 40, w, h);
+        logoW = w + 18;
+      } catch (_) { /* wordmark alone is fine */ }
+    }
+    ctx.fillStyle = teal;
+    ctx.font = "700 26px " + font;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("MIST CONSOLE", L + logoW, y);
+
+    y = 236;
+    ctx.fillStyle = text;
+    ctx.font = "700 56px " + font;
+    for (const ln of shareWrap(ctx, title, R - L, 2)) {
+      ctx.fillText(ln, L, y);
+      y += 70;
+    }
+
+    y += 14;
+    ctx.fillStyle = dim;
+    ctx.font = "400 28px " + font;
+    for (const ln of shareWrap(ctx, snippet, R - L, 3)) {
+      ctx.fillText(ln, L, y);
+      y += 40;
+    }
+
+    ctx.fillStyle = line;
+    ctx.fillRect(L, 522, R - L, 1);
+    ctx.fillStyle = dim;
+    ctx.font = "400 24px " + font;
+    ctx.fillText(shareWrap(ctx, subLine, R - L, 1)[0] || "", L, 566);
+
+    return c.toDataURL("image/png");
+  } catch (_) {
+    return null;   // no card just means the embed falls back to title + text
+  }
 }
 
 function shareCopyText(text) {
@@ -4532,6 +4646,8 @@ async function renderShareCard() {
     note("share-note",
       "Publishes a <b>read-only snapshot</b> of this whole conversation at an unguessable link — " +
       "anyone who has the link can read it. Audio/video stays out; images ride along. " +
+      "Pasting the link anywhere that unfurls shows the chat title, its opening prompt " +
+      "and a themed card. " +
       "Updating later reuses the same link; you can stop sharing any time.");
     if (!st.cloud || !st.cloud.has_creds) {
       note("share-note", "No Cloudflare share credentials yet, so the link will be <b>local-only</b> " +
@@ -4559,6 +4675,19 @@ async function renderShareCard() {
     note("share-note err", "Not published to the public link yet — this URL only works on this Mac." +
       (why ? "<br>" + esc(why) : ""));
   }
+  // What a recipient actually sees when the link unfurls.
+  if (st.local_card_url) {
+    const prev = el("div", "share-preview");
+    const img = document.createElement("img");
+    img.src = st.local_card_url + "?t=" + (st.updated || 0);
+    img.alt = "link preview card";
+    prev.appendChild(img);
+    const cap = el("div", "share-preview-cap",
+      esc(st.summary || "") || "how this link looks when pasted");
+    prev.appendChild(cap);
+    body.appendChild(prev);
+  }
+
   const upd = st.updated ? new Date(st.updated * 1000).toLocaleString() : "";
   if (upd) note("share-note", "snapshot from " + esc(upd) + " · new messages aren’t shared until you update");
 
@@ -4580,11 +4709,14 @@ async function doShare(s) {
   const body = $("#shareBody");
   body.innerHTML = '<div class="share-note">capturing snapshot…</div>';
   try {
-    const html = await buildShareSnapshot(s);
+    const snap = await buildShareSnapshot(s);
+    const summary = shareSummary(s);
+    body.innerHTML = '<div class="share-note">drawing the link preview…</div>';
+    const card = await shareCardPNG(snap.title, snap.cardSub, summary, snap.logoDataURL);
     body.innerHTML = '<div class="share-note">publishing…</div>';
     const r = await fetch("/sessions/" + s.id + "/share", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ html, title: s.title || "" }),
+      body: JSON.stringify({ html: snap.html, title: s.title || "", summary, card }),
     });
     const j = await r.json();
     _shareBusy = false;

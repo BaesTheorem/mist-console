@@ -213,14 +213,27 @@ characters.
   scripts-forbidden CSP.
 - **Publishing**: a read-only Cloudflare Worker (`mist-share`) serving the
   snapshot out of Workers KV at
-  `https://mist-share.<subdomain>.workers.dev/s/<token>`, `noindex` +
-  `no-store` so revocation is instant. The Worker accepts only GET; publish and
-  revoke go from `share.py` straight to the KV REST API. Deploy is lazy and
+  `https://mist-share.<subdomain>.workers.dev/s/<token>`, plus the preview card
+  at `/s/<token>/card.png`. `noindex` rides in the `X-Robots-Tag` header rather
+  than a `<meta>` so search engines stay out while unfurlers still build a
+  preview; `no-store` on the HTML keeps revocation instant. The Worker accepts
+  only GET/HEAD; publish and revoke go from `share.py` straight to the KV REST
+  API. Deploy is lazy and
   idempotent (first publish, or when the embedded worker source changes) and
   needs a token with **Workers Scripts:Edit + Workers KV Storage:Edit** saved
   as `CF_SHARE_API_TOKEN` in the harness `.env` (the mist-image token is
   Workers AI-only). Without it, sharing still works local-only and the share
   panel says exactly what to mint.
+- **Link previews**: every snapshot carries Open Graph + Twitter-card tags, so
+  the link unfurls in Discord, Slack, iMessage and the rest with the chat's
+  title, its opening prompt as the description, and a 1200x630 card. The card
+  is drawn in the live page (`shareCardPNG` in app.js) on a canvas that reads
+  the current theme's CSS variables, so it matches the skin the chat was read
+  in; it's posted as base64 alongside the HTML and stored at
+  `data/shares/<token>.png`. `og:url`/`og:image` are absolute or absent, which
+  means the Worker is deployed *before* the snapshot bytes are assembled. A
+  local-only share still gets title and description tags. The share panel shows
+  the card back to you, so you see what a recipient will see before you paste.
 - **UI states**: create (with a plain-language "anyone with the link" warning),
   manage (copy / open / update snapshot / stop sharing), and
   unpublished-with-reason. New messages are never auto-published; "update

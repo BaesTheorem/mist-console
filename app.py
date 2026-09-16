@@ -1097,7 +1097,9 @@ def share_create(sid):
     if not html.strip():
         return jsonify({"ok": False, "error": "empty snapshot"}), 400
     try:
-        rec = share.create_or_update(sid, body.get("title") or s.title or "", html)
+        rec = share.create_or_update(
+            sid, body.get("title") or s.title or "", html,
+            summary=body.get("summary") or "", card_png=body.get("card") or None)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 413
     return jsonify({"ok": True, **rec})
@@ -1127,6 +1129,19 @@ def share_view(token):
         "Content-Security-Policy":
             "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; "
             "media-src data:; base-uri 'none'; form-action 'none'",
+    })
+
+
+@app.route("/share/<token>/card.png")
+def share_card(token):
+    """The link-preview card. Same bytes the public /s/<token>/card.png serves;
+    also what the share panel shows as a thumbnail."""
+    png = share.read_card(token)
+    if png is None:
+        abort(404)
+    return Response(png, mimetype="image/png", headers={
+        "X-Robots-Tag": "noindex, nofollow",
+        "Cache-Control": "no-store",
     })
 
 
