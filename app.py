@@ -1379,7 +1379,21 @@ def usage():
         pct_age = age
         resets_at = x.get("resets_at")
         status = None
+        now = time.time()
+        if resets_at and resets_at < now:
+            # The CLI cache's window rolled too: no phantom %, no dead reset time.
+            pct, pct_source, resets_at = None, None, None
+        # Every source describes ONE window, identified by its reset time. Once
+        # that reset has passed the record is about a dead window, whatever its
+        # age: the CLI only emits seven_day events at thresholds, so after a
+        # weekly roll the last event (and a probe that keeps 429ing) would
+        # otherwise pin last week's number for days.
         lv = live.get(k) or {}
+        if lv.get("resets_at") and lv["resets_at"] < now:
+            lv = {}
+        uv = util.get(k) or {}
+        if uv.get("resets_at") and uv["resets_at"] < now:
+            uv = {}
         lr = lv.get("resets_at")
         if lr:
             # A live reset time LATER than the cached one means the window has
@@ -1388,18 +1402,22 @@ def usage():
                 pct, pct_source = None, None
             resets_at = lr
             status = lv.get("status")
-        # The probed % is authoritative and live — it overrides the stale cache %.
-        uv = util.get(k) or {}
-        u = uv.get("utilization")
-        if u is not None:
+        # Two live % sources, the account-API probe and the utilization a
+        # threshold rate_limit_event carries; the NEWER one wins over the cache.
+        cands = [(uv.get("ts", 0), uv.get("utilization")),
+                 (lv.get("ts", 0), lv.get("utilization"))]
+        cands = [c for c in cands if c[1] is not None]
+        if cands:
+            ts, u = max(cands)
             pct = round(u * 100)
             pct_source = "probe"
-            pct_age = int(time.time() - uv.get("ts", time.time()))
-            if uv.get("resets_at"):
-                resets_at = uv["resets_at"]
-            status = uv.get("status") or status
+            pct_age = int(now - ts)
+        if uv.get("resets_at"):
+            resets_at = uv["resets_at"]
+        status = uv.get("status") or status
         return {"used_percentage": pct, "resets_at": resets_at, "status": status,
-                "pct_source": pct_source, "pct_age_seconds": pct_age}
+                "pct_source": pct_source,
+                "pct_age_seconds": pct_age if pct is not None else None}
 
     return jsonify({"available": bool(rl or live or util),
                     "five_hour": lim("five_hour"), "seven_day": lim("seven_day"),

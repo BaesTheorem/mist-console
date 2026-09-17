@@ -2691,8 +2691,20 @@ function _renderRateBadge(sel, label, key, fullName) {
   // nothing. Drop the whole cache entry once its resets_at passes.
   let cache = _usageCache ? _usageCache[key] : null;
   if (cache && cache.resets_at && cache.resets_at * 1000 < Date.now()) cache = null;
-  const live = _liveRate[key];
-  const pct = (live && live.util != null) ? Math.round(live.util * 100)
+  // Same rule for the live SSE event: once ITS window has rolled it describes
+  // a dead window. The CLI only emits seven_day events when a threshold is
+  // crossed, so after a weekly roll no new event may arrive for days; holding
+  // the old one pinned the 7d badge at the previous week's 90% (2026-09-17).
+  let live = _liveRate[key];
+  if (live && live.resetsAt && live.resetsAt * 1000 < Date.now()) live = _liveRate[key] = null;
+  // Two live % sources: the SSE event (stamped when it arrived) and the backend
+  // probe (stamped by its age). Neither is authoritative by kind; the NEWER one
+  // wins, so a 60s-old probe beats an hours-old event and vice versa.
+  const probeTs = (cache && cache.pct_source === "probe" && cache.used_percentage != null)
+    ? Date.now() - (cache.pct_age_seconds || 0) * 1000 : null;
+  const liveTs = (live && live.util != null) ? (live.ts || 0) : null;
+  const useLive = liveTs != null && (probeTs == null || liveTs >= probeTs);
+  const pct = useLive ? Math.round(live.util * 100)
             : (cache && cache.used_percentage != null) ? Math.round(cache.used_percentage)
             : null;
   const resetsAt = (live && live.resetsAt) || (cache && cache.resets_at) || null;
@@ -2721,8 +2733,8 @@ function _renderRateBadge(sel, label, key, fullName) {
   // never tack on a phantom "% N old" note.
   const fmtAge = (s) => s == null ? "" : (s >= 3600 ? Math.round(s / 3600) + "h"
     : s >= 60 ? Math.round(s / 60) + "m" : Math.round(s) + "s");
-  const src = pct != null ? (cache && cache.pct_source) : null;
-  const ageTxt = fmtAge(cache && cache.pct_age_seconds);
+  const src = pct == null ? null : useLive ? "probe" : (cache && cache.pct_source);
+  const ageTxt = fmtAge(useLive ? (Date.now() - liveTs) / 1000 : (cache && cache.pct_age_seconds));
   const srcNote = src === "probe" ? ` · % live${ageTxt ? ", " + ageTxt + " old" : ""}`
     : src === "cache" ? ` · % from CLI cache, ${ageTxt} old`
     : (resetsAt ? " · reset time live" : "");
@@ -2740,11 +2752,25 @@ function applyRateEvent(info) {
   // Ignore stale events whose window has already reset (e.g. old ones replayed on
   // reconnect) so they can't pin the badge to an outdated value.
   if (info.resetsAt && info.resetsAt * 1000 < Date.now()) return;
+  const now = Date.now();
   _liveRate[info.rateLimitType] = {
     resetsAt: info.resetsAt,
     status: info.status,
     util: typeof info.utilization === "number" ? info.utilization : null,
+    ts: now,
   };
+  // A threshold event also carries `unifiedWindows`: the current utilization and
+  // reset of BOTH windows. Free, fresh data for the other badge; take it, but
+  // never let it overwrite that window's own status with a guess.
+  const uw = info.unifiedWindows || {};
+  for (const k of Object.keys(_liveRate)) {
+    const w = uw[k];
+    if (k === info.rateLimitType || !w || typeof w.utilization !== "number") continue;
+    if (w.resetsAt && w.resetsAt * 1000 < now) continue;
+    const prev = _liveRate[k] || {};
+    _liveRate[k] = { resetsAt: w.resetsAt || prev.resetsAt || null, status: prev.status || null,
+                     util: w.utilization, ts: now };
+  }
   renderUsageBadges();
 }
 async function pollUsage() {

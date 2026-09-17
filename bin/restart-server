@@ -7,7 +7,11 @@
 # Run it DETACHED (launchctl submit, or from a Terminal that isn't a child of a
 # Console chat): a Console chat's shell is a descendant of the server, so
 # running this inline would kill the very chat that invoked it.
-#   launchctl submit -l com.exobrain.mist-console-restart -- "$(cd "$(dirname "$0")" && pwd)/restart-server"
+# Go through /bin/bash explicitly: launchd runs the job outside the TCC grant
+# that lets a shell read ~/Documents, and only /bin/bash holds Full Disk
+# Access here, so a direct submit of this script exits 126 with nothing logged.
+#   launchctl remove com.exobrain.mist-console-restart 2>/dev/null
+#   launchctl submit -l com.exobrain.mist-console-restart -- /bin/bash "$(cd "$(dirname "$0")" && pwd)/restart-server"
 set -u
 sleep 2   # let the invoking chat finish its turn/response first
 pids=$(lsof -tiTCP:5014 -sTCP:LISTEN)

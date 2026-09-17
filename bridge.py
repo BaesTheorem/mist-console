@@ -7,6 +7,7 @@ A session can be DORMANT (loaded from disk, transcript visible, no process) and
 starts its claude process lazily on the first send.
 """
 import json
+import logging
 import os
 import queue
 import shutil
@@ -177,10 +178,23 @@ def record_rate_limit(info):
     t = (info or {}).get("rateLimitType")
     if t not in ("five_hour", "seven_day"):
         return
+    now = int(time.time())
     rec = {"resets_at": info.get("resetsAt"), "status": info.get("status"),
-           "ts": int(time.time())}
+           "ts": now}
     if not rec["resets_at"]:
         return
+    # Threshold events (seven_day ones, in practice) also carry the live
+    # utilization of BOTH windows under unifiedWindows. Keep it: /usage treats
+    # it as a probe-quality % and it costs no API call.
+    if isinstance(info.get("utilization"), (int, float)):
+        rec["utilization"] = float(info["utilization"])
+    extra = {}
+    for k, w in (info.get("unifiedWindows") or {}).items():
+        if k == t or k not in ("five_hour", "seven_day") or not isinstance(w, dict):
+            continue
+        if isinstance(w.get("utilization"), (int, float)) and w.get("resetsAt"):
+            extra[k] = {"utilization": float(w["utilization"]),
+                        "resets_at": w["resetsAt"], "ts": now}
     with _rate_lock:
         try:
             with open(RATE_LIVE_PATH) as f:
@@ -188,6 +202,10 @@ def record_rate_limit(info):
         except Exception:
             d = {}
         d[t] = rec
+        for k, w in extra.items():
+            prev = d.get(k) or {}
+            # Keep that window's own status; only refresh its % and reset.
+            d[k] = {**prev, **w, "status": prev.get("status")}
         tmp = RATE_LIVE_PATH + ".tmp.%d" % os.getpid()
         try:
             with open(tmp, "w") as f:
@@ -218,8 +236,10 @@ RATE_UTIL_PATH = os.path.join(DATA_DIR, "rate-util.json")
 _PROBE_MIN_INTERVAL = 20           # floor between reads (post-turn bursts coalesce)
 RATE_POLL_ACTIVE_SEC = 60          # someone has a Console window open
 RATE_POLL_IDLE_SEC = 600           # server running, nobody watching
-_probe_state = {"last_ts": 0.0}
+_probe_state = {"last_ts": 0.0, "fails": 0, "next_ok": 0.0}
 _probe_state_lock = threading.Lock()
+_PROBE_BACKOFF_MAX = 900           # cap on the 429 backoff (seconds)
+_usage_log = logging.getLogger("mist.usage")
 
 
 def _read_oauth_token():
@@ -259,8 +279,18 @@ def _probe_rate_util():
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode()) or {}
-    except Exception:
+    except urllib.error.HTTPError as e:
+        _probe_failed("HTTP %s" % e.code)
         return
+    except Exception as e:
+        _probe_failed(repr(e))
+        return
+    with _probe_state_lock:
+        if _probe_state["fails"]:
+            _usage_log.warning("usage probe recovered after %d failure(s)",
+                               _probe_state["fails"])
+        _probe_state["fails"] = 0
+        _probe_state["next_ok"] = 0.0
     rec, now = {}, int(time.time())
     for win in ("five_hour", "seven_day"):
         w = data.get(win) or {}
@@ -287,12 +317,30 @@ def _probe_rate_util():
         pass
 
 
+def _probe_failed(why):
+    """The endpoint itself is rate limited (it 429s under the 60s poll plus
+    post-turn bursts, retry-after 0). A silent failure left the % frozen with
+    nothing in any log, so: say so once per failure streak, and back off
+    exponentially (60s, 120s, ... capped) so the poller stops feeding the 429."""
+    with _probe_state_lock:
+        _probe_state["fails"] += 1
+        n = _probe_state["fails"]
+        delay = min(_PROBE_BACKOFF_MAX, RATE_POLL_ACTIVE_SEC * (2 ** min(n - 1, 6)))
+        _probe_state["next_ok"] = time.time() + delay
+    if n in (1, 5) or n % 20 == 0:
+        _usage_log.warning("usage probe failed (%s), %d in a row, next try in %ds",
+                           why, n, delay)
+
+
 def maybe_probe_rate_util():
     """Throttled, non-blocking trigger (the read is free; the floor just keeps a
-    burst of back-to-back turns from stampeding the endpoint)."""
+    burst of back-to-back turns from stampeding the endpoint, and the 429
+    backoff holds it off while the endpoint is refusing us)."""
     with _probe_state_lock:
         now = time.time()
         if now - _probe_state["last_ts"] < _PROBE_MIN_INTERVAL:
+            return
+        if now < _probe_state["next_ok"]:
             return
         _probe_state["last_ts"] = now
     threading.Thread(target=_probe_rate_util, daemon=True).start()
