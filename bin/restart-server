@@ -12,7 +12,19 @@
 # Access here, so a direct submit of this script exits 126 with nothing logged.
 #   launchctl remove com.exobrain.mist-console-restart 2>/dev/null
 #   launchctl submit -l com.exobrain.mist-console-restart -- /bin/bash "$(cd "$(dirname "$0")" && pwd)/restart-server"
+# `launchctl submit` jobs are keep-alive: launchd re-runs the command every
+# time it exits, so a submitted restart would kill the server again every
+# ~100s forever (that was the 2026-09-17 "Console keeps restarting" bug). The
+# script therefore removes its own job as its last step, and refuses to run
+# twice within a few minutes as a backstop.
 set -u
+guard=/tmp/mist-console-restart.last
+if [ -f "$guard" ] && [ -n "$(find "$guard" -mmin -3 2>/dev/null)" ]; then
+  echo "restart-server: ran within the last 3 min, refusing to loop" >&2
+  [ -n "${XPC_SERVICE_NAME:-}" ] && exec launchctl remove "$XPC_SERVICE_NAME"
+  exit 0
+fi
+touch "$guard"
 sleep 2   # let the invoking chat finish its turn/response first
 pids=$(lsof -tiTCP:5014 -sTCP:LISTEN)
 [ -n "$pids" ] && kill $pids
@@ -25,3 +37,7 @@ done
 osascript -e 'tell application "MIST Console" to quit' >/dev/null 2>&1
 sleep 1
 open -a "MIST Console"
+# Last step: drop the keep-alive launchd job that ran us, or launchd re-runs
+# this script as soon as it exits. exec so no shell is left for launchd to kill.
+[ -n "${XPC_SERVICE_NAME:-}" ] && exec launchctl remove "$XPC_SERVICE_NAME"
+exit 0
