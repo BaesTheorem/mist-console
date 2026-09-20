@@ -553,6 +553,7 @@ class Session {
     this.model = info.model || "";
     this.permMode = info.permission_mode || "";
     this.effort = info.effort || "";
+    this.archived = !!info.archived;   // condensed transcript; the rail folds it
     this.lastActivity = info.last_activity ? info.last_activity * 1000 : Date.now();
     this.logEl = el("div", "session-log");
     this.logEl.hidden = true;
@@ -642,6 +643,20 @@ class Session {
     this.es.onmessage = (m) => { try { this.onEvent(JSON.parse(m.data)); } catch (_) {} };
     this.es.onerror = () => this.setStatus("error", "disconnected");
   }
+  // Drop the stream and replay the transcript from scratch. Used after a rewind
+  // changed what is on disk; the same wipe an auto-reconnect does.
+  reload() {
+    if (this.es) { this.es.close(); this.es = null; }
+    this.connected = false;
+    this.logEl.innerHTML = "";
+    this.current = null; this.blocks = {}; this.toolInputs = {};
+    this.unansweredUsers = []; this.splitPending = false;
+    this.spinnerEl = null;
+    this.bgTasks.clear(); this.progressBars.clear(); this.agentModels.clear();
+    if (this.permCards) this.permCards.clear();
+    this._replaying = true;
+    this.connect();
+  }
 
   get active() { return this.id === activeId; }
 
@@ -663,6 +678,7 @@ class Session {
     const whoEl = el("div", "who");
     whoEl.appendChild(el("span", "whoname", esc(who)));
     whoEl.appendChild(makeTs(ts));
+    whoEl.appendChild(this.msgActions(wrap, role));
     wrap.appendChild(whoEl);
     const body = el("div", "body");
     wrap.appendChild(body);
@@ -706,6 +722,308 @@ class Session {
         // The POST never reached the backend — don't leave "stopping…" stuck.
         if (this.statusLabel === "stopping…") this.setStatus("error", "couldn't stop");
       });
+  }
+  /* ---- per-message actions (claude.ai style) ----
+     Hover a message for edit / regenerate / branch / copy. Edit and regenerate
+     rewind THIS chat in place (the tail is discarded, after a confirm); branch
+     opens a new chat holding the conversation up to that point and leaves this
+     one alone. All three ride the CLI's truncating resume (see bridge.rewind). */
+  msgActions(wrap, role) {
+    const box = el("span", "msg-actions");
+    const add = (icon, title, run) => {
+      const b = el("button", null, '<span class="msi">' + icon + "</span>");
+      b.type = "button";
+      b.title = title;
+      b.setAttribute("aria-label", title);
+      b.addEventListener("click", (e) => { e.stopPropagation(); run(); });
+      box.appendChild(b);
+    };
+    if (role === "user") add("edit", "Edit & resend", () => this.startEdit(wrap));
+    add("refresh", role === "user" ? "Resend (regenerate the reply)" : "Regenerate this reply",
+        () => this.regenerate(wrap));
+    add("call_split", "Branch from here (new chat, this one untouched)", () => this.branchAt(wrap));
+    add("content_copy", "Copy message", () => copyText(messageSource(wrap)));
+    return box;
+  }
+  isUserMsg(n) { return !!(n && n.classList && n.classList.contains("msg") && n.classList.contains("user")); }
+  userMsgBefore(msg) {
+    let n = msg.previousElementSibling;
+    while (n && !this.isUserMsg(n)) n = n.previousElementSibling;
+    return n;
+  }
+  // The cut point for a message: a user message's own seq (it and everything
+  // after it go); for a MIST reply, the NEXT user message's seq so the reply
+  // itself is kept, or Infinity when nothing follows (the whole chat).
+  cutSeqFor(msg) {
+    if (this.isUserMsg(msg)) {
+      const v = parseInt(msg.dataset.seq, 10);
+      return Number.isFinite(v) ? v : null;
+    }
+    let n = msg.nextElementSibling;
+    while (n && !this.isUserMsg(n)) n = n.nextElementSibling;
+    if (!n) return Infinity;
+    const v = parseInt(n.dataset.seq, 10);
+    return Number.isFinite(v) ? v : null;
+  }
+  msgsAfter(msg) {
+    let n = msg.nextElementSibling, c = 0;
+    while (n) { if (n.classList && n.classList.contains("msg")) c++; n = n.nextElementSibling; }
+    return c;
+  }
+  busy() { return this.statusState === "thinking" || this.statusState === "working"; }
+  // Inline yes/no strip under a message, for the one destructive action here.
+  confirmOn(msg, text, go) {
+    if (msg._confirm) msg._confirm.remove();
+    const bar = el("div", "msg-confirm", esc(text));
+    const yes = el("button", "perm-btn deny", "Discard & continue");
+    const no = el("button", "perm-btn", "Keep");
+    const done = () => { bar.remove(); msg._confirm = null; };
+    yes.addEventListener("click", () => { done(); go(); });
+    no.addEventListener("click", done);
+    bar.appendChild(yes); bar.appendChild(no);
+    msg.appendChild(bar);
+    msg._confirm = bar;
+    yes.focus();
+  }
+  startEdit(msg) {
+    if (msg._editing) return;
+    if (this.busy()) { this.notice("Stop the running turn first (Esc), then edit."); return; }
+    const body = msg.querySelector(".body");
+    const orig = msg._utext != null ? msg._utext : (body ? body.innerText : "");
+    msg._editing = true;
+    const box = el("div", "msg-edit");
+    const ta = el("textarea");
+    ta.value = orig;
+    ta.rows = Math.min(12, Math.max(2, orig.split("\n").length + 1));
+    const row = el("div", "perm-actions");
+    const save = el("button", "perm-btn allow", "Resend");
+    const cancel = el("button", "perm-btn", "Cancel");
+    const done = () => { msg._editing = false; box.remove(); if (body) body.hidden = false; };
+    cancel.addEventListener("click", done);
+    save.addEventListener("click", () => {
+      const t = ta.value.trim();
+      if (!t) return;
+      done();
+      this.rewindAt(msg, t);
+    });
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(); }
+      else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save.click(); }
+    });
+    row.appendChild(save); row.appendChild(cancel);
+    box.appendChild(ta); box.appendChild(row);
+    if (body) body.hidden = true;
+    msg.appendChild(box);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+  regenerate(msg) {
+    const target = this.isUserMsg(msg) ? msg : this.userMsgBefore(msg);
+    if (!target) { this.notice("Nothing to regenerate: there is no message before this one."); return; }
+    const body = target.querySelector(".body");
+    const text = target._utext != null ? target._utext : (body ? body.innerText.trim() : "");
+    if (!text) { this.notice("That message has no text to resend (image-only messages can't be regenerated)."); return; }
+    this.rewindAt(target, text);
+  }
+  async rewindAt(userMsg, text) {
+    const seq = this.cutSeqFor(userMsg);
+    if (seq == null) { this.notice("This message has no position on disk yet, so it can't be rewound.", true); return; }
+    if (this.busy()) { this.notice("Stop the running turn first (Esc), then try again."); return; }
+    const post = (body) => fetch("/sessions/" + this.id + "/rewind", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).then((r) => r.json());
+    let plan;
+    try {
+      const j = await post({ seq, dry_run: true });
+      if (!j.ok) { this.notice("Can't rewind here: " + (j.error || "unknown reason") + ".", true); return; }
+      plan = j.plan || {};
+    } catch (e) { this.notice("Rewind failed: " + e, true); return; }
+    const go = async () => {
+      this.setStatus("thinking", "rewinding…");
+      try {
+        const j = await post({ seq, text });
+        if (!j.ok) { this.setStatus("idle", "idle"); this.notice("Rewind failed: " + (j.error || "unknown") + ".", true); return; }
+        if (j.title && this.title === "New chat") { this.title = j.title; renderTabs(); }
+        this.reload();
+        this.setStatus("thinking", "thinking");
+      } catch (e) { this.setStatus("idle", "idle"); this.notice("Rewind failed: " + e, true); }
+    };
+    const later = this.msgsAfter(userMsg);
+    if (later > 0) {
+      this.confirmOn(userMsg, "This rewinds the chat here: " + later + " later message"
+        + (later === 1 ? "" : "s") + " (" + (plan.dropped || 0) + " events) will be discarded "
+        + "and MIST forgets them too. Branch first if you want to keep them.", go);
+    } else {
+      go();
+    }
+  }
+  async branchAt(msg) {
+    let seq = this.cutSeqFor(msg);
+    if (seq === Infinity) seq = null;              // nothing after it: the whole chat
+    if (seq == null && this.isUserMsg(msg)) { this.notice("This message has no position on disk yet, so it can't be branched from.", true); return; }
+    try {
+      const r = await fetch("/sessions/" + this.id + "/branch", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seq }),
+      });
+      const j = await r.json();
+      if (!j.ok) { this.notice("Can't branch here: " + (j.error || "unknown reason") + ".", true); return; }
+      const s = new Session(j.id, j.title, j);
+      sessions.set(j.id, s);
+      if (this.isUserMsg(msg)) s.draft = msg._utext != null ? msg._utext : "";
+      switchTo(j.id);
+      s.notice("Branched from “" + this.title + "”. Everything up to that point carries over; the original chat is untouched."
+        + (s.draft ? " Your message is in the composer, ready to edit." : ""));
+    } catch (e) { this.notice("Branch failed: " + e, true); }
+  }
+  /* ---- context cost: compaction ---- */
+  ctxNotice(text, actions) {
+    const n = el("div", "notice", esc(text));
+    if (actions && actions.length) {
+      const row = el("div", "notice-actions");
+      if (actions.includes("compact")) {
+        const b = el("button", "perm-btn always", "Compact now");
+        b.addEventListener("click", () => { b.disabled = true; this.compact(); });
+        row.appendChild(b);
+      }
+      if (actions.includes("new")) {
+        const b = el("button", "perm-btn", "New chat");
+        b.addEventListener("click", () => createSession());
+        row.appendChild(b);
+      }
+      n.appendChild(row);
+    }
+    this.logEl.appendChild(n);
+    this.scroll();
+  }
+  async compact() {
+    if (this.busy()) { this.notice("Wait for the current turn to finish, then compact."); return; }
+    this.setStatus("thinking", "compacting…");
+    try {
+      const r = await fetch("/sessions/" + this.id + "/compact", { method: "POST" });
+      const j = await r.json();
+      if (!j.ok) { this.setStatus("idle", "idle"); this.notice("Couldn't compact: " + (j.error || "unknown") + ".", true); }
+    } catch (e) { this.setStatus("idle", "idle"); this.notice("Couldn't compact: " + e, true); }
+  }
+  renderCompactBoundary(o) {
+    const m = o.compact_metadata || {};
+    const fmt = (n) => n == null ? "?" : (n >= 1000 ? Math.round(n / 1000) + "k" : String(n));
+    let text = "context compacted";
+    if (m.trigger) text += " · " + esc(String(m.trigger));
+    if (m.pre_tokens != null) text += " · " + fmt(m.pre_tokens) + " → " + fmt(m.post_tokens) + " tokens";
+    this.logEl.appendChild(el("div", "compact-divider", text));
+    this.scroll();
+  }
+  /* ---- MCP elicitation: a server asking the user for input ---- */
+  renderElicitation(o) {
+    if (!this.permCards) this.permCards = new Map();
+    if (this.permCards.has(o.request_id)) return;
+    const card = el("div", "perm-card elicit");
+    const head = el("div", "perm-head");
+    head.innerHTML = '<span class="perm-icon msi">contact_support</span> <b>'
+      + esc(o.server || "An MCP server") + "</b> needs your input";
+    card.appendChild(head);
+    const body = el("div", "perm-body q-body");
+    if (o.title) body.appendChild(el("div", "q-text", esc(o.title)));
+    if (o.message) body.appendChild(el("div", "e-desc", esc(o.message)));
+    const fields = [];
+    const urlMode = o.mode === "url" && o.url;
+    if (urlMode) {
+      const f = el("div", "e-field");
+      const a = el("a", null, esc(o.url));
+      a.href = o.url;
+      f.appendChild(a);
+      body.appendChild(f);
+    } else {
+      const props = (o.schema && o.schema.properties) || {};
+      const req = new Set((o.schema && o.schema.required) || []);
+      Object.keys(props).forEach((k) => fields.push(this._elicitField(k, props[k] || {}, req.has(k), body)));
+    }
+    card.appendChild(body);
+    const row = el("div", "perm-actions");
+    const ok = el("button", "perm-btn allow", urlMode ? "Done" : "Submit");
+    const decline = el("button", "perm-btn", "Decline");
+    const cancel = el("button", "perm-btn deny", "Cancel");
+    const finish = (verdict, action, content) => {
+      if (card._answered) return;
+      card._answered = true;
+      card.classList.add("answered");
+      row.remove();
+      fields.forEach((f) => f.freeze());
+      head.appendChild(el("span", "perm-verdict", verdict));
+      if (this.permCards) this.permCards.delete(o.request_id);
+      fetch("/sessions/" + this.id + "/elicitation-response", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: o.request_id, action, content }),
+      }).catch(() => {});
+    };
+    ok.addEventListener("click", () => {
+      const content = {};
+      for (const f of fields) {
+        const v = f.value();
+        if (v === "" || v == null) {
+          if (f.required) { f.flag(); return; }
+          continue;
+        }
+        content[f.name] = v;
+      }
+      finish("submitted", "accept", content);
+    });
+    decline.addEventListener("click", () => finish("declined", "decline"));
+    cancel.addEventListener("click", () => finish("cancelled", "cancel"));
+    row.appendChild(ok); row.appendChild(decline); row.appendChild(cancel);
+    card.appendChild(row);
+    (this.current && this.current.body ? this.current.body : this.logEl).appendChild(card);
+    this.permCards.set(o.request_id, card);
+    this.scroll();
+  }
+  _elicitField(name, schema, required, body) {
+    const wrap = el("div", "e-field");
+    wrap.appendChild(el("label", null, esc(schema.title || name) + (required ? " *" : "")));
+    if (schema.description) wrap.appendChild(el("div", "e-desc", esc(schema.description)));
+    const type = schema.type;
+    let input;
+    if (Array.isArray(schema.enum)) {
+      input = el("select");
+      if (!required) input.appendChild(el("option", null, ""));
+      const names = Array.isArray(schema.enumNames) ? schema.enumNames : null;
+      schema.enum.forEach((v, i) => {
+        const opt = el("option", null, esc(names && names[i] != null ? String(names[i]) : String(v)));
+        opt.value = String(v);
+        input.appendChild(opt);
+      });
+    } else if (type === "boolean") {
+      input = el("input"); input.type = "checkbox";
+      wrap.classList.add("e-check");
+    } else if (type === "number" || type === "integer") {
+      input = el("input"); input.type = "number";
+      if (type === "integer") input.step = "1";
+      if (schema.minimum != null) input.min = schema.minimum;
+      if (schema.maximum != null) input.max = schema.maximum;
+    } else {
+      const long = (schema.maxLength || 0) > 120 || schema.format === "textarea";
+      input = el(long ? "textarea" : "input");
+      if (!long) input.type = "text";
+      else input.rows = 3;
+    }
+    if (schema.default != null) {
+      if (input.type === "checkbox") input.checked = !!schema.default;
+      else input.value = String(schema.default);
+    }
+    wrap.appendChild(input);
+    body.appendChild(wrap);
+    return {
+      name, required,
+      value() {
+        if (input.type === "checkbox") return input.checked;
+        const raw = String(input.value == null ? "" : input.value).trim();
+        if (raw === "") return "";
+        if (type === "integer") return parseInt(raw, 10);
+        if (type === "number") return parseFloat(raw);
+        return raw;
+      },
+      flag() { input.focus(); wrap.classList.add("e-missing"); setTimeout(() => wrap.classList.remove("e-missing"), 1200); },
+      freeze() { input.disabled = true; },
+    };
   }
   renderPermission(o) {
     if (!this.permCards) this.permCards = new Map();
@@ -1311,6 +1629,9 @@ class Session {
         // Always render immediately so a message can never get swallowed.
         const ubody = this.addMsg("user", "Alex", tsMs(o.ts));
         ubody.textContent = o.text;
+        // Position + raw text, for edit / regenerate / branch (see msgActions).
+        if (o.seq != null) ubody.parentNode.dataset.seq = o.seq;
+        ubody.parentNode._utext = o.text || "";
         if (o.image) {
           const html = imageThumbHTML(o.image, "pasted image");
           if (html) {
@@ -1377,6 +1698,8 @@ class Session {
           if (!this.current) this.setStatus("idle", "idle");
         }
         else if (o.subtype === "status" && o.status === "requesting") this.setStatus("thinking", "thinking");
+        else if (o.subtype === "status" && o.status === "compacting") this.setStatus("thinking", "compacting…");
+        else if (o.subtype === "compact_boundary") this.renderCompactBoundary(o);
         else this.handleBgSystem(o);   // task_started / task_progress / task_notification / task_updated
         break;
       case "replay_done":
@@ -1416,8 +1739,14 @@ class Session {
         break;
       case "context_warning":
         // Cost cap (bridge.py): conversation large enough that re-billing the
-        // whole window each turn is wasteful. Surface it inline as a notice.
-        this.notice(o.text);
+        // whole window each turn is wasteful. Inline notice with the fixes
+        // (compact here, or a new chat) as buttons; a replayed one is history,
+        // so no buttons then.
+        this.ctxNotice(o.text, this._replaying ? null : o.actions);
+        break;
+      case "elicitation_request":
+        // An MCP server asking the user for input: a schema-driven form card.
+        this.renderElicitation(o);
         break;
       case "notice":
         // Out-of-band message from the backend (e.g. /login auth flow progress).
@@ -1520,7 +1849,7 @@ class Session {
         // explain. The next send overrides the cap on the backend.
         this.restoreDraft(text, image);
         this.setStatus("idle", "idle");
-        this.notice(j.reason);
+        this.ctxNotice(j.reason, ["compact", "new"]);
         return false;
       }
       if (!j.ok) {
@@ -1875,13 +2204,15 @@ async function selectModel(m) {
   const s = sessions.get(activeId);
   s.model = m.id;
   $("#model").textContent = m.id ? m.id : "model: default";
-  s.notice("Model set to " + m.label + ". Applies to your next message.");
   try {
-    await fetch("/sessions/" + activeId + "/model", {
+    const r = await fetch("/sessions/" + activeId + "/model", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: m.id }),
     });
-  } catch (_) {}
+    const j = await r.json();
+    // Live = switched over the control channel, no restart, context kept warm.
+    s.notice("Model set to " + m.label + (j.live ? "." : ". Applies to your next message."));
+  } catch (_) { s.notice("Model set to " + m.label + ". Applies to your next message."); }
 }
 
 /* ---------- permission-mode switcher card ---------- */
@@ -1911,13 +2242,16 @@ async function selectPerm(p) {
   const s = sessions.get(activeId);
   s.permMode = p.id;
   $("#perm").textContent = "perm: " + p.id;
-  s.notice("Permission mode set to " + p.id + ". Applies to your next message.");
   try {
-    await fetch("/sessions/" + activeId + "/permission", {
+    const r = await fetch("/sessions/" + activeId + "/permission", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: p.id }),
     });
-  } catch (_) {}
+    const j = await r.json();
+    // Live between the asking modes; any switch through bypass restarts the
+    // backend on the next message (bridge.set_permission explains why).
+    s.notice("Permission mode set to " + p.id + (j.live ? "." : ". Applies to your next message."));
+  } catch (_) { s.notice("Permission mode set to " + p.id + ". Applies to your next message."); }
 }
 /* ---------- thinking-depth switcher card ----------
    `claude --effort <level>`. "" means don't pass the flag at all and let the CLI
@@ -1986,7 +2320,7 @@ function setCount(id, arr) {
   if (e) e.textContent = "(" + ((arr && arr.length) || 0) + ")";
 }
 function fillSettings(c) {
-  chips("#capMcp", c.mcp_servers);
+  if (!$("#capPanel").hidden) loadMcpPanel();   // live states, not init's snapshot
   chips("#capTools", c.tools);
   chips("#capSkills", c.skills);
   chips("#capSlash", c.slash_commands);
@@ -2008,6 +2342,7 @@ function fillCaps(init, s) {
 }
 function chips(id, items) {
   const c = $(id);
+  if (!c) return;
   c.innerHTML = "";
   (items || []).forEach((it) => {
     const name = typeof it === "string" ? it : it.name;
@@ -2038,6 +2373,7 @@ function sortedSessions() {
     // It rejoins normal newest-first order the moment its first message titles it.
     const an = a.title === "New chat", bn = b.title === "New chat";
     if (an !== bn) return an ? -1 : 1;
+    if (a.archived !== b.archived) return a.archived ? 1 : -1;   // condensed old chats last
     return b.lastActivity - a.lastActivity;                       // unpinned: newest first
   });
 }
@@ -2064,6 +2400,7 @@ function todayKey() {
 // a thousand chats that was ~30ms of date formatting on every switch.
 function railKey(s, today) {
   if (s.pinned) return "pinned";
+  if (s.archived) return "archive";
   if (s._bucketTs !== s.lastActivity || s._bucketDay !== today) {
     s._bucketTs = s.lastActivity;
     s._bucketDay = today;
@@ -2081,7 +2418,9 @@ const RAIL_PAGE = 200;
 let _railLimit = RAIL_PAGE;
 let _tabsActive = null;   // the active id the rail was last rendered for
 const COLLAPSED_LS = "mist.railCollapsed";
-let collapsedSections = new Set(JSON.parse(localStorage.getItem(COLLAPSED_LS) || "[]"));
+// The archive section (condensed chats 90+ days old, see archive.py) starts
+// collapsed; everything else starts open.
+let collapsedSections = new Set(JSON.parse(localStorage.getItem(COLLAPSED_LS) || '["archive"]'));
 function toggleSection(label) {
   if (!collapsedSections.delete(label)) collapsedSections.add(label);
   localStorage.setItem(COLLAPSED_LS, JSON.stringify([...collapsedSections]));
@@ -3116,6 +3455,7 @@ $("#settingsBtn").addEventListener("click", () => {
   renderThemeList();                       // reflect the active theme
   renderFontList();                        // reflect the active font
   loadRoutines();                          // routines now live as a settings section
+  loadMcpPanel();                          // MCP servers: live status + reconnect/toggle/auth
   loadWatchers();                          // watchers section (launchd watch jobs)
   $("#notesPanel").hidden = true;
   refreshNotifsSection();                  // notifications live as a settings section
@@ -3583,6 +3923,7 @@ const ANCHORED_CARDS = [
   { card: "#modelCard", trigger: "#model" },
   { card: "#permCard",  trigger: "#perm"  },
   { card: "#thinkCard", trigger: "#think" },
+  { card: "#ctxCard",   trigger: "#ctx"   },
   { card: "#shareCard", trigger: "#shareBtn" },
 ];
 function closeAnchoredCards(except) {
@@ -3668,6 +4009,117 @@ function openThinkCard(ev) {
 $("#think").addEventListener("click", openThinkCard);
 $("#thinkClose").addEventListener("click", () => { $("#thinkCard").hidden = true; });
 
+// The ctx badge opens the context breakdown (the CLI's own /context data) with
+// a "compact now" button, instead of being a bare number.
+function openCtxCard(ev) {
+  const card = $("#ctxCard");
+  if (!card.hidden) { card.hidden = true; return; }
+  closeAnchoredCards("#ctxCard");
+  renderCtxCard();
+  card.hidden = false;
+  anchorCard(card, (ev && ev.currentTarget) || $("#ctx"));
+}
+async function renderCtxCard() {
+  const body = $("#ctxBody");
+  const s = activeId && sessions.get(activeId);
+  if (!s) { body.textContent = "no chat"; return; }
+  const row = (k, v) => {
+    const r = el("div", "ctx-row");
+    r.appendChild(el("span", null, esc(k)));
+    r.appendChild(el("span", "ctx-n", esc(v)));
+    body.appendChild(r);
+  };
+  body.innerHTML = "";
+  row("loading…", "");
+  let j;
+  try { j = await (await fetch("/sessions/" + s.id + "/context")).json(); }
+  catch (e) { body.innerHTML = ""; row("unavailable", String(e)); return; }
+  body.innerHTML = "";
+  if (!j.ok) {
+    row(j.dormant ? "backend dormant" : "unavailable",
+        j.dormant ? "last known " + (s.ctxPct == null ? "—" : s.ctxPct + "%") : (j.error || ""));
+    if (j.dormant) body.appendChild(el("div", "e-desc", "The breakdown needs a live backend; send a message (or compact) to wake it."));
+    return;
+  }
+  const u = j.usage || {};
+  const cats = Array.isArray(u.categories) ? u.categories : [];
+  const used = cats.reduce((a, c) => a + ((c && c.kind !== "free" && c.tokens) || 0), 0);
+  const win = u.contextWindow || u.context_window || u.maxTokens || s.ctxWindow || 0;
+  if (win) {
+    row("used", used.toLocaleString() + " / " + win.toLocaleString());
+    const bar = el("div", "ctx-bar");
+    const fill = el("i");
+    fill.style.width = Math.min(100, used / win * 100).toFixed(1) + "%";
+    bar.appendChild(fill);
+    body.appendChild(bar);
+  }
+  cats.filter((c) => c && c.tokens).sort((a, b) => b.tokens - a.tokens)
+    .forEach((c) => row(String(c.name || "?"), Number(c.tokens).toLocaleString()));
+  Object.keys(u).forEach((k) => {
+    if (k === "categories" || typeof u[k] !== "number" || /window|max/i.test(k)) return;
+    row(k.replace(/([A-Z])/g, " $1").toLowerCase(), Number(u[k]).toLocaleString());
+  });
+  if (!cats.length) row("no breakdown", "the CLI returned nothing");
+}
+$("#ctx").addEventListener("click", openCtxCard);
+$("#ctxClose").addEventListener("click", () => { $("#ctxCard").hidden = true; });
+$("#ctxRefresh").addEventListener("click", () => renderCtxCard());
+$("#ctxCompact").addEventListener("click", () => {
+  $("#ctxCard").hidden = true;
+  const s = activeId && sessions.get(activeId);
+  if (s) s.compact();
+});
+
+/* ---------- MCP panel (settings) ----------
+   The live server list from the active chat's backend (mcp_status), with the
+   actions the TUI's /mcp screen has: reconnect, enable/disable, authenticate.
+   A dormant chat shows its last init snapshot, flagged as such. */
+async function loadMcpPanel() {
+  const s = activeId && sessions.get(activeId);
+  const body = $("#mcpBody");
+  if (!s || !body) return;
+  let j;
+  try { j = await (await fetch("/sessions/" + s.id + "/mcp")).json(); }
+  catch (_) { body.innerHTML = ""; body.appendChild(el("div", "mcp-stale", "couldn't reach the server")); return; }
+  const list = Array.isArray(j.servers) ? j.servers : [];
+  body.innerHTML = "";
+  setCount("#nMcp", list);
+  if (!j.live) {
+    body.appendChild(el("div", "mcp-stale", list.length
+      ? "backend dormant · states are from its last start; an action below wakes it"
+      : "no backend yet · send a message to load the server list"));
+  }
+  list.forEach((sv) => {
+    const name = typeof sv === "string" ? sv : String(sv.name || "");
+    const st = (typeof sv === "object" && sv.status) ? String(sv.status) : "unknown";
+    const row = el("div", "mcp-row");
+    row.appendChild(el("span", "mcp-name", esc(name)));
+    row.appendChild(el("span", "mcp-state " + st.toLowerCase().replace(/[^a-z-]/g, ""), esc(st)));
+    const act = (label, action, extra) => {
+      const b = el("button", null, label);
+      b.type = "button";
+      b.addEventListener("click", async () => {
+        b.disabled = true; b.textContent = "…";
+        try {
+          const r = await fetch("/sessions/" + s.id + "/mcp/" + action, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(Object.assign({ server: name }, extra || {})),
+          });
+          const x = await r.json();
+          if (!x.ok) s.notice("MCP " + action + " " + name + ": " + (x.error || "failed"), true);
+          else if (x.response && x.response.url) openExternal(x.response.url);
+        } catch (e) { s.notice("MCP " + action + " " + name + ": " + e, true); }
+        loadMcpPanel();
+      });
+      row.appendChild(b);
+    };
+    if (/disabled/i.test(st)) act("enable", "toggle", { enabled: true });
+    else { act("reconnect", "reconnect"); act("disable", "toggle", { enabled: false }); }
+    if (/auth|failed/i.test(st)) act("auth", "authenticate");
+    body.appendChild(row);
+  });
+}
+
 /* ---------- overlay dismissal (Escape + outside click) ----------
    One ladder for every overlay: Esc closes the topmost open one (anchored cards
    first, then the side panels). The composer's own keydown calls this before
@@ -3675,7 +4127,7 @@ $("#thinkClose").addEventListener("click", () => { $("#thinkCard").hidden = true
 function closeTopOverlay() {
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
-  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#shareCard", "#capPanel", "#notesPanel"]) {
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#shareCard", "#capPanel", "#notesPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }
@@ -4203,6 +4655,16 @@ logs.addEventListener("contextmenu", (e) => {
   }
 
   items.push({ icon: "notes", label: "Copy message", run: () => copyText(messageSource(msg)) });
+  const sess = sessions.get(activeId);
+  if (sess && msg.parentNode === sess.logEl) {
+    items.push("-");
+    if (msg.classList.contains("user"))
+      items.push({ icon: "edit", label: "Edit & resend", run: () => sess.startEdit(msg) });
+    items.push({ icon: "refresh", label: msg.classList.contains("user") ? "Resend (regenerate reply)" : "Regenerate this reply",
+                 run: () => sess.regenerate(msg) });
+    items.push({ icon: "call_split", label: "Branch from here", run: () => sess.branchAt(msg) });
+    items.push("-");
+  }
   items.push({
     icon: "select_all", label: "Select message",
     run: () => {
@@ -4444,7 +4906,8 @@ async function buildShareSnapshot(s) {
   clone.removeAttribute("hidden");
   clone.removeAttribute("style");
   // Interactive chrome that has no meaning in a read-only page.
-  clone.querySelectorAll(".spinner, .perm-actions, .copy-btn, .rc-cook-btn, .genimg-dl")
+  clone.querySelectorAll(".spinner, .perm-actions, .copy-btn, .rc-cook-btn, .genimg-dl, "
+    + ".msg-actions, .msg-edit, .msg-confirm, .notice-actions")
     .forEach((e) => e.remove());
   // Remaining buttons (recipe timer chips, etc.) keep their look, lose their life.
   clone.querySelectorAll("button").forEach((b) => {

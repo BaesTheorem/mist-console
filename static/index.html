@@ -36,7 +36,7 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
     <span class="badge clickable" id="perm" title="Permission mode · click to switch">perm —</span>
     <span class="badge clickable" id="think" title="Thinking depth · click to switch">think —</span>
     <span class="badge" id="status" data-state="idle">idle</span>
-    <span class="badge usage" id="ctx" title="Context window used">ctx —</span>
+    <span class="badge usage clickable" id="ctx" title="Context window used · click for the breakdown and compaction">ctx —</span>
     <span class="badge usage" id="r5h" title="5-hour limit used">5h —</span>
     <span class="badge usage" id="r7d" title="7-day limit used">7d —</span>
   </div>
@@ -55,19 +55,29 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
 <aside id="modelCard" hidden>
   <div class="capHead">model <button id="modelClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
   <div id="modelList"></div>
-  <div class="modelnote">Applies to the active chat on your next message. New chats always start on Opus (1M).</div>
+  <div class="modelnote">Switches the active chat live when its backend is running (no restart), otherwise on your next message. New chats always start on Opus (1M).</div>
 </aside>
 
 <aside id="permCard" hidden>
   <div class="capHead">permission mode <button id="permClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
   <div id="permList"></div>
-  <div class="modelnote">Controls how freely MIST acts. Applies to the active chat on your next message.</div>
+  <div class="modelnote">Controls how freely MIST acts. Live between default / accept edits / plan; a switch into or out of bypass restarts the backend on your next message.</div>
 </aside>
 
 <aside id="thinkCard" hidden>
   <div class="capHead">thinking depth <button id="thinkClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
   <div id="thinkList"></div>
   <div class="modelnote">How long MIST reasons before answering. Deeper costs more tokens and time. Applies to the active chat on your next message.</div>
+</aside>
+
+<aside id="ctxCard" hidden>
+  <div class="capHead">context window <button id="ctxClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
+  <div id="ctxBody" class="ctx-body"></div>
+  <div class="perm-actions ctx-actions">
+    <button id="ctxCompact" class="perm-btn always">Compact now</button>
+    <button id="ctxRefresh" class="perm-btn">Refresh</button>
+  </div>
+  <div class="modelnote">What fills this chat's context. Compacting replaces the history with a summary, so every later message re-bills far less.</div>
 </aside>
 
 <div id="mid">
@@ -128,7 +138,13 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
       </div>
       <div class="qa-note">Double-tap the Option (⌥) key to summon MIST from anywhere — even when she's closed (a tiny always-on background agent launches her). Needs macOS Accessibility permission for the agent (System Settings → Privacy & Security → Accessibility).</div>
     </div>
-    <h4>active mcp servers <span class="count" id="nMcp"></span></h4><div id="capMcp" class="chips"></div>
+    <h4>mcp servers <span class="count" id="nMcp"></span></h4>
+    <div id="mcpSection">
+      <div id="mcpBody"></div>
+      <div class="routines-foot">
+        <div class="routines-note">Servers as the active chat's backend sees them. Reconnect one that failed, disable one this chat doesn't need, or authenticate an OAuth connector. Actions wake a dormant chat (a resume, no tokens).</div>
+      </div>
+    </div>
     <h4>tools <span class="count" id="nTools"></span></h4><div id="capTools" class="chips"></div>
     <h4>skills <span class="count" id="nSkills"></span></h4><div id="capSkills" class="chips"></div>
     <h4>slash commands <span class="count" id="nSlash"></span></h4><div id="capSlash" class="chips"></div>

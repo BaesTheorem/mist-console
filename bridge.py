@@ -47,7 +47,10 @@ CLAUDE = _find_claude()
 # is callable by name from anything the session shells out to.
 CLAUDE_BIN_DIR = os.path.dirname(CLAUDE)
 # Persona comes from the harness CLAUDE.md (auto-loaded via cwd=HARNESS), not a side file.
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# MIST_CONSOLE_DATA_DIR lets a test instance (or a second Console) keep its
+# transcripts and sessions.json away from the live server's data/.
+DATA_DIR = (os.environ.get("MIST_CONSOLE_DATA_DIR")
+            or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
 DEFAULT_PERMISSION_MODE = "bypassPermissions"
@@ -114,12 +117,15 @@ def _slim_event(obj):
         return obj
 
 # Context-cost cap. A headless `claude -p --resume` re-bills the WHOLE conversation
-# every turn (no interactive auto-compact here), so a long-lived chat gets quietly
-# expensive — the token sink behind "the Console burns tokens during heavy coding".
-# We surface that: a one-shot notice when occupancy crosses CTX_WARN_PCT, and a soft
-# gate at CTX_HARD_PCT that holds the first over-threshold send (then lets the next
-# one through, so the user is never locked out). Thresholds match the ctx badge's
-# own yellow(60)/red(80) cues in app.js so the warning lines up with the color.
+# every turn, so a long-lived chat gets expensive — the token sink behind "the
+# Console burns tokens during heavy coding". The CLI's auto-compact DOES run in
+# headless mode (compact_boundary events show up in Console transcripts), but
+# only near the top of the window; well before that point compaction is the
+# cheap fix, since it shrinks what every later turn re-bills. So: a one-shot
+# notice when occupancy crosses CTX_WARN_PCT and a soft gate at CTX_HARD_PCT
+# that holds the first over-threshold send (the next one passes, so the user is
+# never locked out), both offering "compact now" (see compact()) alongside "new
+# chat". Thresholds match the ctx badge's yellow(60)/red(80) cues in app.js.
 CTX_WARN_PCT = 60
 CTX_HARD_PCT = 80
 
@@ -236,9 +242,23 @@ RATE_UTIL_PATH = os.path.join(DATA_DIR, "rate-util.json")
 _PROBE_MIN_INTERVAL = 20           # floor between reads (post-turn bursts coalesce)
 RATE_POLL_ACTIVE_SEC = 60          # someone has a Console window open
 RATE_POLL_IDLE_SEC = 600           # server running, nobody watching
-_probe_state = {"last_ts": 0.0, "fails": 0, "next_ok": 0.0}
+# The endpoint rate-limits its own readers: under a fixed 60s poll it answered
+# 429 on every other call (601 failures in one log window), because a success
+# reset the backoff straight back to 60s and the next call tripped it again.
+# The interval is adaptive now: a 429 doubles it, a success walks it back down
+# by PROBE_STEP but never below the last interval that 429'd plus one step, so
+# the poll settles just above whatever spacing the endpoint tolerates instead
+# of oscillating across it.
+PROBE_STEP = 15
+_probe_state = {"last_ts": 0.0, "fails": 0, "next_ok": 0.0,
+                "interval": float(RATE_POLL_ACTIVE_SEC), "floor": 0.0}
 _probe_state_lock = threading.Lock()
 _PROBE_BACKOFF_MAX = 900           # cap on the 429 backoff (seconds)
+
+
+def probe_interval():
+    with _probe_state_lock:
+        return _probe_state["interval"]
 _usage_log = logging.getLogger("mist.usage")
 
 
@@ -286,11 +306,18 @@ def _probe_rate_util():
         _probe_failed(repr(e))
         return
     with _probe_state_lock:
-        if _probe_state["fails"]:
-            _usage_log.warning("usage probe recovered after %d failure(s)",
-                               _probe_state["fails"])
-        _probe_state["fails"] = 0
-        _probe_state["next_ok"] = 0.0
+        st = _probe_state
+        if st["fails"]:
+            _usage_log.warning("usage probe recovered after %d failure(s); polling every %ds",
+                               st["fails"], st["interval"])
+        st["fails"] = 0
+        # Ease back toward the fast cadence, but stay a step above the spacing
+        # that last drew a 429 (see PROBE_STEP).
+        st["interval"] = max(float(RATE_POLL_ACTIVE_SEC), st["floor"] + PROBE_STEP,
+                             st["interval"] - PROBE_STEP)
+        # Post-turn probes (record_rate_limit) ride the same budget: at most one
+        # extra read per half interval.
+        st["next_ok"] = time.time() + st["interval"] / 2
     rec, now = {}, int(time.time())
     for win in ("five_hour", "seven_day"):
         w = data.get(win) or {}
@@ -323,10 +350,17 @@ def _probe_failed(why):
     nothing in any log, so: say so once per failure streak, and back off
     exponentially (60s, 120s, ... capped) so the poller stops feeding the 429."""
     with _probe_state_lock:
-        _probe_state["fails"] += 1
-        n = _probe_state["fails"]
-        delay = min(_PROBE_BACKOFF_MAX, RATE_POLL_ACTIVE_SEC * (2 ** min(n - 1, 6)))
-        _probe_state["next_ok"] = time.time() + delay
+        st = _probe_state
+        st["fails"] += 1
+        n = st["fails"]
+        if why == "HTTP 429":
+            # Remember the spacing that was too tight, then double it.
+            st["floor"] = max(st["floor"], st["interval"])
+            st["interval"] = min(_PROBE_BACKOFF_MAX, st["interval"] * 2)
+            delay = st["interval"]
+        else:
+            delay = min(_PROBE_BACKOFF_MAX, RATE_POLL_ACTIVE_SEC * (2 ** min(n - 1, 6)))
+        st["next_ok"] = time.time() + delay
     if n in (1, 5) or n % 20 == 0:
         _usage_log.warning("usage probe failed (%s), %d in a row, next try in %ds",
                            why, n, delay)
@@ -359,7 +393,8 @@ def start_rate_poller(sessions):
             except Exception:
                 watched = False
             maybe_probe_rate_util()
-            time.sleep(RATE_POLL_ACTIVE_SEC if watched else RATE_POLL_IDLE_SEC)
+            time.sleep(max(probe_interval(), RATE_POLL_ACTIVE_SEC) if watched
+                       else RATE_POLL_IDLE_SEC)
     threading.Thread(target=loop, daemon=True).start()
 
 
@@ -469,6 +504,13 @@ class ClaudeSession:
         self._pending_perms = {}     # can_use_tool request_id -> {input, suggestions}
         self._init_sent = False      # control-protocol initialize handshake sent?
         self._progress = {}          # progress bar id -> {last: ts, done: bool}
+        self._pending_ctl = {}       # control request_id -> {"ev": Event, "resp": dict}
+        self._ctx_window = 0         # context window of the last result (for compaction math)
+        # Rewind: the next spawn resumes the conversation truncated at this CLI
+        # message uuid (--resume-session-at + --fork-session). See rewind()/branch().
+        self._resume_at = None
+        self._fork_next = False      # next spawn adds --fork-session (whole-chat branch)
+        self.archived = False        # condensed transcript (see archive.py); rail folds it
 
         # History loads lazily on first open (snapshot_history), NOT here. At
         # startup app.py constructs a ClaudeSession for every saved chat; eagerly
@@ -593,6 +635,15 @@ class ClaudeSession:
         # network, so they connect a beat slower than the local ones.
         if self.claude_session_id and not self._resume_tried:
             cmd += ["--resume", self.claude_session_id]  # restore model context
+            if self._resume_at:
+                # Truncating resume: keep the CLI transcript up to and including
+                # this entry, drop the rest, and fork so the original session
+                # file stays intact. Confirmed 2026-09-20 against claude 2.1.278:
+                # only entries after the LAST compaction are addressable, which
+                # rewind_plan() checks before anything is truncated.
+                cmd += ["--resume-session-at", self._resume_at, "--fork-session"]
+            elif self._fork_next:
+                cmd += ["--fork-session"]   # a branch of the whole conversation
         if self.model:
             cmd += ["--model", self.model]
         # Thinking depth. Omitted entirely when unset so the CLI applies its own
@@ -676,9 +727,12 @@ class ClaudeSession:
         self._maybe_init_control()
 
     def _maybe_init_control(self):
+        """Send the SDK `initialize` handshake. Needed for permission routing in
+        the non-bypass modes and for every control call the Console makes
+        (set_model, mcp_status, get_context_usage...). Harmless in bypass mode
+        (confirmed live: the CLI answers with its command list and nothing
+        else changes), so it is sent for every backend."""
         if self._init_sent or not self.alive:
-            return
-        if not self.permission_mode or self.permission_mode == "bypassPermissions":
             return
         self._init_sent = True
         req = {"type": "control_request", "request_id": self._next_ctl_id("init"),
@@ -715,6 +769,18 @@ class ClaudeSession:
         if self._intentional_stop:           # close or model switch — not a crash
             self._intentional_stop = False
             return
+        if self._resume_at and not self._saw_init:
+            # A truncating resume the CLI refused (uuid not found). Retrying
+            # fresh here would drop the WHOLE conversation from the model's
+            # memory without a word; say so instead and leave the full session
+            # id in place so the next send resumes everything.
+            self._resume_at = None
+            self._broadcast({"type": "notice", "err": True,
+                             "text": "Rewind failed: the CLI could not resume at that "
+                                     "point. The full conversation is still attached; "
+                                     "send again to continue from the end."})
+            self._broadcast({"type": "process_exit", "code": code})
+            return
         # If a --resume start died almost immediately without initializing, the
         # resumed session was probably invalid: retry once fresh.
         if (self.claude_session_id and not self._resume_tried and not self._saw_init
@@ -726,12 +792,23 @@ class ClaudeSession:
         self._broadcast({"type": "process_exit", "code": code})
 
     def set_model(self, model):
-        """Switch model. Goes dormant; next send revives with the new model and
-        --resume (so conversation context carries over)."""
-        self.model = model or None
-        if self.alive:
-            self._resume_tried = False
-            self.stop()
+        """Switch model. On a live backend this goes over the control protocol
+        (`set_model`, the same request the TUI's /model sends) and applies to
+        the next API call with no restart: no cold MCP boot, no spawn delay,
+        prompt cache kept. Returns True when it applied live. A dormant chat
+        just records the choice for its next spawn (--model), and a live one
+        whose control call fails falls back to the old dormant-and-resume path."""
+        model = model or None
+        self.model = model
+        if not self.alive:
+            return False
+        payload = {"model": model} if model else {}
+        ok, _ = self.control_call("set_model", payload)
+        if ok:
+            return True
+        self._resume_tried = False
+        self.stop()
+        return False
 
     def set_effort(self, effort):
         """Switch thinking depth. Goes dormant; next send revives with the new
@@ -745,14 +822,27 @@ class ClaudeSession:
             self.stop()
 
     def set_permission(self, mode):
-        """Switch permission mode. Goes dormant; next send revives with the new
-        mode and --resume (so conversation context carries over)."""
+        """Switch permission mode. Between the asking modes (default /
+        acceptEdits / plan) this goes live over `set_permission_mode`, exactly
+        like the TUI's Shift+Tab, and returns True. Any switch involving
+        bypassPermissions still restarts the backend: a process spawned with
+        --dangerously-skip-permissions has no permission prompt tool wired up,
+        so asks would have nowhere to go, and the CLI refuses to enter bypass
+        on a process that was not started with the flag."""
         if not mode or mode == self.permission_mode:
-            return
+            return False
+        old = self.permission_mode
         self.permission_mode = mode
-        if self.alive:
-            self._resume_tried = False
-            self.stop()
+        if not self.alive:
+            return False
+        bypass = "bypassPermissions"
+        if old != bypass and mode != bypass:
+            ok, _ = self.control_call("set_permission_mode", {"mode": mode})
+            if ok:
+                return True
+        self._resume_tried = False
+        self.stop()
+        return False
 
     def set_cwd(self, cwd):
         """Switch the working directory (repo MIST runs in). Goes dormant and
@@ -806,6 +896,8 @@ class ClaudeSession:
                 obj = {"type": "raw", "text": line}
             if obj.get("type") == "system" and obj.get("subtype") == "init":
                 self._saw_init = True
+                self._resume_at = None       # the truncating resume (if any) took
+                self._fork_next = False
                 self.session_id = obj.get("session_id")
                 new_csid = obj.get("session_id")
                 # Persist the id→transcript link the moment it exists, so a window
@@ -827,6 +919,19 @@ class ClaudeSession:
                 mu = (obj.get("message") or {}).get("usage")
                 if mu and not obj.get("parent_tool_use_id"):
                     self._last_msg_usage = mu
+            elif obj.get("type") == "system" and obj.get("subtype") == "compact_boundary":
+                # Compaction just replaced the history with a summary: the last
+                # message's usage is stale, so restate occupancy from the
+                # boundary's own post_tokens and re-arm the cost warnings.
+                meta = obj.get("compact_metadata") or {}
+                self._last_msg_usage = None
+                post = meta.get("post_tokens")
+                if isinstance(post, (int, float)) and self._ctx_window:
+                    self.context_pct = round(min(post / self._ctx_window, 1.0) * 100, 1)
+                    self._ctx_warned = False
+                    self._ctx_override = False
+                    self._broadcast({"type": "context", "pct": self.context_pct,
+                                     "used": int(post), "window": self._ctx_window})
             elif obj.get("type") == "result":
                 self.last_activity = time.time()
                 self._turn_active = False   # turn done; reaper may reclaim once idle
@@ -841,6 +946,11 @@ class ClaudeSession:
                 # a synthesized task_updated — so a kill resolves in the UI even
                 # if the task registry never emits its own terminal event.
                 resp = obj.get("response") or {}
+                waiter = self._pending_ctl.get(resp.get("request_id"))
+                if waiter is not None:
+                    waiter["resp"] = resp
+                    waiter["ev"].set()
+                    continue          # an internal call; nothing for the UI
                 task_id = self._pending_stops.pop(resp.get("request_id"), None)
                 if task_id:
                     if resp.get("subtype") == "success":
@@ -850,6 +960,11 @@ class ClaudeSession:
                         self._broadcast({"type": "system", "subtype": "task_stop_failed",
                                          "task_id": task_id,
                                          "error": str(resp.get("error") or "stop failed")})
+                # Every control_response answers something the Console asked; the
+                # UI has no use for the raw ack, and the initialize reply alone
+                # is ~80 KB (the full command list). Recording it appended that
+                # much to a chat's jsonl on every spawn.
+                continue
             elif obj.get("type") == "control_request":
                 # The CLI is asking US something over the control protocol. The
                 # one we care about is can_use_tool (a permission "ask"); surface
@@ -895,6 +1010,23 @@ class ClaudeSession:
             })
             self._notify_permission(req_id, req.get("tool_name"),
                                     req.get("input") or {})
+            return True
+        if sub == "elicitation":
+            # An MCP server wants input from the user (MCP elicitation): a form
+            # described by a JSON schema, or a URL to visit. It used to fall
+            # through to the decline below, which cancelled the request before
+            # anyone saw it. Same lifecycle as a permission card: parked in
+            # _pending_perms so interrupt() and clearPermCards drop it.
+            self._pending_perms[req_id] = {"tool_name": "__elicitation__"}
+            ev = {"type": "elicitation_request", "request_id": req_id,
+                  "server": req.get("mcp_server_name") or req.get("display_name") or "",
+                  "message": req.get("message") or "",
+                  "mode": req.get("mode") or ("url" if req.get("url") else "form"),
+                  "url": req.get("url"),
+                  "schema": req.get("requested_schema") or {},
+                  "title": req.get("title") or ""}
+            self._broadcast(ev)
+            self._notify_elicitation(ev)
             return True
         # Unknown blocking request (e.g. request_user_dialog): decline politely so
         # the CLI applies its default and the turn keeps moving.
@@ -965,6 +1097,20 @@ class ClaudeSession:
         except Exception:
             pass   # a missing/broken notifier must never swallow the question card
 
+    def _notify_elicitation(self, ev):
+        """Banner for a pending MCP elicitation; tapping it raises the chat where
+        the form is. No answer buttons: the fields are schema-driven."""
+        try:
+            body = " ".join(str(ev.get("message") or "").split())[:140] or "needs your input."
+            subprocess.Popen(
+                [NOTIFY_BIN, body, f"{ev.get('server') or 'An MCP server'} needs input",
+                 "Purr", f"console:{self.id}", "--subtitle", "MCP elicitation",
+                 "--urgency", "timeSensitive", "--group", f"perm-{self.id}",
+                 "--id", f"perm-{ev.get('request_id')}", "--no-voice"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
     def _notify_permission(self, req_id, tool_name, tool_input):
         """Put a blocking permission ask on a banner with the decision buttons
         wired straight back to /permission-response.
@@ -1018,10 +1164,13 @@ class ClaudeSession:
             used = (u.get("input_tokens", 0)
                     + u.get("cache_read_input_tokens", 0)
                     + u.get("cache_creation_input_tokens", 0))
+            if not used:
+                return   # a result with no API call (compaction, a local command)
             window = 0
             for mu in (result.get("modelUsage") or {}).values():
                 window = max(window, mu.get("contextWindow", 0))
             if window:
+                self._ctx_window = window
                 self.context_pct = round(min(used / window, 1.0) * 100, 1)
                 self._broadcast({"type": "context", "pct": self.context_pct,
                                  "used": used, "window": window})
@@ -1043,9 +1192,10 @@ class ClaudeSession:
             self._ctx_warned = True
             self._broadcast({
                 "type": "context_warning", "level": "warn", "pct": pct,
-                "text": (f"This chat is at {pct:.0f}% of the context window. Long "
-                         "conversations re-bill their whole history every message — "
-                         "start a “+ new chat” for unrelated tasks to save tokens.")})
+                "actions": ["compact", "new"],
+                "text": (f"This chat is at {pct:.0f}% of the context window. Every "
+                         "message re-bills the whole history. Compact to shrink it "
+                         "and keep going here, or start a new chat for unrelated work.")})
 
     def context_gate(self):
         """Cost cap checked before forwarding a message. Returns a reason string
@@ -1061,7 +1211,8 @@ class ClaudeSession:
         self._ctx_override = True
         return (f"This chat is at {pct:.0f}% of the context window. Every message "
                 "now re-bills the whole conversation, which burns tokens fast. "
-                "Start a “+ new chat” for a new task, or send again to continue here.")
+                "Compact to shrink it, start a new chat, or send again to continue "
+                "here as is.")
 
     # ---- progress bars -----------------------------------------------------
     def progress(self, payload):
@@ -1298,6 +1449,312 @@ class ClaudeSession:
                       "interrupt": True}
         return self._write_stdin({"type": "control_response", "response": {
             "subtype": "success", "request_id": request_id, "response": result}})
+
+    def control_call(self, subtype, payload=None, timeout=20.0):
+        """Send one control_request and wait for its control_response. Returns
+        (ok, response) where response is the CLI's `response` dict on success
+        or an error string. Needs a live backend and the initialize handshake
+        (sent at spawn); this never starts a process on its own, so a dormant
+        chat answers (False, "backend not running") and the caller decides
+        whether waking it is worth it."""
+        if not self.alive or not self.proc or self.proc.stdin is None:
+            return False, "backend not running"
+        self._maybe_init_control()
+        req_id = self._next_ctl_id(subtype.replace("_", "-"))
+        waiter = {"ev": threading.Event(), "resp": None}
+        self._pending_ctl[req_id] = waiter
+        req = {"type": "control_request", "request_id": req_id,
+               "request": dict(payload or {}, subtype=subtype)}
+        if not self._write_stdin(req):
+            self._pending_ctl.pop(req_id, None)
+            return False, "write failed"
+        if not waiter["ev"].wait(timeout):
+            self._pending_ctl.pop(req_id, None)
+            return False, "timed out"
+        self._pending_ctl.pop(req_id, None)
+        resp = waiter["resp"] or {}
+        if resp.get("subtype") == "success":
+            return True, resp.get("response") or {}
+        return False, str(resp.get("error") or "control request failed")
+
+    def wake(self, timeout=25.0):
+        """Start (or resume) the backend and wait for its init event, so a
+        control call has something to talk to. Returns True once live+inited.
+        Costs no tokens: init fires on spawn for a resumed session."""
+        self.ensure_started()
+        if not self.alive:
+            return False
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._saw_init:
+                return True
+            if not self.alive:
+                return False
+            time.sleep(0.2)
+        return self.alive
+
+    def compact(self):
+        """Compact the conversation now (the CLI's /compact): the history is
+        replaced by a summary, so every later turn re-bills a fraction of what
+        it did. Sent as a user message because stream-json executes built-in
+        slash commands typed as input (confirmed live 2026-09-20: status
+        'compacting', then compact_boundary, then a result with num_turns 0).
+        Not echoed as a user bubble; the boundary divider is the visible
+        trace. Wakes a dormant chat first, since compacting is exactly what a
+        big resumed chat wants before its next expensive turn."""
+        if not self.alive:
+            if not self.wake():
+                return False
+        with self._lock:
+            if self._turn_active:
+                return False
+            self._turn_active = True
+            self.last_activity = time.time()
+        self._broadcast({"type": "system", "subtype": "status", "status": "compacting"},
+                        record=False)
+        msg = {"type": "user", "message": {"role": "user", "content": "/compact"}}
+        if not self._write_stdin(msg):
+            self._turn_active = False
+            return False
+        return True
+
+    def context_usage(self):
+        """The CLI's own context breakdown (`get_context_usage`: system prompt,
+        tools, MCP tools, memory, messages...), the data behind /context."""
+        if not self.alive:
+            return False, "backend not running"
+        return self.control_call("get_context_usage")
+
+    def mcp_status(self):
+        """Live MCP server list with connection state, from `mcp_status`."""
+        if not self.alive:
+            return False, "backend not running"
+        ok, resp = self.control_call("mcp_status")
+        if not ok:
+            return False, resp
+        return True, (resp.get("mcpServers") if isinstance(resp, dict) else resp) or []
+
+    def mcp_action(self, action, server, enabled=None):
+        """reconnect / toggle / authenticate / clear_auth one MCP server by name,
+        over the same control requests the TUI's /mcp screen uses."""
+        if not server:
+            return False, "no server"
+        if not self.alive and not self.wake():
+            return False, "backend not running"
+        if action == "reconnect":
+            return self.control_call("mcp_reconnect", {"serverName": server}, timeout=60)
+        if action == "toggle":
+            return self.control_call("mcp_toggle", {"serverName": server,
+                                                    "enabled": bool(enabled)}, timeout=60)
+        if action == "authenticate":
+            return self.control_call("mcp_authenticate", {"serverName": server}, timeout=180)
+        if action == "clear_auth":
+            return self.control_call("mcp_clear_auth", {"serverName": server})
+        return False, "unknown action"
+
+    def respond_elicitation(self, request_id, action, content=None):
+        """Answer an MCP elicitation card. `action` is accept / decline / cancel;
+        `content` is the form's values for accept. Shape per the MCP spec
+        (ElicitResult), relayed as the control_response the CLI is waiting on."""
+        pend = self._pending_perms.pop(request_id, None)
+        if pend is None or pend.get("tool_name") != "__elicitation__":
+            return False
+        if action not in ("accept", "decline", "cancel"):
+            action = "cancel"
+        result = {"action": action}
+        if action == "accept":
+            result["content"] = content if isinstance(content, dict) else {}
+        return self._write_stdin({"type": "control_response", "response": {
+            "subtype": "success", "request_id": request_id, "response": result}})
+
+    # ---- rewind / branch ---------------------------------------------------
+    @staticmethod
+    def _cli_transcript_path(cwd, csid):
+        """The CLI's own session file: ~/.claude/projects/<cwd slug>/<id>.jsonl,
+        the slug being the REAL path of the cwd (/tmp is /private/tmp to the
+        CLI) with every '/' and space turned into '-'. Falls back to a search
+        across all project dirs, since the file's name is the session id."""
+        root = os.path.expanduser("~/.claude/projects")
+        try:
+            real = os.path.realpath(cwd or "")
+        except Exception:
+            real = cwd or ""
+        slug = "".join("-" if ch in "/ " else ch for ch in real)
+        path = os.path.join(root, slug, f"{csid}.jsonl")
+        if os.path.exists(path):
+            return path
+        import glob
+        hits = glob.glob(os.path.join(root, "*", f"{csid}.jsonl"))
+        return hits[0] if hits else path
+
+    def rewind_plan(self, cut_seq):
+        """Work out how to resume the conversation with everything from event
+        `cut_seq` onward dropped. Returns (ok, plan|reason). A plan is
+        {"resume_at": uuid|None, "kept": n, "dropped": n}; resume_at None means
+        the cut is before the first reply, so the next spawn starts fresh.
+
+        The anchor is the last assistant entry before the cut (its uuid is the
+        CLI transcript's own, and --resume-session-at keeps everything up to
+        and including it). Two things make a cut impossible, both checked here
+        BEFORE any transcript is touched: the anchor sits before the last
+        compaction (the CLI only loads entries after it), or the CLI session
+        file no longer holds that uuid (aged out, or never persisted)."""
+        if not self._jsonl or not os.path.exists(self._jsonl):
+            return False, "no transcript"
+        anchor = None
+        last_compact = -1
+        kept = dropped = 0
+        cutting = False
+        try:
+            with open(self._jsonl) as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    seq = obj.get("seq")
+                    # Positional cut: from the first event at/after cut_seq on,
+                    # everything goes, including legacy lines with no seq stamp.
+                    if isinstance(seq, int) and seq >= cut_seq:
+                        cutting = True
+                    if cutting:
+                        dropped += 1
+                        continue
+                    kept += 1
+                    t = obj.get("type")
+                    if t == "system" and obj.get("subtype") == "compact_boundary":
+                        last_compact = seq if isinstance(seq, int) else kept
+                    if not obj.get("uuid") or obj.get("parent_tool_use_id"):
+                        continue
+                    pos = seq if isinstance(seq, int) else kept
+                    if t in ("assistant", "mist_msg"):
+                        anchor = (pos, obj["uuid"])
+                    elif t == "user" and self._is_chain_user(obj):
+                        # The CLI's own user entries (a compaction summary, a
+                        # local command echo) are chain entries too; the summary
+                        # is what makes a cut right after a compaction possible.
+                        anchor = (pos, obj["uuid"])
+        except Exception as e:
+            return False, f"could not read transcript: {e}"
+        if not dropped:
+            # Nothing to cut: the whole conversation, resumed as-is (and forked
+            # by the caller). No anchor needed, so compaction is no obstacle.
+            return True, {"resume_at": None, "kept": kept, "dropped": 0, "whole": True}
+        if anchor is None:
+            return True, {"resume_at": None, "kept": kept, "dropped": dropped}
+        if anchor[0] < last_compact:
+            return False, ("that point is before the last compaction; the CLI can only "
+                           "rewind to messages after it")
+        if self.claude_session_id:
+            path = self._cli_transcript_path(self.cwd, self.claude_session_id)
+            needle = '"uuid":"%s"' % anchor[1]
+            try:
+                with open(path, "rb") as f:
+                    found = any(needle.encode() in ln for ln in f)
+            except OSError:
+                found = False
+            if not found:
+                return False, ("the CLI's copy of this conversation no longer has that "
+                               "message (it may have aged out), so it can't be rewound")
+        return True, {"resume_at": anchor[1], "kept": kept, "dropped": dropped}
+
+    @staticmethod
+    def _is_chain_user(obj):
+        """A CLI-echoed user entry that lives in the transcript chain (string
+        content, or text blocks), as opposed to a tool_result carrier."""
+        content = (obj.get("message") or {}).get("content")
+        if isinstance(content, str):
+            return True
+        if isinstance(content, list):
+            return not any(isinstance(b, dict) and b.get("type") == "tool_result"
+                           for b in content)
+        return False
+
+    def _copy_transcript_until(self, cut_seq, dest):
+        """Stream this chat's jsonl into `dest`, keeping everything before the
+        first event stamped at or after cut_seq (same positional rule as
+        rewind_plan, so legacy seq-less lines follow their neighbours)."""
+        tmp = dest + ".tmp.%d" % os.getpid()
+        n = 0
+        cutting = False
+        with open(self._jsonl) as src, open(tmp, "w") as out:
+            for line in src:
+                try:
+                    seq = json.loads(line).get("seq")
+                except Exception:
+                    continue
+                if isinstance(seq, int) and seq >= cut_seq:
+                    cutting = True
+                if cutting:
+                    continue
+                out.write(line if line.endswith("\n") else line + "\n")
+                n += 1
+        os.replace(tmp, dest)
+        return n
+
+    def rewind(self, cut_seq):
+        """Truncate THIS chat in place at event `cut_seq` (the seq of a user
+        message, typically): the transcript loses that message and everything
+        after it, and the next send resumes the model's memory cut at the same
+        point. The tail is gone for good, so the UI confirms first. Returns
+        (ok, plan|reason)."""
+        ok, plan = self.rewind_plan(cut_seq)
+        if not ok:
+            return False, plan
+        with self._lock:
+            if self._turn_active:
+                return False, "a turn is still running; stop it first"
+            if self.alive:
+                self._stop_locked()
+        with self._hist_lock:
+            self._copy_transcript_until(cut_seq, self._jsonl)
+            self.history = []
+            self._history_loaded = False
+            self.context_pct = None
+            self._last_msg_usage = None
+            self._ctx_warned = False
+            self._ctx_override = False
+        self._load_history()
+        self._resume_tried = False
+        if plan["resume_at"]:
+            self._resume_at = plan["resume_at"]
+        else:
+            self._resume_at = None
+            self.claude_session_id = None
+        if on_meta_dirty:
+            try:
+                on_meta_dirty()
+            except Exception:
+                pass
+        return True, plan
+
+    def seed_branch(self, other, cut_seq):
+        """Populate a brand-new session `other` with this chat's transcript up
+        to `cut_seq` and point it at the same CLI session, truncated + forked
+        (a branch, in claude.ai terms). This chat is untouched. cut_seq None
+        means the whole conversation. Returns (ok, plan|reason)."""
+        if cut_seq is None:
+            cut_seq = 1 << 62
+        ok, plan = self.rewind_plan(cut_seq)
+        if not ok:
+            return False, plan
+        with self._hist_lock:
+            self._copy_transcript_until(cut_seq, other._jsonl)
+        whole = bool(plan.get("whole"))
+        other.claude_session_id = (self.claude_session_id
+                                   if (plan["resume_at"] or whole) else None)
+        other._resume_at = plan["resume_at"]
+        other._fork_next = whole and bool(self.claude_session_id)
+        other._resume_tried = False
+        other.model = self.model
+        other.effort = self.effort
+        other.permission_mode = self.permission_mode
+        other.cwd = self.cwd
+        other.title = ("↳ " + self.title) if self.title else None
+        other._history_loaded = False
+        other.history = []
+        other._load_history()
+        return True, plan
 
     def interrupt(self):
         """Stop the in-flight turn via the control protocol (the Esc the TUI has),

@@ -645,13 +645,24 @@ def _quick_show(app=None):
         _show_panel()
 
 
+def _dialog(kind):
+    """pywebview's dialog kind: the FileDialog enum on current versions, the
+    old module constants (OPEN_DIALOG / FOLDER_DIALOG) before it. The old names
+    still work but log a deprecation line per call, which was ~1100 lines of
+    desktop.log noise burying the real errors."""
+    enum = getattr(webview, "FileDialog", None)
+    if enum is not None and hasattr(enum, kind):
+        return getattr(enum, kind)
+    return getattr(webview, kind + "_DIALOG")
+
+
 class Api:
     """Exposed to JS as window.pywebview.api."""
 
     def pick_file(self):
         try:
             win = webview.windows[0]
-            res = win.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=True)
+            res = win.create_file_dialog(_dialog("OPEN"), allow_multiple=True)
             return list(res) if res else []
         except Exception:
             return []
@@ -660,7 +671,7 @@ class Api:
         """Native folder chooser — used by the repo card to pick a working dir."""
         try:
             win = webview.windows[0]
-            res = win.create_file_dialog(webview.FOLDER_DIALOG)
+            res = win.create_file_dialog(_dialog("FOLDER"))
             if not res:
                 return ""
             return res[0] if isinstance(res, (list, tuple)) else res

@@ -533,13 +533,14 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 /* ---- model / permission card ---- */
 /* top/left are set in JS so the menu drops directly under the badge or button
    that opened it (anchorCard), instead of floating detached in the corner. */
-#modelCard, #permCard, #thinkCard {
+#modelCard, #permCard, #thinkCard, #ctxCard {
   position: fixed; top: 44px; left: auto; right: 14px; width: 240px; z-index: 30;
   background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line);
 }
 #permCard { width: 268px; }
 #thinkCard { width: 276px; }
-#modelCard[hidden], #permCard[hidden], #thinkCard[hidden] { display: none; }
+#ctxCard { width: 320px; }
+#modelCard[hidden], #permCard[hidden], #thinkCard[hidden], #ctxCard[hidden] { display: none; }
 #modelList, #permList, #thinkList { padding: 4px 0; }
 .modelrow {
   padding: 7px 12px; cursor: pointer; color: var(--text); font-size: 12px;
@@ -1279,3 +1280,77 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 .share-preview img { display: block; width: 100%; height: auto; }
 .share-preview-cap { color: var(--dim); font-size: 11px; padding: 6px 8px;
   border-top: 1px solid var(--line); }
+
+/* ---- context breakdown card (ctx badge) ---- */
+.ctx-body { padding: 6px 12px; font-size: 12px; max-height: 50vh; overflow: auto; }
+.ctx-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed var(--line-soft); }
+.ctx-row:last-child { border-bottom: 0; }
+.ctx-row .ctx-n { color: var(--md-sys-color-on-surface-variant); font-variant-numeric: tabular-nums; }
+.ctx-bar { height: 4px; background: var(--md-sys-color-surface-container-highest); margin: 4px 0 8px; }
+.ctx-bar i { display: block; height: 100%; background: var(--teal); }
+.ctx-actions { border-top: 1px solid var(--line); }
+
+/* ---- compaction divider (system compact_boundary) ---- */
+.compact-divider {
+  display: flex; align-items: center; gap: 8px; margin: 14px 0; color: var(--dim);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1px; user-select: none;
+}
+.compact-divider::before, .compact-divider::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
+
+/* ---- notices with actions (context-cost warning / held send) ---- */
+.notice .notice-actions { display: flex; gap: 8px; margin-top: 6px; }
+.notice .perm-btn { padding: 3px 9px; }
+
+/* ---- per-message actions (edit / regenerate / branch / copy) ---- */
+.msg .msg-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0; transition: opacity .12s; user-select: none; }
+.msg:hover .msg-actions, .msg:focus-within .msg-actions { opacity: 1; }
+.msg-actions button {
+  background: none; border: 1px solid transparent; color: var(--dim); cursor: pointer;
+  padding: 0 3px; font: inherit; line-height: 1; letter-spacing: 0; text-transform: none;
+}
+.msg-actions button:hover { color: var(--teal); border-color: var(--line); }
+.msg-actions button:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; opacity: 1; }
+.msg-actions .msi { font-size: 15px; }
+.msg-edit textarea {
+  width: 100%; box-sizing: border-box; min-height: 60px; font: inherit; font-size: 13px; color: var(--text);
+  background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--teal); padding: 6px 10px;
+  border-radius: 0; resize: vertical;
+}
+.msg-edit textarea:focus { outline: none; }
+.msg-edit .perm-actions { padding: 6px 0 0; }
+.msg-confirm {
+  border: 1px solid var(--warn); padding: 6px 10px; margin-top: 8px; font-size: 12px; color: var(--warn);
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.msg-confirm .perm-btn { padding: 3px 9px; }
+@media (prefers-reduced-motion: reduce) { .msg .msg-actions { transition: none; } }
+
+/* ---- MCP panel (settings) ---- */
+.mcp-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--line-soft); font-size: 12px; }
+.mcp-row .mcp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.mcp-row .mcp-state { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
+.mcp-row .mcp-state.connected { color: var(--ok); }
+.mcp-row .mcp-state.failed, .mcp-row .mcp-state.needs-auth, .mcp-row .mcp-state.needsauth { color: var(--err); }
+.mcp-row .mcp-state.pending, .mcp-row .mcp-state.connecting { color: var(--warn); }
+.mcp-row button {
+  background: none; border: 1px solid var(--line); color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer; font: inherit; font-size: 11px; padding: 1px 6px;
+}
+.mcp-row button:hover { border-color: var(--teal); color: var(--teal); }
+.mcp-row button:disabled { opacity: .5; cursor: default; }
+.mcp-stale { font-size: 11px; color: var(--warn); margin: 4px 0 6px; }
+
+/* ---- MCP elicitation card ---- */
+.perm-card.elicit { border-color: var(--violet); }
+.perm-card.elicit .perm-head { color: var(--violet); }
+.e-desc { font-size: 11px; color: var(--md-sys-color-on-surface-variant); margin: 2px 0 4px; white-space: pre-wrap; }
+.e-field { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; }
+.e-field.e-check { flex-direction: row; align-items: center; gap: 8px; }
+.e-field label { font-size: 12px; color: var(--text); }
+.e-field input[type=text], .e-field input[type=number], .e-field textarea, .e-field select {
+  font: inherit; font-size: 13px; color: var(--text); background: var(--md-sys-color-surface-container-lowest);
+  border: 1px solid var(--line); padding: 6px 10px; border-radius: 0; resize: vertical;
+}
+.e-field input:focus, .e-field textarea:focus, .e-field select:focus { outline: none; border-color: var(--teal); }
+.e-field.e-missing input, .e-field.e-missing textarea, .e-field.e-missing select { border-color: var(--err); }
+.e-field a { color: var(--teal); overflow-wrap: anywhere; }

@@ -23,6 +23,7 @@ import time
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
+import archive
 import quickaccess
 import search as chat_search
 import share
@@ -34,6 +35,29 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 # The UI polls /pending-open, /usage, /repo on short intervals; logging every one
 # of those at INFO grew desktop.log to ~14 MB. Keep only warnings/errors.
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+# A client that goes away mid-write (a tab switched off a long SSE replay, the
+# window closed, macOS handing back ENOBUFS when the loopback send queue is
+# full) surfaces in werkzeug as a full "Error on request" traceback, because it
+# only treats ConnectionError as a dropped client and errno 55/32/54 arrive as
+# plain OSError. Nothing is wrong with the server in any of those cases, so
+# they get one line each instead of twenty.
+_DROPPED_CLIENT = ("[Errno 55]", "[Errno 32]", "[Errno 54]", "Broken pipe",
+                   "No buffer space available", "Connection reset by peer")
+try:
+    import werkzeug.serving as _wz_serving
+    _wz_log = _wz_serving._log
+
+    def _quiet_wz_log(type, message, *args):
+        if type == "error" and any(k in str(message) for k in _DROPPED_CLIENT):
+            logging.getLogger("mist.http").warning(
+                "client dropped mid-write (%s)",
+                next(k for k in _DROPPED_CLIENT if k in str(message)))
+            return
+        _wz_log(type, message, *args)
+    _wz_serving._log = _quiet_wz_log
+except Exception:
+    pass
 
 # ---- session registry + metadata persistence --------------------------------
 _sessions = {}   # id -> ClaudeSession
@@ -162,7 +186,8 @@ def _save_meta_now():
                          "permission_mode": s.permission_mode,
                          "effort": s.effort,
                          "claude_session_id": s.claude_session_id,
-                         "import_path": s.import_path, "cwd": s.cwd})
+                         "import_path": s.import_path, "cwd": s.cwd,
+                         "archived": bool(s.archived)})
     # Atomic write (temp + fsync + os.replace): open(...,"w") truncates the
     # file to zero before writing, so a concurrent reader — another desktop.py
     # process, or _load_meta() on a restart — could catch it empty/half-written,
@@ -271,6 +296,7 @@ def _load_meta():
             effort=m.get("effort") or None,
             import_path=m.get("import_path"), cwd=m.get("cwd") or HARNESS,
             last_activity=m.get("last_activity"), autostart=False)  # dormant
+        _sessions[sid].archived = bool(m.get("archived"))
         _order.append(sid)
         try:
             n = int(sid.lstrip("s"))
@@ -281,7 +307,7 @@ def _load_meta():
         _save_meta()   # persist the recovered links/titles so the heal is one-time
 
 
-def _new_session():
+def _new_session(warm=True):
     global _counter
     # Under the meta lock: two concurrent creates (quick-entry + the UI button)
     # racing the unguarded counter could mint the same sid and silently overwrite
@@ -312,9 +338,10 @@ def _new_session():
         s = _sessions.get(sid)
         if s is not None:
             s.ensure_started()
-    warm = threading.Timer(1.5, _warm)
-    warm.daemon = True   # never hold a server shutdown for a warm-up
-    warm.start()
+    if warm:
+        t = threading.Timer(1.5, _warm)
+        t.daemon = True   # never hold a server shutdown for a warm-up
+        t.start()
     return sid
 
 
@@ -328,7 +355,8 @@ def _session_list():
                         "last_activity": s.last_activity,
                         "model": s.model or "",
                         "permission_mode": s.permission_mode or "",
-                        "effort": s.effort or ""})
+                        "effort": s.effort or "",
+                        "archived": bool(s.archived)})
     return out
 
 
@@ -952,9 +980,9 @@ def set_model(sid):
     if not s:
         return jsonify({"ok": False}), 404
     model = (request.get_json(silent=True) or {}).get("model", "")
-    s.set_model(model)
+    live = s.set_model(model)
     _save_meta()
-    return jsonify({"ok": True, "model": model})
+    return jsonify({"ok": True, "model": model, "live": bool(live)})
 
 
 _VALID_PERMS = {"default", "acceptEdits", "plan", "bypassPermissions"}
@@ -991,9 +1019,141 @@ def set_permission(sid):
     mode = (request.get_json(silent=True) or {}).get("mode", "")
     if mode not in _VALID_PERMS:
         return jsonify({"ok": False, "error": "bad mode"}), 400
-    s.set_permission(mode)
+    live = s.set_permission(mode)
     _save_meta()
-    return jsonify({"ok": True, "mode": mode})
+    return jsonify({"ok": True, "mode": mode, "live": bool(live)})
+
+
+@app.route("/sessions/<sid>/compact", methods=["POST"])
+def compact_session(sid):
+    """Compact the conversation now (the CLI's /compact). Wakes a dormant chat."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    if not s.compact():
+        return jsonify({"ok": False, "error": "busy or backend unavailable"}), 409
+    return jsonify({"ok": True})
+
+
+@app.route("/sessions/<sid>/context")
+def context_breakdown(sid):
+    """The CLI's own context breakdown for this chat (get_context_usage)."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    if not s.alive:
+        # 200, not 409: a dormant chat is a normal state, and WebKit logs every
+        # non-2xx fetch as a console error.
+        return jsonify({"ok": False, "dormant": True,
+                        "error": "backend dormant; send a message to wake it"})
+    ok, resp = s.context_usage()
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    return jsonify({"ok": True, "usage": resp})
+
+
+@app.route("/sessions/<sid>/mcp")
+def mcp_status(sid):
+    """MCP servers as the live backend sees them (name + status). A dormant
+    chat answers from its last init event so the panel still shows the set,
+    flagged so the UI can say the states may be stale."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    if s.alive:
+        ok, servers = s.mcp_status()
+        if ok:
+            return jsonify({"ok": True, "live": True, "servers": servers})
+    servers = ((s.last_init or {}).get("mcp_servers")) or []
+    return jsonify({"ok": True, "live": False, "servers": servers})
+
+
+@app.route("/sessions/<sid>/mcp/<action>", methods=["POST"])
+def mcp_action(sid, action):
+    """reconnect / toggle / authenticate / clear_auth one server. Body:
+    {server, enabled?}. Wakes a dormant backend (a resume, no tokens)."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    ok, resp = s.mcp_action(action, (d.get("server") or "").strip(),
+                            enabled=d.get("enabled"))
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    return jsonify({"ok": True, "response": resp})
+
+
+@app.route("/sessions/<sid>/elicitation-response", methods=["POST"])
+def elicitation_response(sid):
+    """Answer an MCP elicitation card. Body: {request_id, action:
+    accept|decline|cancel, content?: {field: value}}."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    ok = s.respond_elicitation(d.get("request_id"), d.get("action", "cancel"),
+                               content=d.get("content"))
+    return jsonify({"ok": ok})
+
+
+@app.route("/sessions/<sid>/rewind", methods=["POST"])
+def rewind_session(sid):
+    """Edit-and-resend / regenerate: truncate this chat at event `seq` (a user
+    message's seq) and, if `text` is given, send it as the new message from
+    that point. Body: {seq, text?, dry_run?}. dry_run only reports the plan
+    (how many events go) so the UI can confirm before anything is lost."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    try:
+        seq = int(d.get("seq"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad seq"}), 400
+    if d.get("dry_run"):
+        ok, plan = s.rewind_plan(seq)
+        return jsonify({"ok": ok, "plan": plan if ok else None,
+                        "error": None if ok else plan})
+    ok, plan = s.rewind(seq)
+    if not ok:
+        return jsonify({"ok": False, "error": plan}), 409
+    _save_meta()
+    text = (d.get("text") or "").strip()
+    sent = s.send(text) if text else None
+    return jsonify({"ok": True, "plan": plan, "sent": sent, "title": s.title})
+
+
+@app.route("/sessions/<sid>/branch", methods=["POST"])
+def branch_session(sid):
+    """Branch: a new chat holding this conversation up to event `seq` (omit for
+    the whole thing), resumed from the same CLI session, truncated and forked.
+    The original is untouched. Body: {seq?}."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    seq = d.get("seq")
+    try:
+        seq = int(seq) if seq is not None else None
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad seq"}), 400
+    # No warm-up timer: a backend spawned before the seed lands would start a
+    # FRESH session, and the branch would then carry no model memory at all.
+    new_sid = _new_session(warm=False)
+    other = _sessions[new_sid]
+    ok, plan = s.seed_branch(other, seq)
+    if not ok:
+        _sessions.pop(new_sid, None)
+        if new_sid in _order:
+            _order.remove(new_sid)
+        other.stop()
+        other.delete_data()
+        _save_meta()
+        return jsonify({"ok": False, "error": plan}), 409
+    _save_meta()
+    return jsonify({"ok": True, "id": new_sid, "title": other.title or "New chat",
+                    "model": other.model or "", "permission_mode": other.permission_mode or "",
+                    "effort": other.effort or "", "plan": plan})
 
 
 @app.route("/sessions/<sid>/permission-response", methods=["POST"])
@@ -1215,11 +1375,16 @@ def stream(sid):
         q = s.subscribe()
         try:
             last_seq = 0
-            for ev in s.snapshot_history():     # replay full transcript
+            for i, ev in enumerate(s.snapshot_history()):     # replay full transcript
                 sq = ev.get("seq")
                 if isinstance(sq, int) and sq > last_seq:
                     last_seq = sq
                 yield _sse(ev)
+                # A big transcript is tens of MB pushed into one loopback socket
+                # in a tight loop; a breather every few hundred events keeps the
+                # send queue from filling faster than WebKit drains it (ENOBUFS).
+                if i % 400 == 399:
+                    time.sleep(0.01)
             # Boundary marker: everything above is history, everything below is
             # live. The front-end uses this to reconcile the background-task
             # monitor once (instead of flickering it during replay).
@@ -2084,6 +2249,41 @@ def _periodic_save():
         _save_meta_now()
 
 
+def _archiver():
+    """Condense chats that have sat untouched for archive.ARCHIVE_AFTER_DAYS
+    (see archive.py). Runs a couple of minutes after boot, then daily. Each
+    pass is bounded so a first run over hundreds of old chats can't hog the
+    server; the rest wait for the next pass."""
+    time.sleep(120)
+    while True:
+        try:
+            now = time.time()
+            done = 0
+            for s in list(_sessions.values()):
+                if done >= 60:
+                    break
+                if not archive.due(s, now) or not s._jsonl:
+                    continue
+                try:
+                    res = archive.condense(s._jsonl)
+                except Exception as e:
+                    logging.getLogger("mist.archive").warning("condense %s failed: %s", s.id, e)
+                    continue
+                s.archived = True
+                with s._hist_lock:
+                    s.history = []
+                    s._history_loaded = False
+                done += 1
+                if res:
+                    logging.getLogger("mist.archive").info(
+                        "archived %s: %d -> %d events", s.id, res[0], res[1])
+            if done:
+                _save_meta()
+        except Exception:
+            pass
+        time.sleep(24 * 3600)
+
+
 def _reaper():
     """Put idle chat backends dormant so they stop pinning RAM/CPU once a
     conversation has gone quiet (see bridge.IDLE_REAP_SEC). Dormant chats keep
@@ -2110,6 +2310,7 @@ _import_existing()
 quickaccess.load()
 threading.Thread(target=_periodic_save, daemon=True).start()
 threading.Thread(target=_reaper, daemon=True).start()
+threading.Thread(target=_archiver, daemon=True).start()
 
 
 if __name__ == "__main__":

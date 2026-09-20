@@ -73,7 +73,8 @@ Backend: `/sessions` GET/POST, `/sessions/<id>` DELETE, `/sessions/<id>/pin` POS
 ## Usage metrics (top bar)
 
 - **ctx %**: context window used for the *active* tab, computed live in `bridge.py` from the latest assistant message's usage (`input + cache_read + cache_creation`) ÷ the model's `contextWindow`, broadcast as a `context` event. Uses the per-message usage (a single API call = current context occupancy), not the `result` event's turn-cumulative total, which sums every internal tool-call round trip and reads past 100%. Subagent (sidechain) messages, those with a `parent_tool_use_id`, are skipped: they carry the subagent's context, not the session's.
-- **5h %** and **7d %**: the **%** comes live from `GET api.anthropic.com/api/oauth/usage` — a free, read-only account endpoint (authenticated with Claude Code's own subscription OAuth token from Keychain) that reports per-window utilization and reset times without sending a message, consuming tokens, or opening a rate-limit window (verified: consecutive reads return identical numbers). `bridge.start_rate_poller` reads it every 60s while any Console window is open (600s idle), plus immediately after each turn's `rate_limit_event`, so the badge is at most ~1 minute behind even when the usage is being spent elsewhere (interactive CLI, phone, a background routine). The **blocked status** still arrives live from `rate_limit_event`s in the stream; the old statusline cache (`~/.claude/usage-cache.json`) remains as a last-resort fallback. The badge tooltip says which source the % came from and how old it is. (This replaces the old probe, which paid a real 1-token haiku call and could only fire right after a turn.)
+- **ctx %** is clickable: the card shows the CLI's own context breakdown (`get_context_usage` over the control channel: system prompt, tools, MCP tools, memory, skills, messages) with a **compact now** button.
+- **5h %** and **7d %**: the **%** comes live from `GET api.anthropic.com/api/oauth/usage` — a free, read-only account endpoint (authenticated with Claude Code's own subscription OAuth token from Keychain) that reports per-window utilization and reset times without sending a message, consuming tokens, or opening a rate-limit window (verified: consecutive reads return identical numbers). `bridge.start_rate_poller` reads it every 60s while any Console window is open (600s idle), plus immediately after each turn's `rate_limit_event`, so the badge is at most ~1 minute behind even when the usage is being spent elsewhere (interactive CLI, phone, a background routine). The **blocked status** still arrives live from `rate_limit_event`s in the stream; the old statusline cache (`~/.claude/usage-cache.json`) remains as a last-resort fallback. The badge tooltip says which source the % came from and how old it is. (This replaces the old probe, which paid a real 1-token haiku call and could only fire right after a turn.) The endpoint rate-limits its readers, so the poll interval is adaptive: a 429 doubles it and a success walks it back down, never below a step above the spacing that last 429'd (a fixed 60s poll failed every other call).
 
 ## Composer & boot
 
@@ -92,6 +93,22 @@ Switch a chat to **default / acceptEdits / plan** via the perm badge and the Con
 - The answer is relayed via `POST /sessions/<id>/permission-response` → `respond_permission()` → a `control_response` (`{behavior:"allow", updatedInput}` or `{behavior:"deny"}`). "Allow, don't ask again" returns the CLI's own `permission_suggestions` as `updatedPermissions` (e.g. auto-accept edits for the session).
 - **Clarifying questions work in these modes too.** `AskUserQuestion` arrives over the same channel (a `can_use_tool` with `requires_user_interaction`), and the bridge re-broadcasts it as a `question_request`. The UI renders a form card: option buttons (radio or checkbox per `multiSelect`) with an "Other" box, a textarea for `kind:"text"`, a number field for `kind:"number"`. "Send answers" POSTs `{answers: {question text: label or typed text}}` to the same `permission-response` route and it goes back as `updatedInput.answers` (multi-select joined with `", "`); "Dismiss" denies without interrupting the turn. The banner offers the options as buttons when there is one plain choice question with two or three options, and otherwise just raises the Console. Confirmed end to end against claude 2.1.261.
 - **bypassPermissions still spawns with `--disallowed-tools AskUserQuestion`.** There is no prompt tool in that mode and no TTY, so the picker would auto-dismiss with no answer; disabling it makes the model ask in plain text instead.
+
+### Live switching
+
+The **model** badge switches a running chat over the control channel (`set_model`, what the TUI's `/model` sends): no restart, no cold MCP boot, prompt cache kept. **Permission mode** switches live between default / acceptEdits / plan (`set_permission_mode`); any switch into or out of bypass still restarts the backend on the next message, because a process started with `--dangerously-skip-permissions` has no prompt tool wired up and the CLI refuses to enter bypass on one that wasn't. **Thinking depth** (`--effort`) has no control request, so it still applies on the next message. The notice under the badge says which happened.
+
+### MCP panel
+
+Settings → **mcp servers** lists the active chat's servers with their live state (`mcp_status`) and the actions the TUI's `/mcp` screen has: **reconnect**, **disable/enable** for this chat (`mcp_toggle`), and **auth** for an OAuth connector (`mcp_authenticate`). A dormant chat shows its last-known set; an action wakes it (a resume, no tokens). **MCP elicitation** (a server asking the user for input) renders as a schema-driven form card instead of being auto-declined.
+
+### Compaction
+
+The CLI's auto-compact does run headlessly, and `/compact` typed as input works over stream-json, so the context-cost notices (60% warn, 80% soft gate) now offer **compact now** next to **new chat**. The boundary renders as a divider with the before/after token counts, and the ctx badge is restated from the boundary's `post_tokens`.
+
+### Message actions (edit / regenerate / branch)
+
+Hover a message (or right-click it) for **edit & resend**, **regenerate**, **branch from here** and **copy**. Edit and regenerate rewind THIS chat in place: the transcript is truncated at that user message and the next spawn resumes the CLI session truncated at the same point (`--resume-session-at <uuid of the last assistant entry before it> --fork-session`, confirmed against claude 2.1.278). The tail is gone for good, so the message shows a confirm strip first. Branch creates a new chat holding the conversation up to that point (through a MIST reply, or up to a user message with its text pre-filled in the composer) and leaves the original untouched; a branch at the end is a plain `--fork-session`. Limits, all reported inline: the CLI only addresses entries after the last compaction (a compaction summary is a valid anchor, so "regenerate the first reply after compacting" works), and the CLI's session file must still hold the anchor.
 
 ### Interrupt
 
@@ -266,7 +283,14 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 - [x] **Session list / resume**: dormant revival via `--resume <session_id>`.
 - [ ] **@-file mentions**: `@` path autocomplete in the composer.
 - [ ] **MIST voice**: speak responses via `mist-voice`; reactive avatar.
-- [ ] **Runtime model/mode switch**: `set_model` / `set_permission_mode` control_requests instead of kill/restart (the control channel already supports both).
+- [x] **Runtime model/mode switch**: `set_model` / `set_permission_mode` control_requests instead of kill/restart (effort still restarts: no control request for it).
+- [x] **MCP panel**: live status + reconnect / toggle / authenticate; elicitation cards.
+- [x] **Message actions**: edit & resend, regenerate, branch (truncating fork resume).
+- [x] **Compaction**: compact-now on the cost notices and the ctx card; boundary divider.
+
+## Archive tier (data/ growth)
+
+`data/` reached 2.9 GB across 1374 chats (14 files over 20 MB). Chats that are unpinned, dormant, unwatched and untouched for `archive.ARCHIVE_AFTER_DAYS` (90) are **condensed** by a daily server thread (`archive.py`): stream deltas, tool-result sidecars, task and progress ticks go; every assistant API message becomes one `mist_msg` event (text / thinking / tool blocks, the same shape imported chats use), `user_text` and the last `context` event stay, `seq`/`ts` stamps and the CLI `uuid` are preserved so ordering, timestamps, search and rewind anchors still work. Measured: a 41 MB chat condenses to 2.5 MB in about a second. Condensed chats fold into a collapsed **archive** section at the bottom of the rail and stay fully searchable and resumable. Pinned chats are never touched. `MIST_CONSOLE_DATA_DIR` points a test instance at its own data dir.
 
 ## Dependencies
 

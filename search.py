@@ -5,8 +5,8 @@ INVARIANTS:
   on the next search. It lives in data/, which is gitignored.
 - Indexing is incremental by (mtime, size); a changed file is fully re-indexed
   (logs are append-only, but partial offsets aren't worth the fragility).
-- Only user_text and assistant text are indexed — no tool results, no
-  stream deltas, no thinking blocks.
+- Only user_text and assistant text are indexed (mist_msg text blocks for
+  condensed/imported chats) — no tool results, no stream deltas, no thinking.
 """
 
 import json
@@ -16,7 +16,8 @@ import sqlite3
 import threading
 import time
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+DATA_DIR = (os.environ.get("MIST_CONSOLE_DATA_DIR")
+            or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 DB_PATH = os.path.join(DATA_DIR, "search-index.db")
 
 # FTS snippet markers — control chars that can't appear in chat text, replaced
@@ -62,6 +63,11 @@ def _extract(record):
     if rtype == "user_text":
         text = (record.get("text") or "").strip()
         return ("user", text) if text else None
+    if rtype == "mist_msg":
+        # condensed / imported transcripts (see archive.py, importer.py)
+        text = "\n".join((b.get("text") or "") for b in (record.get("blocks") or [])
+                         if isinstance(b, dict) and b.get("kind") == "text").strip()
+        return ("assistant", text) if text else None
     if rtype == "assistant":
         msg = record.get("message")
         if not isinstance(msg, dict):
