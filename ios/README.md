@@ -41,7 +41,20 @@ Sources/Views/ConsoleScreen     web view + status overlay (finding / unreachable
 Sources/Views/PairView          first run: scan the QR, paste the link, or type url + token
 Sources/Views/QRScannerView     AVFoundation QR reader
 Sources/Views/SettingsView      the shell's own settings: addresses, re-pair, forget
+MISTWidget/Sources/MISTWidget   WidgetKit extension: the two launcher widgets
 ```
+
+## Widgets (Lock Screen and Home Screen)
+
+`MISTWidget/` is a WidgetKit extension embedded in the app: two launchers,
+**MIST** (opens the Console) and **MIST: new chat** (opens straight into a
+fresh chat, via `mist://new`), in the Lock Screen circular, rectangular and
+inline forms plus a Home Screen small. Add them the usual way: long-press the
+Lock Screen, Customize, tap the widget area, find MIST. Nothing runs on the
+phone, so there is nothing live to show; the widgets carry no shared state on
+purpose (an App Group would add an entitlement to the signing story for a
+subtitle nobody needs). If MIST does not appear in the gallery right after an
+install, open the app once and look again.
 
 ## Pairing
 

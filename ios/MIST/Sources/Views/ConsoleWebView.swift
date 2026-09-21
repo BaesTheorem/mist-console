@@ -42,6 +42,7 @@ struct ConsoleWebView: UIViewRepresentable {
     func updateUIView(_ wv: WKWebView, context: Context) {
         let c = context.coordinator
         c.link = link
+        c.flushPendingScript()
         guard let base = link.base, let token = store.pairing?.token else { return }
         guard c.loadedGeneration != link.loadGeneration else { return }
         c.loadedGeneration = link.loadGeneration
@@ -59,6 +60,26 @@ struct ConsoleWebView: UIViewRepresentable {
         var link: ConsoleLink?
         var loadedGeneration = -1
         var baseHost: String?
+        var pageLoaded = false
+
+        /// Run the script a deep link queued, once the page is really there.
+        func flushPendingScript() {
+            guard pageLoaded, let link, let js = link.pendingScript, let wv = webView else { return }
+            link.pendingScript = nil
+            // Give the page a beat to finish its own boot (sessions load async).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                wv.evaluateJavaScript(js) { _, _ in }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            pageLoaded = true
+            let link = self.link
+            Task { @MainActor in
+                _ = link   // keep the reference alive across the hop
+                self.flushPendingScript()
+            }
+        }
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
@@ -104,6 +125,7 @@ struct ConsoleWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            pageLoaded = false
             report(error)
         }
 

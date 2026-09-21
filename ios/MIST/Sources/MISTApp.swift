@@ -30,6 +30,9 @@ struct MISTApp: App {
             link.reconnect(store: store)
         } else if url.host?.lowercased() == "settings" {
             link.showSettings = true
+        } else if url.host?.lowercased() == "new" {
+            // From the "New chat" widget: a fresh chat as soon as the page is up.
+            link.pendingScript = "if (typeof createSession === 'function') createSession();"
         }
     }
 }

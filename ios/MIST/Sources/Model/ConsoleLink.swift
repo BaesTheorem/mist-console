@@ -29,6 +29,9 @@ final class ConsoleLink: ObservableObject {
     @Published var showSettings = false
     @Published var lastResults: [String: Bool] = [:]
     @Published var lastProbeAt: Date?
+    /// JavaScript the web view runs once the page is loaded (a widget deep
+    /// link asking for a new chat, for instance), then clears.
+    @Published var pendingScript: String?
 
     private var inFlight = false
     private var streamDown = false
