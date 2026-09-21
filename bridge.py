@@ -17,6 +17,8 @@ import time
 import urllib.error
 import urllib.request
 
+import v4first
+
 HARNESS = "/Users/alexhedtke/Documents/Exobrain harness"
 
 
@@ -297,7 +299,7 @@ def _probe_rate_util():
         headers={"Authorization": "Bearer " + token,
                  "anthropic-beta": "oauth-2025-04-20"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with v4first.opener.open(req, timeout=15) as resp:   # v4 first: an AAAA stall cost 15s a poll
             data = json.loads(resp.read().decode()) or {}
     except urllib.error.HTTPError as e:
         _probe_failed("HTTP %s" % e.code)

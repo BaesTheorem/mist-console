@@ -46,22 +46,39 @@ discovery URL. Rotating the token on the Mac invalidates every phone.
 
 ## Finding the Mac
 
-On every launch and every return to the foreground the app pings each address
-in parallel (`GET /remote/ping`) and takes the first *by list order* that
-answered: the Mac's LAN address first, then `MIST.local`, then whatever
-reaches it from outside. If nothing answers and the pairing carried a
-discovery URL, it reads that document (the Mac publishes its current off-LAN
-addresses there through the share Worker's KV), merges any new addresses, and
-tries again. After a successful login it also pulls `/remote/config`, so a
-tunnel address that changed while the phone was at home is learned before the
-phone leaves.
+Two rounds, on every launch, every return to the foreground, every network
+change the phone sees (`NWPathMonitor`), and whenever the page reports its
+event stream down for more than a few seconds:
+
+1. Race every address the phone remembers (`GET /remote/ping`, in parallel)
+   and take the first *by list order* that answered. If none did and the
+   pairing carried a discovery URL, read that document (the Mac publishes its
+   whole current address list there, through the share Worker's KV, whenever
+   it changes) and race what it says.
+2. Ask that Mac for its current list (`/remote/config`, LAN first) and race
+   it again. A better address that answers replaces the first find.
+
+Round two is what makes the **hotspot** case direct. Tethered to the phone,
+the Mac takes a fresh `172.20.10.x` address that nothing the phone remembers
+would reach; the tunnel (if on) still answers, so round one lands there, then
+round two learns the tether address and moves to it. Traffic then stays on
+the tether link instead of going out through Cloudflare and back through the
+phone's own cellular twice. With the tunnel off, the discovery document
+carries the tether address instead (the Mac republishes within ~15 s of
+joining a network).
+
+While the Mac is out of reach the app looks again every 15 s.
 
 Away from home there are two lanes, chosen on the Mac:
 
 - **Cloudflare quick tunnel** (`keep a Cloudflare tunnel up`): the Console
   keeps a `cloudflared` quick tunnel running and publishes its
-  `*.trycloudflare.com` URL. Free, no account, https; the URL changes on every
-  restart, which is what the discovery lookup is for.
+  `*.trycloudflare.com` URL. Free, no account, https. Its origin is a
+  loopback-only listener (`ORIGIN_PORT`, the Console's port plus 1000) that
+  the guard treats as never local, so the tunnel is untouched by a VPN's LAN
+  rules (Mullvad's "local network sharing: block" included) and survives the
+  Mac hopping networks with the same URL. The URL only changes when the
+  cloudflared process restarts, which is what the discovery lookup is for.
 - **Your own address**: a Tailscale MagicDNS name or anything that resolves to
   the Mac. Sturdier, needs Tailscale (or similar) on both devices.
 
@@ -101,3 +118,7 @@ config, so `ios-sideload/refresh.py` can re-sign it with the others.
 - **The web view never scrolls as a document** (`bounces = false`); the
   transcript is its own scroller. If something starts rubber-banding, a
   layout change let the document grow past the viewport.
+- **A VPN with LAN blocking on either device** (Mullvad's default on the Mac)
+  kills the direct path; the app falls through to the tunnel, which works
+  through the VPN. `mullvad lan set allow` on the Mac restores the direct
+  path while it is up.

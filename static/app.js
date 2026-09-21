@@ -19,6 +19,15 @@ const IS_SHELL = document.documentElement.dataset.shell === "ios";
 function isPhone() { return PHONE_MQ.matches; }
 function isTouch() { return IS_SHELL || TOUCH_MQ.matches; }
 let closeRailDrawer = () => false;   // wired once the rail exists (end of file)
+// The iOS shell listens for these (WKScriptMessageHandler "mist"): the event
+// stream going down is its cue that the Mac may have moved (hotspot, VPN, a
+// network hop) and that it should re-probe the addresses it knows.
+function shellStream(state) {
+  try {
+    const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mist;
+    if (IS_SHELL && h) h.postMessage({ type: "stream", state });
+  } catch (_) {}
+}
 
 // Auto-grow the composer to fit its text, capped at 200px. Show the scrollbar
 // ONLY once we hit that cap. Without this, WebKit's custom (non-overlay)
@@ -650,9 +659,13 @@ class Session {
       // a successful (re)connect clears the sticky "disconnected" badge
       if (this.statusState === "error" && this.statusLabel === "disconnected")
         this.setStatus("idle", "idle");
+      if (this.active) shellStream("up");
     };
     this.es.onmessage = (m) => { try { this.onEvent(JSON.parse(m.data)); } catch (_) {} };
-    this.es.onerror = () => this.setStatus("error", "disconnected");
+    this.es.onerror = () => {
+      this.setStatus("error", "disconnected");
+      if (this.active) shellStream("down");   // the shell may need to move to another address
+    };
   }
   // Drop the stream and replay the transcript from scratch. Used after a rewind
   // changed what is on disk; the same wipe an auto-reconnect does.

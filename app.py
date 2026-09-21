@@ -2409,6 +2409,23 @@ _load_notes()
 _import_existing()
 quickaccess.load()
 remote.init()   # tunnel supervisor; a no-op until remote access + tunnel are on
+
+
+def _serve_tunnel_origin():
+    """Second listener, loopback only, on remote.ORIGIN_PORT: the address the
+    Cloudflare tunnel points at. Same app, but remote.is_local() treats every
+    request that arrives here as non-local, so the tunnel never inherits the
+    trust loopback callers have. Loopback keeps it out of reach of a VPN's LAN
+    rules and lets the tunnel's public URL survive a network hop."""
+    try:
+        from werkzeug.serving import make_server
+        srv = make_server("127.0.0.1", remote.ORIGIN_PORT, app, threaded=True)
+        srv.serve_forever()
+    except Exception as e:   # a busy port must not take the Console down
+        logging.getLogger("mist.remote").warning("tunnel origin listener not started: %s", e)
+
+
+threading.Thread(target=_serve_tunnel_origin, daemon=True, name="tunnel-origin").start()
 threading.Thread(target=_periodic_save, daemon=True).start()
 threading.Thread(target=_reaper, daemon=True).start()
 threading.Thread(target=_archiver, daemon=True).start()

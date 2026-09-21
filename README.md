@@ -310,14 +310,19 @@ What changed on the server for it (`remote.py`, the `/remote/*` routes):
   json>`: addresses, token, discovery URL). The token lives in
   `data/remote.json` (mode 600, gitignored with the rest of `data/`); the
   cookie carries an HMAC of it, so rotating the token logs every phone out.
-- **Addresses**: the LAN IP and `<hostname>.local` on this port, plus two
-  off-LAN lanes: a supervised **cloudflared quick tunnel** (`tunnel: true`
-  keeps one up and restarts it; the origin is the LAN address on purpose so a
-  tunneled request can never look local) and a **user-entered address**
-  (Tailscale MagicDNS, a named tunnel). The tunnel URL changes on every
-  restart, so the Mac publishes its current off-LAN addresses as a tiny JSON
-  document in the share Worker's KV (`/s/remote-<discovery id>`, URLs only,
-  never the token); the phone reads it when nothing else answers.
+- **Addresses**: every IPv4 address on an up interface (Wi-Fi first, then
+  the other `en*` so USB tethering counts, bridges, tunnels) and
+  `<hostname>.local` on this port, plus two off-LAN lanes: a supervised
+  **cloudflared quick tunnel** (`tunnel: true` keeps one up and restarts it
+  after a crash) and a **user-entered address** (Tailscale MagicDNS, a named
+  tunnel). The tunnel's origin is a second, loopback-only listener on
+  `ORIGIN_PORT` (port + 1000) that the guard treats as never local, so a
+  tunneled request can never inherit loopback trust, a VPN's LAN rules never
+  touch it, and the public URL survives a network hop. The Mac publishes its
+  whole current address list as a tiny JSON document in the share Worker's KV
+  (`/s/remote-<discovery id>`, URLs only, never the token) and republishes
+  within ~15 s of the list changing; the phone reads it when nothing it
+  remembers answers, which is how it finds the Mac on the phone's own hotspot.
 - **macOS firewall**: the first bind on `0.0.0.0` makes macOS ask whether
   "MIST Console" may accept incoming connections. Allow it; Deny blocks the
   phone until the rule is changed in System Settings, Network, Firewall.

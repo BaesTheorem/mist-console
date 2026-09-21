@@ -61,9 +61,18 @@ final class ServerStore: ObservableObject {
         guard var p = pairing else { return }
         var seen = Set<String>()
         var out: [String] = []
-        for u in urls + p.urls where !u.isEmpty && !seen.contains(u) {
+        for u in urls where !u.isEmpty && !seen.contains(u) {
             seen.insert(u)
             out.append(u)
+        }
+        // Addresses only this phone remembers (old networks, old tunnels) trail
+        // the Mac's list and are capped, so the candidate set does not grow
+        // with every network the Mac has ever joined.
+        var extras = 0
+        for u in p.urls where !u.isEmpty && !seen.contains(u) && extras < 6 {
+            seen.insert(u)
+            out.append(u)
+            extras += 1
         }
         var changed = out != p.urls
         p.urls = out

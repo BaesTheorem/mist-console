@@ -48,10 +48,9 @@ import re
 import secrets
 import threading
 import urllib.error
-import http.client
-import socket
 import urllib.request
 
+import v4first
 from bridge import DATA_DIR, HARNESS
 
 SHARES_DIR = os.path.join(DATA_DIR, "shares")
@@ -153,39 +152,9 @@ def _creds():
 _API = "https://api.cloudflare.com/client/v4"
 
 
-# Cloudflare's API resolves to a handful of IPv6 addresses first, and this
-# Mac's IPv6 dead-ends (curl -6 times out; measured 2026-09-21). urllib has no
-# happy eyeballs: it walks every AAAA record with the full timeout before it
-# reaches an A record, which turned a 0.1s call into a 130s one. So the API
-# client connects over IPv4 only.
-def _connect_v4(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
-    host, port = address
-    err = None
-    for family, kind, proto, _, sockaddr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
-        sock = socket.socket(family, kind, proto)
-        try:
-            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
-                sock.settimeout(timeout)
-            if source_address:
-                sock.bind(source_address)
-            sock.connect(sockaddr)
-            return sock
-        except OSError as e:
-            err = e
-            sock.close()
-    raise err or OSError(f"no IPv4 address for {host}")
-
-
-class _IPv4HTTPSHandler(urllib.request.HTTPSHandler):
-    def https_open(self, req):
-        def factory(host, **kw):
-            conn = http.client.HTTPSConnection(host, **kw)
-            conn._create_connection = _connect_v4
-            return conn
-        return self.do_open(factory, req)
-
-
-_opener = urllib.request.build_opener(_IPv4HTTPSHandler())
+# Connect over IPv4 first: see v4first.py for why (this Mac's IPv6 dead-ends
+# and urllib would stall on every AAAA record).
+_opener = v4first.opener
 
 
 def _req(method, path, token, body=None, ctype="application/json", raw=False):

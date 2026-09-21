@@ -15,9 +15,13 @@ INVARIANTS
   (the mist_remote cookie or a Bearer header). Off means every non-local
   request is refused, whatever it carries. Only /remote/ping and /remote/login
   are reachable without the token, and the login is rate-limited per address.
-- The Cloudflare tunnel's origin is the LAN address, never 127.0.0.1, so a
-  request that came in through the tunnel can never look local (and cloudflared
-  stamps proxy headers on it besides, which is_local() also rejects).
+- The Cloudflare tunnel's origin is a second, loopback-only listener on
+  ORIGIN_PORT (app.py starts it), and is_local() refuses anything that arrived
+  on that port whatever its source address. So a tunneled request can never
+  look local, the tunnel is untouched by a VPN's LAN rules (loopback traffic
+  stays on the host) and by network hops (the origin address never changes,
+  so the public URL survives them). cloudflared's proxy headers are a second
+  tell that is_local() also rejects.
 - The token never leaves this machine except inside the pairing QR / link and
   the phone's Keychain. The discovery document published to Workers KV holds
   URLs only.
@@ -27,8 +31,15 @@ Off-LAN reachability, in order of sturdiness:
    named tunnel, anything that resolves to this server.
 2. A cloudflared "quick tunnel" the Console keeps alive (tunnel=true): a
    random *.trycloudflare.com https URL that changes every time the process
-   restarts. The current one is published to the share Worker's KV under the
-   discovery id, so the phone can look it up when nothing else answers.
+   restarts.
+
+The Mac's whole current address list (LAN, hotspot, tunnel, configured) is
+published to the share Worker's KV under the discovery id whenever it changes,
+so the phone can look it up when nothing it remembers answers. The hotspot case
+is why the LAN addresses are in there: tethered to the phone, the Mac takes a
+fresh 172.20.10.x address that nothing else would ever tell the phone about,
+and with it the two talk directly over the tether instead of out through
+Cloudflare and back.
 """
 import base64
 import hashlib
@@ -51,6 +62,9 @@ CONFIG_PATH = os.path.join(DATA_DIR, "remote.json")
 # The port this server answers on. A test instance sets MIST_CONSOLE_PORT so
 # its tunnel points at itself and not at the live Console.
 PORT = int(os.environ.get("MIST_CONSOLE_PORT") or 5014)
+# Loopback-only listener the tunnel points at; requests arriving on it are
+# never local (see is_local). app.py binds it.
+ORIGIN_PORT = PORT + 1000
 COOKIE = "mist_remote"
 COOKIE_MAX_AGE = 365 * 86400
 # Reachable without the token. Ping says "a MIST Console lives here"; login
@@ -123,7 +137,10 @@ def discovery_key():
 # ---- per-request identity ----------------------------------------------------
 
 def is_local(req):
-    """True for a request from this machine that no proxy forwarded."""
+    """True for a request from this machine that no proxy forwarded, and that
+    did not come in on the tunnel's origin port."""
+    if str(req.environ.get("SERVER_PORT") or "") == str(ORIGIN_PORT):
+        return False
     addr = (req.remote_addr or "").split("%")[0]
     try:
         ip = ipaddress.ip_address(addr)
@@ -183,6 +200,8 @@ def login_ok(ip):
 # ---- where this Mac answers ------------------------------------------------
 
 _net_cache = {"at": 0, "ips": [], "host": ""}
+_IFCONFIG_IFACE = re.compile(r"^([a-z0-9]+):\s+flags=\d+<([^>]*)>")
+_IFCONFIG_INET = re.compile(r"^\s+inet (\d+\.\d+\.\d+\.\d+)")
 
 
 def _run(cmd, timeout=3):
@@ -192,14 +211,53 @@ def _run(cmd, timeout=3):
         return ""
 
 
-def _refresh_net():
-    if time.time() - _net_cache["at"] < 30:
-        return
-    ips = []
-    for iface in ("en0", "en1", "en2"):
-        ip = _run(["ipconfig", "getifaddr", iface])
-        if ip and ip not in ips:
+def _interface_ips():
+    """Every IPv4 address on an UP, non-loopback interface, ordered so the
+    address the phone is most likely to share comes first: en0 (Wi-Fi, and
+    the interface a Wi-Fi hotspot lands on), the other en* (USB tethering
+    shows up as a new en*), bridges, then tunnels (a Tailscale utun address
+    is useful to a phone on the same tailnet; a VPN's is harmless)."""
+    out = _run(["ifconfig"], timeout=5)
+    if not out:
+        return []
+    found = []
+    iface, flags = None, ""
+    for line in out.splitlines():
+        m = _IFCONFIG_IFACE.match(line)
+        if m:
+            iface, flags = m.group(1), m.group(2)
+            continue
+        m = _IFCONFIG_INET.match(line)
+        if not (m and iface):
+            continue
+        ip = m.group(1)
+        if "UP" not in flags.split(",") or "LOOPBACK" in flags or ip.startswith("169.254."):
+            continue
+        found.append((iface, ip))
+
+    def rank(item):
+        name = item[0]
+        if name == "en0":
+            return 0
+        if name.startswith("en"):
+            return 1
+        if name.startswith(("bridge", "ap")):
+            return 2
+        if name.startswith("utun"):
+            return 4
+        return 3
+    seen, ips = set(), []
+    for _, ip in sorted(found, key=rank):
+        if ip not in seen:
+            seen.add(ip)
             ips.append(ip)
+    return ips
+
+
+def _refresh_net():
+    if time.time() - _net_cache["at"] < 10:
+        return
+    ips = _interface_ips()
     if not ips:
         # Not macOS, or no ipconfig: ask the kernel which source address it
         # would use for an outbound packet. Nothing is sent.
@@ -283,11 +341,7 @@ class _Tunnel:
             if not binary:
                 self.error = "cloudflared is not installed (brew install cloudflared)"
                 return
-            ips = lan_ips()
-            if not ips:
-                self.error = "no LAN address to tunnel to (is the Mac online?)"
-                return
-            self.origin = f"http://{ips[0]}:{PORT}"
+            self.origin = f"http://127.0.0.1:{ORIGIN_PORT}"
             try:
                 self.proc = subprocess.Popen(
                     [binary, "tunnel", "--url", self.origin, "--no-autoupdate"],
@@ -342,18 +396,33 @@ class _Tunnel:
 tunnel = _Tunnel()
 
 
+_published = {"urls": None, "at": 0}
+
+
+def _republish_if_moved():
+    """The Mac's address list changed (joined the phone's hotspot, DHCP moved
+    it, the tunnel came up): publish it so the phone can find the new one.
+    Rate-limited; the publish itself is a network call."""
+    if not enabled():
+        return
+    now = urls()
+    if now == _published["urls"] or time.time() - _published["at"] < 15:
+        return
+    _published.update(urls=now, at=time.time())
+    threading.Thread(target=publish_discovery, daemon=True).start()
+
+
 def _supervise():
     """Keep the tunnel matching the config: up while wanted, restarted after a
-    crash (with backoff), re-pointed if the LAN address moved, down when not."""
+    crash (with backoff), down when not. Also watches the address list and
+    republishes it when it moves. The tunnel's origin is loopback, so a
+    network hop never restarts it (its public URL survives the hop)."""
     while True:
         try:
+            _republish_if_moved()
             cfg = _load()
             want = bool(cfg.get("enabled") and cfg.get("tunnel"))
             if want:
-                ips = lan_ips()
-                origin = f"http://{ips[0]}:{PORT}" if ips else None
-                if tunnel.running() and origin and tunnel.origin != origin:
-                    tunnel.stop()
                 if not tunnel.running():
                     tunnel.start()
                     if not tunnel.running():
@@ -392,8 +461,10 @@ def discovery_url():
 
 
 def publish_discovery():
-    """Write the off-LAN URLs to Workers KV under the discovery id. URLs only;
-    the token is never published. Best effort: no credentials, no cloud."""
+    """Write the current address list to Workers KV under the discovery id.
+    URLs only (private addresses and a tunnel hostname are worthless without
+    the token); the token is never published. Best effort: no credentials, no
+    cloud. An empty list is published when remote access is off."""
     try:
         import share
         account, tok = share._creds()
@@ -401,8 +472,9 @@ def publish_discovery():
             _discovery_state.update(ok=False, why="no Cloudflare credentials in the harness .env", at=time.time())
             return {"ok": False, "why": "no Cloudflare credentials in the harness .env"}
         base_url, kv_id = share._ensure_cloud()
-        doc = json.dumps({"v": 1, "urls": offlan_urls() if enabled() else [],
-                          "updated": int(time.time())})
+        current = urls() if enabled() else []
+        doc = json.dumps({"v": 1, "urls": current, "updated": int(time.time())})
+        _published.update(urls=current, at=time.time())
         share._req("PUT", f"/accounts/{account}/storage/kv/namespaces/{kv_id}/values/{discovery_key()}",
                    tok, doc.encode(), ctype="text/plain", raw=True)
         _discovery_state.update(ok=True, why="", at=time.time())
@@ -410,6 +482,11 @@ def publish_discovery():
     except Exception as e:
         _log.warning("discovery publish failed: %s", e)
         _discovery_state.update(ok=False, why=str(e), at=time.time())
+        # Forget what we thought was published so the supervisor tries again
+        # on its next tick (rate-limited): right after a network hop DNS may
+        # not be back yet, and a list that never lands is the one failure the
+        # phone cannot recover from on its own.
+        _published["urls"] = None
         return {"ok": False, "why": str(e)}
 
 
@@ -438,6 +515,7 @@ def status():
         "discovery_state": dict(_discovery_state),
         "token_created": cfg.get("created"),
         "port": PORT,
+        "origin_port": ORIGIN_PORT,
     }
 
 

@@ -19,6 +19,9 @@ struct ConsoleWebView: UIViewRepresentable {
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
         cfg.websiteDataStore = .default()
+        // The page posts {type:"stream", state:"up"|"down"} here when its event
+        // stream drops or returns (shellStream in app.js).
+        cfg.userContentController.add(context.coordinator, name: "mist")
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = context.coordinator
         wv.uiDelegate = context.coordinator
@@ -51,11 +54,21 @@ struct ConsoleWebView: UIViewRepresentable {
         wv.load(req)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var link: ConsoleLink?
         var loadedGeneration = -1
         var baseHost: String?
+
+        func userContentController(_ userContentController: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            guard message.name == "mist",
+                  let body = message.body as? [String: Any],
+                  body["type"] as? String == "stream",
+                  let state = body["state"] as? String else { return }
+            let link = self.link
+            Task { @MainActor in link?.streamChanged(up: state == "up") }
+        }
 
         // mist: links are the page talking to the shell; foreign links go to Safari.
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
