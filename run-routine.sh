@@ -13,6 +13,11 @@ set -e
 # upgrade; every scheduled routine was silently dying with 78.)
 export USER="${USER:-$(id -un)}"
 export LOGNAME="${LOGNAME:-$USER}"
+# Unattended: every scheduled routine reads third-party text (email, chat,
+# transcripts, the web) with full tools and nobody watching. The harness guard
+# hook (.claude/hooks/guard-unattended.py) keys on this variable and refuses
+# instruction-file writes and persistence shells for the session.
+export MIST_UNATTENDED=1
 DIR="$1"
 [ -n "$DIR" ] || { echo "usage: run-routine.sh <routine-dir>"; exit 2; }
 SK="$HOME/.claude/scheduled-tasks/$DIR/SKILL.md"
