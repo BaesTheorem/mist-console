@@ -11,6 +11,7 @@ try:
 except ImportError:
     pass  # cosmetic process name only; never block startup on it
 
+import collections
 import json
 import logging
 import os
@@ -86,6 +87,14 @@ def _remote_guard():
 # ---- session registry + metadata persistence --------------------------------
 _sessions = {}   # id -> ClaudeSession
 _order = []      # creation order
+# Chats closed recently, for clients syncing their rail (see GET /sessions?since=).
+_deleted = collections.deque(maxlen=500)   # (sid, closed_at)
+
+
+def _touch(s):
+    """Stamp a metadata change (title, pin, creation) so a client's change
+    query picks it up. Activity stamps itself through last_activity."""
+    s.meta_ts = time.time()
 _counter = 0
 _meta_lock = threading.Lock()
 SESSIONS_META = os.path.join(DATA_DIR, "sessions.json")
@@ -347,6 +356,7 @@ def _new_session(warm=True):
                                        permission_mode=DEFAULT_PERMISSION_MODE,
                                        autostart=False)
         _order.append(sid)
+        _touch(_sessions[sid])
     _save_meta()
     # Warm the backend a beat AFTER the click, not on it. Forking claude spawns
     # the CLI plus its MCP servers (~1s of CPU across 8 processes), and doing
@@ -752,7 +762,25 @@ def font():
 
 @app.route("/sessions", methods=["GET"])
 def sessions():
-    return jsonify(_session_list())
+    """The registry. With ?since=<server time> only what changed after that
+    (created, retitled, pinned, active) plus the ids closed since, and `now`
+    for the next call; every open page polls this so a chat started on the
+    phone, from quick entry, or from a notification shows up in every rail
+    within seconds. Without it, the full list, with the server time in X-Now."""
+    now = time.time()
+    since = request.args.get("since", type=float)
+    if since is not None:
+        changed = []
+        for d in _session_list():
+            s = _sessions.get(d["id"])
+            stamp = max(getattr(s, "meta_ts", 0) or 0, d.get("last_activity") or 0) if s else 0
+            if stamp > since:
+                changed.append(d)
+        deleted = [sid for sid, ts in list(_deleted) if ts > since]
+        return jsonify({"sessions": changed, "deleted": deleted, "now": now})
+    resp = jsonify(_session_list())
+    resp.headers["X-Now"] = repr(now)
+    return resp
 
 
 @app.route("/search")
@@ -800,6 +828,7 @@ def close_session(sid):
     if s:
         s.stop()
         s.delete_data()
+        _deleted.append((sid, time.time()))
     _save_meta()
     return jsonify({"ok": True})
 
@@ -1258,6 +1287,7 @@ def rename_session(sid):
     if not title:
         return jsonify({"ok": False, "error": "empty"}), 400
     s.title = title[:80]
+    _touch(s)
     _save_meta()
     return jsonify({"ok": True, "title": s.title})
 
@@ -1340,6 +1370,7 @@ def pin_session(sid):
         # session raises RuntimeError and 500s the pin.
         s.pin_order = max((x.pin_order for x in list(_sessions.values()) if x.pinned),
                           default=-1) + 1
+    _touch(s)
     _save_meta()
     return jsonify({"ok": True, "pinned": s.pinned})
 
@@ -1352,6 +1383,7 @@ def set_pin_order():
         s = _sessions.get(sid)
         if s:
             s.pin_order = i
+            _touch(s)
     _save_meta()
     return jsonify({"ok": True})
 
@@ -1378,6 +1410,7 @@ def send(sid):
     if held:
         return jsonify({"ok": False, "held": True, "pct": s.context_pct, "reason": held})
     ok = s.send(text, image_path=image_path)
+    _touch(s)   # the first send titles the chat
     _save_meta()
     return jsonify({"ok": ok, "title": s.title})
 

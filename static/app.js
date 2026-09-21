@@ -4762,7 +4762,9 @@ async function boot() {
     if (cfg.spinner_verbs && cfg.spinner_verbs.length) SPINNER_VERBS = cfg.spinner_verbs;
     MODELS = cfg.models || [];
   } catch (_) {}
-  const existing = await (await fetch("/sessions")).json();
+  const bootList = await fetch("/sessions");
+  const existing = await bootList.json();
+  _syncSince = parseFloat(bootList.headers.get("X-Now")) || Date.now() / 1000;   // server clock, for syncSessions
   if (existing.length) {
     existing.forEach((info) => sessions.set(info.id, new Session(info.id, info.title, info)));
     switchTo(sortedSessions()[0].id);
@@ -4772,9 +4774,65 @@ async function boot() {
   bootGreeting();
   await migrateLegacyNotes();   // absorb any legacy per-chat notes, once
   await loadNotes();            // hydrate the global notes + badge from disk
-  input.focus();
+  if (!isTouch()) input.focus();   // a phone would open with the keyboard up
 }
 boot();
+
+/* ---------- keep the rail in step with the other clients ----------
+   The phone, quick entry, notification replies and the Mac window all create
+   and rename chats on the same server; each page only knew the ones it made
+   itself. Every few seconds ask for what changed since the last sync (server
+   clock, so phone and Mac clocks never matter) and adopt, update, or drop. */
+let _syncSince = null;
+let _syncBusy = false;
+async function syncSessions() {
+  if (_syncSince == null || _syncBusy) return;
+  _syncBusy = true;
+  try {
+    const r = await fetch("/sessions?since=" + encodeURIComponent(_syncSince));
+    if (!r.ok) return;
+    const j = await r.json();
+    let changed = false;
+    for (const meta of (j.sessions || [])) {
+      let s = sessions.get(meta.id);
+      if (!s) {
+        sessions.set(meta.id, new Session(meta.id, meta.title, meta));
+        changed = true;
+        continue;
+      }
+      if (meta.title && s.title !== meta.title) { s.title = meta.title; changed = true; }
+      if (s.pinned !== !!meta.pinned) { s.pinned = !!meta.pinned; changed = true; }
+      if ((s.pinOrder || 0) !== (meta.pin_order || 0)) { s.pinOrder = meta.pin_order || 0; changed = true; }
+      if (s.archived !== !!meta.archived) { s.archived = !!meta.archived; changed = true; }
+      const la = (meta.last_activity || 0) * 1000;
+      if (la > (s.lastActivity || 0)) { s.lastActivity = la; changed = true; }
+      if (!s.init) {   // a dormant chat's badges come from its meta until it speaks
+        if (meta.model && s.model !== meta.model) s.model = meta.model;
+        if (meta.permission_mode && s.permMode !== meta.permission_mode) s.permMode = meta.permission_mode;
+        if (meta.effort !== undefined && s.effort !== (meta.effort || "")) s.effort = meta.effort || "";
+      }
+    }
+    for (const id of (j.deleted || [])) {
+      const s = sessions.get(id);
+      if (!s) continue;
+      s.destroy();
+      sessions.delete(id);
+      changed = true;
+      if (activeId === id) {
+        const next = sortedSessions()[0];
+        if (next) switchTo(next.id);
+        else { activeId = null; createSession(); }
+      }
+    }
+    if (typeof j.now === "number") _syncSince = j.now;
+    if (changed) renderTabs();
+  } catch (_) {
+  } finally {
+    _syncBusy = false;
+  }
+}
+setInterval(syncSessions, 3000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) syncSessions(); });
 
 /* ---------- chat search ----------
    Full-text search over every chat's log (server-side FTS index). While a
