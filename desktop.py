@@ -779,7 +779,9 @@ def _on_start():
 
 
 def _run_flask():
-    appmod.app.run(host="127.0.0.1", port=PORT, threaded=True, use_reloader=False)
+    # All interfaces, so the iPhone app can reach the Console; app.py's
+    # _remote_guard keeps non-local requests out unless they hold the pairing token.
+    appmod.app.run(host="0.0.0.0", port=PORT, threaded=True, use_reloader=False)
 
 
 def _wait_for_port(port, timeout=6.0):

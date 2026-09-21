@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MIST Console</title>
 <!-- Apply the saved theme + font before CSS paints so switching never flashes.
      __mistFont is replaced server-side (app.py) with the persisted font so a
      wiped localStorage still paints the right face. localStorage wins if set. -->
-<script>window.__mistFont=null;window.__mistZoom=null;</script>
+<script>window.__mistFont=null;window.__mistZoom=null;
+try{if(/MISTShell/.test(navigator.userAgent)||/[?&]shell=ios\b/.test(location.search))document.documentElement.dataset.shell="ios";}catch(e){}</script>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"terminal"}catch(e){document.documentElement.dataset.theme="terminal"}
 try{var _d=document.documentElement,_fs=localStorage.getItem("fontStack"),_fid=localStorage.getItem("font");
 if(!_fs&&window.__mistFont){_fs=window.__mistFont.stack;_fid=window.__mistFont.id;}
@@ -24,6 +25,7 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
 </head>
 <body>
 <header id="topbar">
+  <md-icon-button id="railOpen" class="phone-only" touch-target="none" title="Chats" aria-label="Open the chat list"><md-icon>menu</md-icon></md-icon-button>
   <div class="brand">
     <img id="logoImg" class="logo-img" src="mist-logo.png" alt="MIST"
          onerror="this.style.display='none';document.getElementById('logoText').style.display='inline'">
@@ -92,6 +94,7 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
     <div id="tabs"></div>
     <button id="newTab"><span class="msi">add</span> new chat</button>
   </nav>
+  <div id="railBackdrop" class="phone-only" hidden></div>
   <div id="railResize" title="Drag to resize · double-click to reset"></div>
   <main id="logs">
     <button id="railToggle" title="Hide the chat list" aria-label="Toggle chat list"><span class="msi">left_panel_close</span></button>
@@ -137,6 +140,36 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
         <button id="qaGrant" class="qa-rec">Grant</button>
       </div>
       <div class="qa-note">Double-tap the Option (⌥) key to summon MIST from anywhere — even when she's closed (a tiny always-on background agent launches her). Needs macOS Accessibility permission for the agent (System Settings → Privacy & Security → Accessibility).</div>
+    </div>
+    <h4>phone</h4>
+    <div class="qa remote">
+      <div class="qa-row">
+        <label class="qa-toggle"><md-switch id="remoteEnabled"></md-switch> remote access</label>
+        <span class="remote-state" id="remoteState"></span>
+      </div>
+      <div class="qa-note">Lets the MIST iPhone app, and any browser holding the pairing token, use this Console over the network. Off, the server answers this Mac only.</div>
+      <div id="remoteBody" hidden>
+        <div class="remote-sub">pair a phone</div>
+        <div id="pairQr" class="pair-qr" aria-label="Pairing QR code"></div>
+        <div class="qa-note">Scan it with the MIST app on the iPhone. Whoever holds this code can drive MIST, so treat it like a password.
+          <button id="pairCopy" class="qa-link" type="button">copy pairing link</button> ·
+          <button id="remoteRotate" class="qa-link warn" type="button">rotate token</button></div>
+        <div class="remote-sub">on this network</div>
+        <div id="remoteLan" class="remote-urls"></div>
+        <div class="remote-sub">away from home</div>
+        <div class="qa-row">
+          <label class="qa-toggle"><md-switch id="tunnelEnabled"></md-switch> keep a Cloudflare tunnel up</label>
+        </div>
+        <div id="tunnelState" class="remote-urls"></div>
+        <div class="qa-note">A quick tunnel (cloudflared) gives the Mac a public https address while the Console runs. The address changes whenever the tunnel restarts; the phone re-learns it on this network, or through the discovery lookup when it is away.</div>
+        <div class="rt-field remote-field">
+          <label for="remoteUrl">your own address (optional)</label>
+          <input id="remoteUrl" type="url" placeholder="https://mist.tailnet-name.ts.net:5014" spellcheck="false" autocapitalize="off" autocomplete="off">
+        </div>
+        <div class="qa-note">A Tailscale MagicDNS name, or anything else that reaches this Mac from anywhere. Sturdier than the quick tunnel; needs Tailscale on both devices.</div>
+        <div id="remoteDiscovery" class="qa-note"></div>
+        <button id="phoneNative" class="qa-link shell-only" type="button">phone settings (server list, re-pair)</button>
+      </div>
     </div>
     <h4>mcp servers <span class="count" id="nMcp"></span></h4>
     <div id="mcpSection">
@@ -188,6 +221,7 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
 
 <div id="usage"></div>
 
+<script src="vendor/qrcode.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

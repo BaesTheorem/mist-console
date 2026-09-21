@@ -21,10 +21,11 @@ import subprocess
 import threading
 import time
 
-from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory
 
 import archive
 import quickaccess
+import remote
 import search as chat_search
 import share
 from bridge import (ClaudeSession, CLAUDE, DATA_DIR, HARNESS, RATE_LIVE_PATH,
@@ -58,6 +59,29 @@ try:
     _wz_serving._log = _quiet_wz_log
 except Exception:
     pass
+
+# ---- remote access (the iPhone app in ios/, LAN browsers): see remote.py ----
+# One rule for every request: from this machine, or holding the pairing token.
+# Loopback requests are what they always were (the desktop window, mist-progress,
+# notification replies, scripts inside a chat); anything else needs remote
+# access switched on AND the cookie/bearer from /remote/login.
+@app.before_request
+def _remote_guard():
+    if remote.is_local(request):
+        return None
+    if request.path in remote.PUBLIC_PATHS:
+        return None
+    if not remote.enabled():
+        return jsonify({"error": "remote access is off on this Console"}), 403
+    if remote.authorized(request):
+        return None
+    # A browser landing on the app without the cookie gets the login page
+    # (paste the token from the phone section of settings). Everything else,
+    # including the app's own fetches and the event stream, is a plain 401.
+    if request.method == "GET" and request.path == "/":
+        return Response(remote.LOGIN_HTML, status=401, mimetype="text/html")
+    return jsonify({"error": "unauthorized"}), 401
+
 
 # ---- session registry + metadata persistence --------------------------------
 _sessions = {}   # id -> ClaudeSession
@@ -1358,6 +1382,82 @@ def send(sid):
     return jsonify({"ok": ok, "title": s.title})
 
 
+# ---- remote access routes ------------------------------------------------------
+@app.route("/remote", methods=["GET"])
+def remote_status():
+    return jsonify(remote.status())
+
+
+@app.route("/remote", methods=["POST"])
+def remote_update():
+    """{enabled?, tunnel?, remote_url?}: only the keys present change."""
+    body = request.get_json(silent=True) or {}
+    return jsonify(remote.update(enabled_=body.get("enabled"), tunnel_=body.get("tunnel"),
+                                 remote_url=body.get("remote_url")))
+
+
+@app.route("/remote/rotate", methods=["POST"])
+def remote_rotate():
+    """New token: every paired phone has to scan again."""
+    return jsonify(remote.rotate())
+
+
+@app.route("/remote/ping")
+def remote_ping():
+    """Public, tokenless: 'a MIST Console answers here'. The phone races its
+    candidate URLs against this before it logs in."""
+    name = remote.local_hostname().removesuffix(".local") or "MIST"
+    return jsonify({"ok": True, "app": "mist-console", "name": name, "enabled": remote.enabled()})
+
+
+@app.route("/remote/login", methods=["POST"])
+def remote_login():
+    """Token in (JSON {token} or a form field) -> the mist_remote cookie out.
+    A form post is a browser or the app's web view, so it is redirected into
+    the app; JSON callers get JSON. Misses are rate-limited per address."""
+    ip = request.remote_addr or "?"
+    if not remote.enabled():
+        return jsonify({"ok": False, "error": "remote access is off on this Console"}), 403
+    if not remote.login_allowed(ip):
+        return jsonify({"ok": False, "error": "too many attempts; wait a few minutes"}), 429
+    body = request.get_json(silent=True) or {}
+    tok = body.get("token") or request.form.get("token") or ""
+    if not remote.check_token(tok):
+        remote.login_failed(ip)
+        if request.form:
+            return Response(remote.LOGIN_HTML.replace("<!--msg-->", "<p class=err>That token is wrong.</p>"),
+                            status=403, mimetype="text/html")
+        return jsonify({"ok": False, "error": "wrong token"}), 403
+    remote.login_ok(ip)
+    nxt = request.form.get("next") or "/"
+    if not nxt.startswith("/") or nxt.startswith("//"):
+        nxt = "/"
+    resp = redirect(nxt, code=303) if request.form else jsonify({"ok": True})
+    # Only mark the cookie Secure when the client really came over https (the
+    # tunnel says so in X-Forwarded-Proto); on plain LAN http a Secure cookie
+    # would never be sent back.
+    secure = request.is_secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+    resp.set_cookie(remote.COOKIE, remote.cookie_value(), max_age=remote.COOKIE_MAX_AGE,
+                    httponly=True, samesite="Lax", secure=secure, path="/")
+    return resp
+
+
+@app.route("/remote/logout", methods=["POST"])
+def remote_logout():
+    resp = jsonify({"ok": True})
+    resp.delete_cookie(remote.COOKIE, path="/")
+    return resp
+
+
+@app.route("/remote/config")
+def remote_config():
+    """What a paired phone re-syncs on every successful connect: the current
+    candidate URLs (the tunnel one moves) and the discovery lookup for when
+    none of them answer."""
+    return jsonify({"urls": remote.urls(), "discovery": remote.discovery_url(),
+                    "name": remote.local_hostname().removesuffix(".local") or "MIST"})
+
+
 @app.route("/stream/<sid>")
 def stream(sid):
     s = _sessions.get(sid)
@@ -2308,10 +2408,14 @@ _load_meta()
 _load_notes()
 _import_existing()
 quickaccess.load()
+remote.init()   # tunnel supervisor; a no-op until remote access + tunnel are on
 threading.Thread(target=_periodic_save, daemon=True).start()
 threading.Thread(target=_reaper, daemon=True).start()
 threading.Thread(target=_archiver, daemon=True).start()
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5014, threaded=True, use_reloader=False)
+    # 0.0.0.0, not loopback: the phone reaches the Console over the LAN or a
+    # tunnel. _remote_guard refuses every non-local request unless remote
+    # access is on and the caller holds the pairing token.
+    app.run(host="0.0.0.0", port=5014, threaded=True, use_reloader=False)

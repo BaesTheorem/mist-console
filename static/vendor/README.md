@@ -8,6 +8,10 @@
   (square terminals, matches the flat/sharp house style). @font-face'd in
   `../md-tokens.css`; used via ligatures (`<span class="msi">settings</span>`
   or `<md-icon>send</md-icon>`).
+- `qrcode.js` — [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
+  1.4.4 by Kazuhiko Arase, MIT, unmodified copy of the npm package's
+  `qrcode.js` (from jsDelivr). Draws the phone-pairing QR code in the settings
+  panel (`renderRemote` in app.js); used as a plain global (`qrcode(...)`).
 
 ## Rebuilding md.js
 
