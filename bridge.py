@@ -80,6 +80,9 @@ PROGRESS_TERMINAL = ("done", "error", "canceled")
 # id lives only in memory until the 10s periodic saver, and a window close /
 # crash in between reopens the chat empty with its transcript orphaned.
 on_meta_dirty = None
+# Called with the session when a turn ends (its last_activity just moved), so
+# the registry can tell every open page to re-sort its rail.
+on_activity = None
 
 # Event slimming. Raw stream-json events carry a `tool_use_result` sidecar that
 # nothing in the Console reads; for edits/reads of large files it embeds whole
@@ -938,6 +941,11 @@ class ClaudeSession:
                 self.last_activity = time.time()
                 self._turn_active = False   # turn done; reaper may reclaim once idle
                 self._emit_context(obj)
+                if on_activity:
+                    try:
+                        on_activity(self)
+                    except Exception:
+                        pass
             elif obj.get("type") == "rate_limit_event":
                 # Keep the usage badges' reset/status fresh during Console-only
                 # use (see RATE_LIVE_PATH note); the front-end reads it via /usage.

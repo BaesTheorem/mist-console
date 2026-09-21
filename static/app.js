@@ -4785,6 +4785,40 @@ boot();
    clock, so phone and Mac clocks never matter) and adopt, update, or drop. */
 let _syncSince = null;
 let _syncBusy = false;
+// One pushed or fetched registry entry -> the local Session. True if the rail changed.
+function applySessionMeta(meta) {
+  let s = sessions.get(meta.id);
+  if (!s) {
+    sessions.set(meta.id, new Session(meta.id, meta.title, meta));
+    return true;
+  }
+  let changed = false;
+  if (meta.title && s.title !== meta.title) { s.title = meta.title; changed = true; }
+  if (s.pinned !== !!meta.pinned) { s.pinned = !!meta.pinned; changed = true; }
+  if ((s.pinOrder || 0) !== (meta.pin_order || 0)) { s.pinOrder = meta.pin_order || 0; changed = true; }
+  if (s.archived !== !!meta.archived) { s.archived = !!meta.archived; changed = true; }
+  const la = (meta.last_activity || 0) * 1000;
+  if (la > (s.lastActivity || 0)) { s.lastActivity = la; changed = true; }
+  if (!s.init) {   // a dormant chat's badges come from its meta until it speaks
+    if (meta.model && s.model !== meta.model) s.model = meta.model;
+    if (meta.permission_mode && s.permMode !== meta.permission_mode) s.permMode = meta.permission_mode;
+    if (meta.effort !== undefined && s.effort !== (meta.effort || "")) s.effort = meta.effort || "";
+  }
+  return changed;
+}
+function dropSession(id) {
+  const s = sessions.get(id);
+  if (!s) return false;
+  s.destroy();
+  sessions.delete(id);
+  if (activeId === id) {
+    const next = sortedSessions()[0];
+    if (next) switchTo(next.id);
+    else { activeId = null; createSession(); }
+  }
+  return true;
+}
+// Catch-up: everything changed since the last sync or pushed event.
 async function syncSessions() {
   if (_syncSince == null || _syncBusy) return;
   _syncBusy = true;
@@ -4793,37 +4827,8 @@ async function syncSessions() {
     if (!r.ok) return;
     const j = await r.json();
     let changed = false;
-    for (const meta of (j.sessions || [])) {
-      let s = sessions.get(meta.id);
-      if (!s) {
-        sessions.set(meta.id, new Session(meta.id, meta.title, meta));
-        changed = true;
-        continue;
-      }
-      if (meta.title && s.title !== meta.title) { s.title = meta.title; changed = true; }
-      if (s.pinned !== !!meta.pinned) { s.pinned = !!meta.pinned; changed = true; }
-      if ((s.pinOrder || 0) !== (meta.pin_order || 0)) { s.pinOrder = meta.pin_order || 0; changed = true; }
-      if (s.archived !== !!meta.archived) { s.archived = !!meta.archived; changed = true; }
-      const la = (meta.last_activity || 0) * 1000;
-      if (la > (s.lastActivity || 0)) { s.lastActivity = la; changed = true; }
-      if (!s.init) {   // a dormant chat's badges come from its meta until it speaks
-        if (meta.model && s.model !== meta.model) s.model = meta.model;
-        if (meta.permission_mode && s.permMode !== meta.permission_mode) s.permMode = meta.permission_mode;
-        if (meta.effort !== undefined && s.effort !== (meta.effort || "")) s.effort = meta.effort || "";
-      }
-    }
-    for (const id of (j.deleted || [])) {
-      const s = sessions.get(id);
-      if (!s) continue;
-      s.destroy();
-      sessions.delete(id);
-      changed = true;
-      if (activeId === id) {
-        const next = sortedSessions()[0];
-        if (next) switchTo(next.id);
-        else { activeId = null; createSession(); }
-      }
-    }
+    for (const meta of (j.sessions || [])) changed = applySessionMeta(meta) || changed;
+    for (const id of (j.deleted || [])) changed = dropSession(id) || changed;
     if (typeof j.now === "number") _syncSince = j.now;
     if (changed) renderTabs();
   } catch (_) {
@@ -4831,8 +4836,29 @@ async function syncSessions() {
     _syncBusy = false;
   }
 }
-setInterval(syncSessions, 3000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) syncSessions(); });
+// The live feed: instant. The server pushes every registry change as it
+// happens (whichever client made it). A reconnect runs one catch-up so the
+// gap is filled; the 30s poll is the safety net if the feed itself is down.
+(function () {
+  let es = null, opens = 0;
+  const connect = () => {
+    if (es) es.close();
+    es = new EventSource("/events");
+    es.onopen = () => { if (opens++) syncSessions(); };
+    es.onmessage = (m) => {
+      let ev;
+      try { ev = JSON.parse(m.data); } catch (_) { return; }
+      let changed = false;
+      if (ev.type === "session_created" || ev.type === "session_updated") changed = applySessionMeta(ev.session);
+      else if (ev.type === "session_deleted") changed = dropSession(ev.id);
+      if (typeof ev.now === "number" && ev.now > (_syncSince || 0)) _syncSince = ev.now;
+      if (changed) renderTabs();
+    };
+  };
+  connect();
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncSessions(); });
+})();
+setInterval(syncSessions, 30000);
 
 /* ---------- chat search ----------
    Full-text search over every chat's log (server-side FTS index). While a

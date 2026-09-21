@@ -15,6 +15,7 @@ import collections
 import json
 import logging
 import os
+import queue
 import random
 import re
 import shutil
@@ -90,11 +91,41 @@ _order = []      # creation order
 # Chats closed recently, for clients syncing their rail (see GET /sessions?since=).
 _deleted = collections.deque(maxlen=500)   # (sid, closed_at)
 
+# The registry's own live channel (GET /events): every open page subscribes
+# once and learns about a created, retitled, pinned, active or closed chat the
+# moment it happens, whichever client did it. The since-query is the catch-up
+# for a page that was disconnected.
+_registry_subs = []
+_registry_lock = threading.Lock()
 
-def _touch(s):
+
+def _registry_publish(ev):
+    ev["now"] = time.time()
+    with _registry_lock:
+        subs = list(_registry_subs)
+    for q in subs:
+        try:
+            q.put_nowait(ev)
+        except Exception:
+            pass
+
+
+def _session_meta(sid, s):
+    return {"id": sid, "title": s.title or "New chat", "alive": s.alive,
+            "pinned": s.pinned, "pin_order": s.pin_order,
+            "last_activity": s.last_activity,
+            "model": s.model or "",
+            "permission_mode": s.permission_mode or "",
+            "effort": s.effort or "",
+            "archived": bool(s.archived)}
+
+
+def _touch(s, created=False):
     """Stamp a metadata change (title, pin, creation) so a client's change
-    query picks it up. Activity stamps itself through last_activity."""
+    query picks it up, and push it to every page listening on /events."""
     s.meta_ts = time.time()
+    _registry_publish({"type": "session_created" if created else "session_updated",
+                       "session": _session_meta(s.id, s)})
 _counter = 0
 _meta_lock = threading.Lock()
 SESSIONS_META = os.path.join(DATA_DIR, "sessions.json")
@@ -356,7 +387,7 @@ def _new_session(warm=True):
                                        permission_mode=DEFAULT_PERMISSION_MODE,
                                        autostart=False)
         _order.append(sid)
-        _touch(_sessions[sid])
+        _touch(_sessions[sid], created=True)
     _save_meta()
     # Warm the backend a beat AFTER the click, not on it. Forking claude spawns
     # the CLI plus its MCP servers (~1s of CPU across 8 processes), and doing
@@ -384,13 +415,7 @@ def _session_list():
     for sid in _order:
         s = _sessions.get(sid)
         if s:
-            out.append({"id": sid, "title": s.title or "New chat", "alive": s.alive,
-                        "pinned": s.pinned, "pin_order": s.pin_order,
-                        "last_activity": s.last_activity,
-                        "model": s.model or "",
-                        "permission_mode": s.permission_mode or "",
-                        "effort": s.effort or "",
-                        "archived": bool(s.archived)})
+            out.append(_session_meta(sid, s))
     return out
 
 
@@ -783,6 +808,38 @@ def sessions():
     return resp
 
 
+@app.route("/events")
+def registry_events():
+    """Live registry feed (SSE): session_created / session_updated /
+    session_deleted as they happen. A comment line every 25s keeps the
+    connection alive through the tunnel (Cloudflare drops idle ones)."""
+    q = queue.Queue(maxsize=500)
+    with _registry_lock:
+        _registry_subs.append(q)
+
+    def gen():
+        try:
+            yield "retry: 2000\n\n"
+            yield _sse({"type": "registry_hello", "now": time.time()})
+            while True:
+                try:
+                    ev = q.get(timeout=25)
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                yield _sse(ev)
+        except GeneratorExit:
+            pass
+        finally:
+            with _registry_lock:
+                if q in _registry_subs:
+                    _registry_subs.remove(q)
+
+    return Response(gen(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "Connection": "keep-alive"})
+
+
 @app.route("/search")
 def search_chats():
     """Full-text search over every chat's log. Groups hits by chat, newest
@@ -829,6 +886,7 @@ def close_session(sid):
         s.stop()
         s.delete_data()
         _deleted.append((sid, time.time()))
+        _registry_publish({"type": "session_deleted", "id": sid})
     _save_meta()
     return jsonify({"ok": True})
 
@@ -2438,6 +2496,8 @@ def _reaper():
 
 import bridge as _bridge
 _bridge.on_meta_dirty = _save_meta   # let a session persist its claude_session_id on init
+_bridge.on_activity = lambda s: _registry_publish({"type": "session_updated",
+                                                   "session": _session_meta(s.id, s)})
 _bridge.start_rate_poller(_sessions)   # keep the usage badges' % near-real-time (free read)
 
 _load_meta()
