@@ -9,6 +9,17 @@ const input = $("#input");
 const statusEl = $("#status");
 const jumpBtn = $("#jumpBtn");
 
+/* ---------- phone: the iOS shell (ios/) and narrow windows ----------
+   Layout flips to the drawer form under 760px (style.css); touch decides the
+   input conventions (return = newline, photos attach); the shell attribute is
+   set pre-paint from the app's user agent for the few things only it can do. */
+const PHONE_MQ = window.matchMedia("(max-width: 760px)");
+const TOUCH_MQ = window.matchMedia("(hover: none) and (pointer: coarse)");
+const IS_SHELL = document.documentElement.dataset.shell === "ios";
+function isPhone() { return PHONE_MQ.matches; }
+function isTouch() { return IS_SHELL || TOUCH_MQ.matches; }
+let closeRailDrawer = () => false;   // wired once the rail exists (end of file)
+
 // Auto-grow the composer to fit its text, capped at 200px. Show the scrollbar
 // ONLY once we hit that cap. Without this, WebKit's custom (non-overlay)
 // scrollbar reserves a gutter even on a single line that already fits.
@@ -2673,6 +2684,7 @@ function switchTo(id) {
   const s = sessions.get(id);
   if (!s) return;
   activeId = id;
+  closeRailDrawer();   // phone: picking a chat closes the drawer over it
   s.connect();   // lazy: open the stream + replay this transcript on first view
   sessions.forEach((x) => { x.logEl.hidden = x.id !== id; });
   // reflect this session into the top bar
@@ -2701,7 +2713,7 @@ function switchTo(id) {
   setPendingImage(s.draftImage || null);
   growInput();
   hideSlash();
-  input.focus();
+  if (!isTouch()) input.focus();   // on a phone this would raise the keyboard on every switch
   reportActiveChat();   // AirDropped photos follow the chat you switch to
 }
 async function createSession() {
@@ -3370,7 +3382,10 @@ input.addEventListener("keydown", (e) => {
       e.preventDefault(); a.interrupt(); return;
     }
   }
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendActive(); }
+  if (e.key === "Enter" && !e.shiftKey) {
+    if (isTouch()) return;   // phone keyboards: return is a newline, the send button sends
+    e.preventDefault(); sendActive();
+  }
 });
 input.addEventListener("blur", () => setTimeout(hideSlash, 120));
 
@@ -3457,6 +3472,7 @@ $("#settingsBtn").addEventListener("click", () => {
   loadRoutines();                          // routines now live as a settings section
   loadMcpPanel();                          // MCP servers: live status + reconnect/toggle/auth
   loadWatchers();                          // watchers section (launchd watch jobs)
+  loadRemote();                            // phone section: remote access + pairing
   $("#notesPanel").hidden = true;
   refreshNotifsSection();                  // notifications live as a settings section
   closeAnchoredCards();
@@ -4125,6 +4141,7 @@ async function loadMcpPanel() {
    first, then the side panels). The composer's own keydown calls this before
    its interrupt fallback; this document-level listener covers everywhere else. */
 function closeTopOverlay() {
+  if (closeRailDrawer()) return true;   // phone: the chat drawer sits over everything
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
   for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#shareCard", "#capPanel", "#notesPanel"]) {
@@ -4184,11 +4201,16 @@ $("#fileBtn").addEventListener("click", async () => {
   try {
     if (window.pywebview && window.pywebview.api && window.pywebview.api.pick_file) {
       insertPaths(await window.pywebview.api.pick_file());
-    } else { hiddenFile.click(); }
+    } else { hiddenFile.accept = isTouch() ? "image/*" : ""; hiddenFile.click(); }
   } catch (e) { if (activeId) sessions.get(activeId).notice("File picker error: " + e, true); }
 });
 hiddenFile.addEventListener("change", () => {
-  insertPaths(Array.from(hiddenFile.files).map((f) => f.name));
+  const files = Array.from(hiddenFile.files);
+  const img = files.find((f) => /^image\//.test(f.type || ""));
+  // A phone has no paths MIST could read; a picked photo becomes the pending
+  // image attachment instead, exactly like a pasted screenshot on the Mac.
+  if (img && isTouch()) attachImageFile(img);
+  else insertPaths(files.map((f) => f.name));
   hiddenFile.value = "";
 });
 
@@ -5256,3 +5278,120 @@ function openShareCard(ev) {
 }
 $("#shareBtn").addEventListener("click", openShareCard);
 $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true; });
+
+/* ---------- phone: drawer rail + keyboard-aware viewport ---------- */
+(function () {
+  const mid = $("#mid"), open = $("#railOpen"), backdrop = $("#railBackdrop");
+  if (!mid || !open || !backdrop) return;
+  const set = (on) => { mid.classList.toggle("rail-open", on); backdrop.hidden = !on; };
+  open.addEventListener("click", () => set(!mid.classList.contains("rail-open")));
+  backdrop.addEventListener("click", () => set(false));
+  closeRailDrawer = () => {
+    if (!mid.classList.contains("rail-open")) return false;
+    set(false);
+    return true;
+  };
+  PHONE_MQ.addEventListener("change", () => set(false));
+})();
+// On touch the return key is a newline, so the desktop hint would mislead.
+if (isTouch()) input.placeholder = "Talk to MIST…";
+// iOS shrinks the visual viewport for the keyboard and leaves the layout
+// viewport alone, so a 100dvh page keeps its composer under the keys. Track the
+// visual height into --vvh (style.css sizes the body from it on phones) and
+// undo the scroll WebKit applies to reveal the focused field.
+(function () {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  let raf = 0;
+  const sync = () => {
+    raf = 0;
+    if (!isPhone()) { document.documentElement.style.removeProperty("--vvh"); return; }
+    document.documentElement.style.setProperty("--vvh", Math.round(vv.height) + "px");
+    if (window.scrollY) window.scrollTo(0, 0);
+    const a = activeId && sessions.get(activeId);
+    if (a) a.scroll();   // keep following the bottom while the log area resizes
+  };
+  const queue = () => { if (!raf) raf = requestAnimationFrame(sync); };
+  vv.addEventListener("resize", queue);
+  vv.addEventListener("scroll", queue);
+  PHONE_MQ.addEventListener("change", queue);
+  sync();
+})();
+
+/* ---------- phone section in settings: remote access + pairing ---------- */
+function renderRemote(st) {
+  const en = $("#remoteEnabled");
+  if (!en || !st) return;
+  en.selected = !!st.enabled;
+  $("#tunnelEnabled").selected = !!st.tunnel;
+  const state = $("#remoteState");
+  state.textContent = st.enabled ? "on" : "off";
+  state.classList.toggle("on", !!st.enabled);
+  $("#remoteBody").hidden = !st.enabled;
+  const ru = $("#remoteUrl");
+  if (document.activeElement !== ru) ru.value = st.remote_url || "";
+  const lan = $("#remoteLan");
+  lan.innerHTML = "";
+  (st.lan_urls || []).forEach((u) => lan.appendChild(el("div", "ru", '<span class="msi">wifi</span>' + esc(u))));
+  if (!(st.lan_urls || []).length) lan.appendChild(el("div", "ru dim", "no network address right now"));
+  const ts = st.tunnel_state || {};
+  const tun = $("#tunnelState");
+  tun.innerHTML = "";
+  if (!st.tunnel) {
+    tun.appendChild(el("div", "ru dim", ts.installed ? "off" : "cloudflared is not installed (brew install cloudflared)"));
+  } else if (ts.url) {
+    tun.appendChild(el("div", "ru", '<span class="msi">public</span>' + esc(ts.url)));
+  } else if (ts.error) {
+    tun.appendChild(el("div", "ru err", esc(ts.error)));
+  } else {
+    tun.appendChild(el("div", "ru dim", "starting the tunnel…"));
+    setTimeout(loadRemote, 4000);   // the URL lands a few seconds after the process starts
+  }
+  const qr = $("#pairQr");
+  qr.innerHTML = "";
+  qr.dataset.pairing = st.pairing || "";
+  if (st.pairing && typeof qrcode === "function") {
+    try {
+      const q = qrcode(0, "M");   // type 0: smallest version that fits
+      q.addData(st.pairing);
+      q.make();
+      qr.innerHTML = q.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    } catch (_) { qr.textContent = "too much for a QR code; use the pairing link"; }
+  }
+  const disc = $("#remoteDiscovery");
+  disc.textContent = st.discovery
+    ? "Discovery lookup for the phone: " + st.discovery
+    : "No discovery lookup: the share Worker is not set up (CF_SHARE_API_TOKEN in the harness .env), so a changed tunnel address only reaches the phone while it is on this network.";
+}
+async function loadRemote() {
+  try { renderRemote(await (await fetch("/remote")).json()); } catch (_) {}
+}
+async function postRemote(body) {
+  try {
+    const r = await fetch("/remote", { method: "POST", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify(body) });
+    renderRemote(await r.json());
+  } catch (_) {}
+}
+if ($("#remoteEnabled")) {
+  $("#remoteEnabled").addEventListener("change", (e) => postRemote({ enabled: e.target.selected }));
+  $("#tunnelEnabled").addEventListener("change", (e) => postRemote({ tunnel: e.target.selected }));
+  $("#remoteUrl").addEventListener("change", (e) => postRemote({ remote_url: e.target.value }));
+  $("#pairCopy").addEventListener("click", async () => {
+    const p = $("#pairQr").dataset.pairing;
+    if (!p) return;
+    const btn = $("#pairCopy");
+    try {
+      await navigator.clipboard.writeText(p);
+      btn.textContent = "copied";
+      setTimeout(() => { btn.textContent = "copy pairing link"; }, 1500);
+    } catch (_) { prompt("Pairing link:", p); }
+  });
+  $("#remoteRotate").addEventListener("click", async () => {
+    if (!confirm("Rotate the pairing token? Every paired phone has to scan the new code.")) return;
+    try { renderRemote(await (await fetch("/remote/rotate", { method: "POST" })).json()); } catch (_) {}
+  });
+  // Inside the iOS app this opens the native server sheet (the shell intercepts
+  // the mist: scheme); it is hidden everywhere else (.shell-only).
+  $("#phoneNative").addEventListener("click", () => { location.href = "mist://settings"; });
+}

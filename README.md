@@ -288,6 +288,42 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 - [x] **Message actions**: edit & resend, regenerate, branch (truncating fork resume).
 - [x] **Compaction**: compact-now on the cost notices and the ctx card; boundary divider.
 
+## iPhone app (ios/)
+
+`ios/` is a native iPhone shell (SwiftUI + WKWebView) around this same web UI,
+served by the Mac: pair it once, and every chat is there, live, because they
+are the same chats. Nothing runs on the phone, so the Mac has to be awake with
+the Console open. Build and pairing steps are in [`ios/README.md`](ios/README.md).
+
+What changed on the server for it (`remote.py`, the `/remote/*` routes):
+
+- **The server binds every interface**, and a `before_request` guard decides
+  each request: a loopback request with no proxy headers is trusted exactly as
+  before (the window, `mist-progress`, notification replies, scripts inside a
+  chat); anything else needs **remote access switched on** (settings, phone)
+  **and the pairing token**, as the `mist_remote` cookie from `POST
+  /remote/login` or a `Bearer` header. Off means every non-local request is
+  refused. Only `/remote/ping` and `/remote/login` answer without the token,
+  and the login is rate-limited per address. A browser landing on `/` without
+  the cookie gets a small login page instead of the app.
+- **Pairing**: the phone section shows a QR (`mist://pair?d=<base64url
+  json>`: addresses, token, discovery URL). The token lives in
+  `data/remote.json` (mode 600, gitignored with the rest of `data/`); the
+  cookie carries an HMAC of it, so rotating the token logs every phone out.
+- **Addresses**: the LAN IP and `<hostname>.local` on this port, plus two
+  off-LAN lanes: a supervised **cloudflared quick tunnel** (`tunnel: true`
+  keeps one up and restarts it; the origin is the LAN address on purpose so a
+  tunneled request can never look local) and a **user-entered address**
+  (Tailscale MagicDNS, a named tunnel). The tunnel URL changes on every
+  restart, so the Mac publishes its current off-LAN addresses as a tiny JSON
+  document in the share Worker's KV (`/s/remote-<discovery id>`, URLs only,
+  never the token); the phone reads it when nothing else answers.
+- **macOS firewall**: the first bind on `0.0.0.0` makes macOS ask whether
+  "MIST Console" may accept incoming connections. Allow it; Deny blocks the
+  phone until the rule is changed in System Settings, Network, Firewall.
+- `MIST_CONSOLE_PORT` tells `remote.py` which port a test instance answers
+  on, so its tunnel points at itself and not at the live Console.
+
 ## Archive tier (data/ growth)
 
 `data/` reached 2.9 GB across 1374 chats (14 files over 20 MB). Chats that are unpinned, dormant, unwatched and untouched for `archive.ARCHIVE_AFTER_DAYS` (90) are **condensed** by a daily server thread (`archive.py`): stream deltas, tool-result sidecars, task and progress ticks go; every assistant API message becomes one `mist_msg` event (text / thinking / tool blocks, the same shape imported chats use), `user_text` and the last `context` event stay, `seq`/`ts` stamps and the CLI `uuid` are preserved so ordering, timestamps, search and rewind anchors still work. Measured: a 41 MB chat condenses to 2.5 MB in about a second. Condensed chats fold into a collapsed **archive** section at the bottom of the rail and stay fully searchable and resumable. Pinned chats are never touched. `MIST_CONSOLE_DATA_DIR` points a test instance at its own data dir.

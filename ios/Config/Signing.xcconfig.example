@@ -1,0 +1,12 @@
+// Copy to Signing.xcconfig (gitignored) and fill in your team.
+//
+// Find your team id after adding an Apple ID in Xcode > Settings > Accounts:
+//   security find-identity -v -p codesigning
+// The parenthesised code in "Apple Development: you@example.com (XXXXXXXXXX)"
+// is the team id.
+//
+// Note: a literal double slash starts a comment in xcconfig, so never put a
+// URL with a scheme in this file.
+
+DEVELOPMENT_TEAM = XXXXXXXXXX
+CODE_SIGN_STYLE = Automatic

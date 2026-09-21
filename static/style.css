@@ -1354,3 +1354,79 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 .e-field input:focus, .e-field textarea:focus, .e-field select:focus { outline: none; border-color: var(--teal); }
 .e-field.e-missing input, .e-field.e-missing textarea, .e-field.e-missing select { border-color: var(--err); }
 .e-field a { color: var(--teal); overflow-wrap: anywhere; }
+
+/* ==== phone: the iOS shell (ios/) and any window narrower than 760px ====
+   Same page, laid out for a hand. The chat rail becomes a drawer over the
+   conversation, the top bar keeps the badges that fit, the composer clears the
+   home indicator, and hover-only affordances stay visible because a finger
+   cannot hover. The iOS shell also sets data-shell="ios" on <html> (pre-paint,
+   from its user agent) for the few controls only the app can act on. */
+.phone-only { display: none !important; }
+.shell-only { display: none !important; }
+html[data-shell="ios"] .shell-only { display: inline-block !important; }
+#railBackdrop { display: none; }
+@media (hover: none) {
+  .msg .msg-actions { opacity: .7; }
+  .tab .tpin, .tab .tclose { opacity: 1; }
+}
+@media (max-width: 760px) {
+  .phone-only { display: inline-flex !important; }
+  #railBackdrop:not([hidden]) {
+    display: block; position: fixed; left: 0; right: 0; bottom: 0;
+    top: var(--topbar-h, 44px); background: rgba(0, 0, 0, .55); z-index: 34;
+  }
+  html, body { font-size: 14px; }
+  /* --vvh tracks the visual viewport (app.js): the keyboard shrinks it, the
+     layout viewport stays put, so without this the composer hides behind the keys */
+  body { height: 100dvh; height: var(--vvh, 100dvh); }
+  #topbar { gap: 8px; padding: calc(6px + env(safe-area-inset-top)) 10px 6px; }
+  .brand .sub, #repo, #think, #r7d { display: none; }
+  #railToggle, #railResize { display: none; }
+  #tabrail, #mid.rail-collapsed #tabrail {
+    position: fixed; top: var(--topbar-h, 44px); bottom: 0; left: 0;
+    width: min(86vw, 340px); flex-basis: auto; z-index: 35; overflow: visible;
+    border-right: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom);
+    transform: translateX(-102%); transition: transform .2s ease;
+  }
+  #mid.rail-open #tabrail { transform: none; }
+  .session-log { padding: 12px 10px 16px; }
+  #composer { gap: 6px; padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); }
+  #shareBtn { display: none; }
+  #input { font-size: 16px; padding: 8px 10px; }   /* under 16px iOS zooms the page into the field */
+  #usage { display: none; }
+  #capPanel, #notesPanel { width: 100%; border-left: 0; }
+  #modelCard, #permCard, #thinkCard, #ctxCard {
+    left: 8px !important; right: 8px !important; width: auto !important;
+    max-height: 70vh; overflow-y: auto;
+  }
+  #slashMenu { left: 8px; right: 8px; }
+  #jumpBtn { bottom: 10px; }
+  #progDock { max-width: calc(100vw - 16px); }
+  .pair-qr svg { width: 160px; height: 160px; }
+}
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+  #tabrail, #mid.rail-collapsed #tabrail { transition: none; }
+}
+
+/* ---- settings: phone section (remote access + pairing) ---- */
+.remote-state { font-size: 11px; color: var(--dim); }
+.remote-state.on { color: var(--ok); }
+.remote-sub { color: var(--teal); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin: 12px 0 5px; }
+/* the QR stays black on white whatever the theme: it is for a camera, not a reader */
+.pair-qr { display: inline-block; background: #fff; padding: 8px; line-height: 0; border: 1px solid var(--line); margin-bottom: 6px; }
+.pair-qr:empty { display: none; }
+.pair-qr svg { display: block; width: 216px; height: 216px; }
+.remote-urls { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.remote-urls .ru { display: flex; align-items: center; gap: 6px; color: var(--text); word-break: break-all; }
+.remote-urls .ru .msi { font-size: 14px; color: var(--teal); flex: 0 0 auto; }
+.remote-urls .ru.dim { color: var(--dim); }
+.remote-urls .ru.err { color: var(--err); }
+.qa-link {
+  border: 0; padding: 0; background: none; color: var(--teal); font: inherit; font-size: 11px;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.qa-link.warn { color: var(--warn); }
+.qa-link:hover { color: var(--text); }
+.remote-field { margin-top: 8px; }
+#phoneNative { margin-top: 8px; }

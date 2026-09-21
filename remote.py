@@ -32,6 +32,7 @@ Off-LAN reachability, in order of sturdiness:
 """
 import base64
 import hashlib
+import logging
 import hmac
 import ipaddress
 import json
@@ -47,7 +48,9 @@ import time
 from bridge import DATA_DIR
 
 CONFIG_PATH = os.path.join(DATA_DIR, "remote.json")
-PORT = 5014
+# The port this server answers on. A test instance sets MIST_CONSOLE_PORT so
+# its tunnel points at itself and not at the live Console.
+PORT = int(os.environ.get("MIST_CONSOLE_PORT") or 5014)
 COOKIE = "mist_remote"
 COOKIE_MAX_AGE = 365 * 86400
 # Reachable without the token. Ping says "a MIST Console lives here"; login
@@ -56,6 +59,9 @@ PUBLIC_PATHS = {"/remote/ping", "/remote/login"}
 # Any of these on a loopback request means a proxy forwarded it: not local.
 _PROXY_HEADERS = ("X-Forwarded-For", "Cf-Connecting-Ip", "Cf-Ray", "X-Real-Ip", "Forwarded")
 _TUNNEL_URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+_log = logging.getLogger("mist.remote")
+# Outcome of the last discovery publish, for the settings section.
+_discovery_state = {"ok": None, "why": "", "at": None}
 
 _lock = threading.Lock()
 _cfg = None
@@ -392,14 +398,18 @@ def publish_discovery():
         import share
         account, tok = share._creds()
         if not (account and tok):
+            _discovery_state.update(ok=False, why="no Cloudflare credentials in the harness .env", at=time.time())
             return {"ok": False, "why": "no Cloudflare credentials in the harness .env"}
         base_url, kv_id = share._ensure_cloud()
         doc = json.dumps({"v": 1, "urls": offlan_urls() if enabled() else [],
                           "updated": int(time.time())})
         share._req("PUT", f"/accounts/{account}/storage/kv/namespaces/{kv_id}/values/{discovery_key()}",
                    tok, doc.encode(), ctype="text/plain", raw=True)
+        _discovery_state.update(ok=True, why="", at=time.time())
         return {"ok": True, "url": f"{base_url}/s/{discovery_key()}"}
     except Exception as e:
+        _log.warning("discovery publish failed: %s", e)
+        _discovery_state.update(ok=False, why=str(e), at=time.time())
         return {"ok": False, "why": str(e)}
 
 
@@ -425,6 +435,7 @@ def status():
         "urls": urls(),
         "pairing": pairing() if cfg.get("enabled") else None,
         "discovery": discovery_url(),
+        "discovery_state": dict(_discovery_state),
         "token_created": cfg.get("created"),
         "port": PORT,
     }

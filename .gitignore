@@ -12,3 +12,7 @@ dist-windows/
 build/
 dist/
 *.spec
+
+# iOS app (ios/): generated project + per-machine signing
+ios/MIST.xcodeproj/
+ios/Config/Signing.xcconfig
