@@ -19,6 +19,14 @@ const IS_SHELL = document.documentElement.dataset.shell === "ios";
 function isPhone() { return PHONE_MQ.matches; }
 function isTouch() { return IS_SHELL || TOUCH_MQ.matches; }
 let closeRailDrawer = () => false;   // wired once the rail exists (end of file)
+let setRailOpen = () => {};
+// The phone's top bar shows the active chat's title (the rail is hidden there).
+function syncPhoneTitle() {
+  const t = $("#phoneTitle");
+  if (!t) return;
+  const s = activeId && sessions.get(activeId);
+  t.textContent = (s && s.title) || "";
+}
 // The iOS shell listens for these (WKScriptMessageHandler "mist"): the event
 // stream going down is its cue that the Mac may have moved (hotspot, VPN, a
 // network hop) and that it should re-probe the addresses it knows.
@@ -2452,6 +2460,7 @@ function toggleSection(label) {
   renderTabs();
 }
 function renderTabs() {
+  syncPhoneTitle();   // cheap, and titles change through several paths that all end here
   if (renaming || _draggingPins) return;   // the 1.5s refresh must not clobber an edit box or an in-progress drag
   const list = sortedSessions();
   const today = todayKey();
@@ -2698,6 +2707,7 @@ function switchTo(id) {
   if (!s) return;
   activeId = id;
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
+  syncPhoneTitle();
   s.connect();   // lazy: open the stream + replay this transcript on first view
   sessions.forEach((x) => { x.logEl.hidden = x.id !== id; });
   // reflect this session into the top bar
@@ -5292,19 +5302,76 @@ function openShareCard(ev) {
 $("#shareBtn").addEventListener("click", openShareCard);
 $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true; });
 
-/* ---------- phone: drawer rail + keyboard-aware viewport ---------- */
+/* ---------- phone: drawer rail (tap + swipe) + keyboard-aware viewport ---------- */
 (function () {
-  const mid = $("#mid"), open = $("#railOpen"), backdrop = $("#railBackdrop");
-  if (!mid || !open || !backdrop) return;
-  const set = (on) => { mid.classList.toggle("rail-open", on); backdrop.hidden = !on; };
-  open.addEventListener("click", () => set(!mid.classList.contains("rail-open")));
-  backdrop.addEventListener("click", () => set(false));
+  const mid = $("#mid"), rail = $("#tabrail"), open = $("#railOpen"), backdrop = $("#railBackdrop");
+  if (!mid || !rail || !open || !backdrop) return;
+  const isOpen = () => mid.classList.contains("rail-open");
+  setRailOpen = (on) => { mid.classList.toggle("rail-open", on); backdrop.hidden = !on; };
+  open.addEventListener("click", () => setRailOpen(!isOpen()));
+  backdrop.addEventListener("click", () => setRailOpen(false));
+  const title = $("#phoneTitle");
+  if (title) title.addEventListener("click", () => setRailOpen(!isOpen()));
   closeRailDrawer = () => {
-    if (!mid.classList.contains("rail-open")) return false;
-    set(false);
+    if (!isOpen()) return false;
+    setRailOpen(false);
     return true;
   };
-  PHONE_MQ.addEventListener("change", () => set(false));
+  PHONE_MQ.addEventListener("change", () => setRailOpen(false));
+
+  // Swipe: from the left edge to open, leftward on the drawer or its backdrop
+  // to close, the drawer following the finger. Released past halfway, or with
+  // a flick, it goes the rest of the way. Movement that starts vertical is a
+  // scroll, and the gesture stands down without touching the event.
+  const EDGE = 28, SLOP = 8, FLICK = 0.35;   // px from the left, px before deciding, px per ms
+  let mode = null, startX = 0, startY = 0, width = 0, x = 0, lastX = 0, lastT = 0, vx = 0;
+  const railWidth = () => rail.getBoundingClientRect().width || Math.min(window.innerWidth * 0.86, 340);
+  const place = (px) => {
+    x = Math.min(0, Math.max(-width, px));
+    rail.style.transform = "translateX(" + x + "px)";
+    backdrop.style.opacity = String(1 + x / width);
+  };
+  document.addEventListener("touchstart", (e) => {
+    mode = null;
+    if (!isPhone() || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (!isOpen() && t.clientX > EDGE) return;
+    if (isOpen() && !(rail.contains(e.target) || e.target === backdrop)) return;
+    if (e.target.closest && e.target.closest("input, textarea, select")) return;
+    mode = "pending";
+    startX = t.clientX; startY = t.clientY; width = railWidth();
+    lastX = startX; lastT = performance.now(); vx = 0;
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!mode) return;
+    const t = e.touches[0];
+    const mx = t.clientX - startX, my = t.clientY - startY;
+    if (mode === "pending") {
+      if (Math.abs(mx) < SLOP && Math.abs(my) < SLOP) return;
+      if (Math.abs(my) > Math.abs(mx)) { mode = null; return; }
+      mode = "drag";
+      rail.classList.add("dragging");
+      backdrop.classList.add("dragging");
+      backdrop.hidden = false;
+    }
+    e.preventDefault();
+    const now = performance.now();
+    vx = (t.clientX - lastX) / Math.max(1, now - lastT);
+    lastX = t.clientX; lastT = now;
+    place(isOpen() ? mx : -width + mx);
+  }, { passive: false });
+  const finish = () => {
+    if (mode !== "drag") { mode = null; return; }
+    mode = null;
+    const goOpen = vx > FLICK ? true : vx < -FLICK ? false : x > -width / 2;
+    rail.classList.remove("dragging");
+    backdrop.classList.remove("dragging");
+    rail.style.transform = "";
+    backdrop.style.opacity = "";
+    setRailOpen(goOpen);
+  };
+  document.addEventListener("touchend", finish);
+  document.addEventListener("touchcancel", finish);
 })();
 // On touch the return key is a newline, so the desktop hint would mislead.
 if (isTouch()) input.placeholder = "Talk to MIST…";

@@ -1367,7 +1367,10 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
 #railBackdrop { display: none; }
 @media (hover: none) {
   .msg .msg-actions { opacity: .7; }
-  .tab .tpin, .tab .tclose { opacity: 1; }
+  .tab .tpin { opacity: 1; }
+  /* closing deletes the chat and there is no hover to reveal it on intent, so
+     a finger never gets the x at all; close chats from the Mac */
+  .tab .tclose { display: none; }
 }
 @media (max-width: 760px) {
   .phone-only { display: inline-flex !important; }
@@ -1430,3 +1433,23 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
 .qa-link:hover { color: var(--text); }
 .remote-field { margin-top: 8px; }
 #phoneNative { margin-top: 8px; }
+
+/* ---- phone, second pass: top-bar title, swipe drawer, touch targets ---- */
+@media (max-width: 760px) {
+  body { touch-action: manipulation; }   /* no double-tap zoom; pinch still works */
+  .brand { display: none; }              /* the app icon already says MIST; the row is for the chat title */
+  #phoneTitle.phone-only {
+    display: block !important; flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 13px; color: var(--text); padding: 6px 2px; cursor: pointer;
+  }
+  .meta { flex: 0 1 auto; max-width: 55%; }
+  #topbar { padding-left: max(10px, env(safe-area-inset-left)); padding-right: max(10px, env(safe-area-inset-right)); }
+  #composer { padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  #tabrail { touch-action: pan-y; padding-left: env(safe-area-inset-left); }
+  /* while a finger drives the drawer the inline transform is the truth */
+  #tabrail.dragging, #mid.rail-collapsed #tabrail.dragging { transition: none; }
+  #railBackdrop:not([hidden]) { transition: opacity .2s ease; }
+  #railBackdrop.dragging { transition: none; }
+  .tab { padding: 11px 9px; }            /* finger-sized rows */
+}
