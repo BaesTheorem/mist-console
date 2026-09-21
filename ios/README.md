@@ -19,8 +19,10 @@ running.
 - **Web UI** adapts itself under 760px (`static/style.css`, the "phone"
   blocks) and when the app's user agent (`MISTShell/…`) is present: the chat
   rail becomes a drawer (tap the menu or the chat title, or swipe in from the
-  left edge; swipe it or its backdrop leftward to close), the top bar shows
-  the active chat's title, the composer clears the home indicator, the return
+  left edge; swipe it or its backdrop leftward to close), the top bar is one
+  row (menu, the chat's title, a status chip mirroring status, model and
+  context use, settings) with the badge strip folding out under it when the
+  chip is tapped, the composer clears the home indicator, the return
   key inserts a newline (the send button sends), the attach button opens the
   photo library and the photo rides along as an image attachment, and the
   close-x on chat rows is off (closing deletes the chat; there is no hover to

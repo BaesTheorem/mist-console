@@ -1383,7 +1383,7 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
      layout viewport stays put, so without this the composer hides behind the keys */
   body { height: 100dvh; height: var(--vvh, 100dvh); }
   #topbar { gap: 8px; padding: calc(6px + env(safe-area-inset-top)) 10px 6px; }
-  .brand .sub, #repo, #think, #r7d { display: none; }
+  .brand .sub, #repo { display: none; }   /* repo switching needs a folder picker; not on a phone */
   #railToggle, #railResize { display: none; }
   #tabrail, #mid.rail-collapsed #tabrail {
     position: fixed; top: var(--topbar-h, 44px); bottom: 0; left: 0;
@@ -1445,7 +1445,8 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
   body { position: fixed; top: 0; left: 0; right: 0; }
   .brand { display: none; }              /* the app icon already says MIST; the row is for the chat title */
   #phoneTitle.phone-only {
-    display: block !important; flex: 1 1 auto; min-width: 0;
+    /* basis 0: a long title must never push the chip and the gear onto a second line */
+    display: block !important; flex: 1 1 0; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: 13px; color: var(--text); padding: 6px 2px; cursor: pointer;
   }
@@ -1458,4 +1459,40 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
   #railBackdrop:not([hidden]) { transition: opacity .2s ease; }
   #railBackdrop.dragging { transition: none; }
   .tab { padding: 11px 9px; }            /* finger-sized rows */
+}
+
+/* ---- phone, third pass: the top bar ----
+   One row: menu, the chat's title, a status chip, settings. The badge strip
+   (model, permissions, thinking, status, context, 5h, 7d) no longer scrolls
+   sideways under a thumb; it folds out as a full-width row under the title
+   when the chip is tapped, with finger-sized badges, and the chip itself
+   mirrors the three things worth seeing at a glance: status, model, context. */
+@media (max-width: 760px) {
+  #topbar { flex-wrap: wrap; row-gap: 6px; }
+  #phoneStatus.phone-only {
+    display: inline-flex !important; align-items: center; gap: 7px;
+    flex: 0 1 auto; max-width: 44%; min-height: 32px;
+    border: 1px solid var(--line); background: var(--md-sys-color-surface-container-lowest);
+    color: var(--dim); font: inherit; font-size: 11px; padding: 4px 9px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #phoneStatus .ps-text { overflow: hidden; text-overflow: ellipsis; }
+  /* the rail's rhombus, so the chip and the chat list speak the same language */
+  #phoneStatus .ps-dot {
+    width: 8px; height: 13px; flex: 0 0 8px; background: var(--md-sys-color-outline-variant);
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  }
+  #phoneStatus[data-state="thinking"] .ps-dot { background: var(--violet); animation: dot-breathe 1.15s ease-in-out infinite; }
+  #phoneStatus[data-state="working"] .ps-dot { background: var(--teal); animation: dot-breathe 1.15s ease-in-out infinite; }
+  #phoneStatus[data-state="error"] .ps-dot { background: var(--err); }
+  #phoneStatus.open, #phoneStatus:active { border-color: var(--teal); color: var(--teal); }
+  .meta { display: none; }
+  #topbar.info-open .meta {
+    display: flex; flex: 1 1 100%; max-width: none; order: 10;
+    flex-wrap: wrap; gap: 6px; overflow: visible; padding-bottom: 2px;
+  }
+  #topbar.info-open .meta .badge { padding: 7px 10px; font-size: 12px; }
+}
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+  #phoneStatus .ps-dot { animation: none !important; }
 }

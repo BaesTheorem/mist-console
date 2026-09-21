@@ -5380,6 +5380,38 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   document.addEventListener("touchend", finish);
   document.addEventListener("touchcancel", finish);
 })();
+/* ---------- phone: status chip that mirrors the badge strip ---------- */
+(function () {
+  const chip = $("#phoneStatus"), bar = $("#topbar");
+  if (!chip || !bar) return;
+  const dot = chip.querySelector(".ps-dot"), text = chip.querySelector(".ps-text");
+  const status = $("#status"), model = $("#model"), ctx = $("#ctx");
+  if (!dot || !text || !status || !model || !ctx) return;
+  const sync = () => {
+    chip.dataset.state = status.dataset.state || "idle";
+    // "claude-opus-5[1m]" -> "opus-5[1m]"; "model —" / "model: default" -> nothing
+    let m = (model.textContent || "").trim();
+    m = /^model\b/.test(m) ? "" : m.replace(/^claude-/, "");
+    const pct = parseFloat((ctx.textContent || "").replace(/^ctx\s*/, ""));
+    const parts = [];
+    if (m) parts.push(m);
+    if (!isNaN(pct)) parts.push(Math.round(pct) + "%");
+    const st = (status.textContent || "").trim();
+    if (!parts.length || (chip.dataset.state !== "idle" && st)) parts.push(st || "idle");
+    text.textContent = parts.join(" · ");
+    chip.title = [status.textContent, model.textContent, ctx.textContent].filter(Boolean).join(" · ");
+  };
+  const mo = new MutationObserver(sync);
+  [status, model, ctx].forEach((n) => mo.observe(n, { attributes: true, childList: true, characterData: true, subtree: true }));
+  const setOpen = (on) => {
+    bar.classList.toggle("info-open", on);
+    chip.classList.toggle("open", on);
+    chip.setAttribute("aria-expanded", on ? "true" : "false");
+  };
+  chip.addEventListener("click", () => setOpen(!bar.classList.contains("info-open")));
+  PHONE_MQ.addEventListener("change", () => setOpen(false));
+  sync();
+})();
 // On touch the return key is a newline, so the desktop hint would mislead.
 if (isTouch()) input.placeholder = "Talk to MIST…";
 // iOS shrinks the visual viewport for the keyboard and leaves the layout
