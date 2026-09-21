@@ -493,10 +493,16 @@ def publish_discovery():
 # ---- pairing + status + updates ----------------------------------------------
 
 def pairing():
-    """The QR / link payload the phone consumes: mist://pair?d=<base64url json>."""
+    """The QR / link payload the phone consumes: mist://pair?d=<base64url json>.
+    Kept small so the code stays scannable off a screen: only the addresses a
+    phone next to this Mac can use (LAN, plus a configured address). The app
+    learns the rest, tunnel and discovery URL included, from /remote/config
+    the moment it connects."""
     cfg = _load()
-    doc = {"v": 1, "name": "MIST Console", "urls": urls(), "token": cfg["token"],
-           "discovery": discovery_url()}
+    addrs = lan_urls()
+    if cfg.get("remote_url"):
+        addrs.append(cfg["remote_url"].rstrip("/"))
+    doc = {"v": 1, "name": "MIST Console", "urls": addrs, "token": cfg["token"]}
     raw = json.dumps(doc, separators=(",", ":")).encode()
     return "mist://pair?d=" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
 

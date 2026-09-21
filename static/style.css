@@ -1414,9 +1414,9 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
 .remote-state.on { color: var(--ok); }
 .remote-sub { color: var(--teal); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin: 12px 0 5px; }
 /* the QR stays black on white whatever the theme: it is for a camera, not a reader */
-.pair-qr { display: inline-block; background: #fff; padding: 8px; line-height: 0; border: 1px solid var(--line); margin-bottom: 6px; }
+.pair-qr { display: inline-block; background: #fff; padding: 6px; line-height: 0; border: 1px solid var(--line); margin-bottom: 6px; }
 .pair-qr:empty { display: none; }
-.pair-qr svg { display: block; width: 216px; height: 216px; }
+.pair-qr svg { display: block; width: 300px; height: 300px; }
 .remote-urls { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
 .remote-urls .ru { display: flex; align-items: center; gap: 6px; color: var(--text); word-break: break-all; }
 .remote-urls .ru .msi { font-size: 14px; color: var(--teal); flex: 0 0 auto; }

@@ -5365,10 +5365,12 @@ function renderRemote(st) {
   qr.dataset.pairing = st.pairing || "";
   if (st.pairing && typeof qrcode === "function") {
     try {
-      const q = qrcode(0, "M");   // type 0: smallest version that fits
+      // Level L and a real quiet zone: this is read off a screen by a phone
+      // camera, so fewer, bigger modules beat error-correction headroom.
+      const q = qrcode(0, "L");   // type 0: smallest version that fits
       q.addData(st.pairing);
       q.make();
-      qr.innerHTML = q.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+      qr.innerHTML = q.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
     } catch (_) { qr.textContent = "too much for a QR code; use the pairing link"; }
   }
   const disc = $("#remoteDiscovery");
