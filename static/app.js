@@ -5386,7 +5386,11 @@ if (isTouch()) input.placeholder = "Talk to MIST…";
   const sync = () => {
     raf = 0;
     if (!isPhone()) { document.documentElement.style.removeProperty("--vvh"); return; }
-    document.documentElement.style.setProperty("--vvh", Math.round(vv.height) + "px");
+    // Text size is a CSS zoom on the root, and a px length inside it renders
+    // zoomed, so the visual height is divided by the zoom or a 125% Console
+    // gets a body 25% taller than the screen (the top bar scrolled off it).
+    const zoom = parseFloat(document.documentElement.style.zoom) || 1;
+    document.documentElement.style.setProperty("--vvh", Math.round(vv.height / zoom) + "px");
     if (window.scrollY) window.scrollTo(0, 0);
     const a = activeId && sessions.get(activeId);
     if (a) a.scroll();   // keep following the bottom while the log area resizes

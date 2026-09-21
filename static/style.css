@@ -1437,6 +1437,11 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
 /* ---- phone, second pass: top-bar title, swipe drawer, touch targets ---- */
 @media (max-width: 760px) {
   body { touch-action: manipulation; }   /* no double-tap zoom; pinch still works */
+  /* The document itself never scrolls on a phone: the transcript and the rail
+     are their own scrollers. Pinning the body keeps a stray scrollIntoView or
+     a keyboard reveal from sliding the top bar off the screen. */
+  html, body { overflow: hidden; overscroll-behavior: none; }
+  body { position: fixed; top: 0; left: 0; right: 0; }
   .brand { display: none; }              /* the app icon already says MIST; the row is for the chat title */
   #phoneTitle.phone-only {
     display: block !important; flex: 1 1 auto; min-width: 0;
