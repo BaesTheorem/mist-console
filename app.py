@@ -1415,7 +1415,10 @@ def remote_login():
     """Token in (JSON {token} or a form field) -> the mist_remote cookie out.
     A form post is a browser or the app's web view, so it is redirected into
     the app; JSON callers get JSON. Misses are rate-limited per address."""
-    ip = request.remote_addr or "?"
+    # Through the tunnel every request arrives from cloudflared on loopback, so
+    # the miss counter keys on the client address Cloudflare stamps (it is only
+    # spoofable from the LAN, where the guard already trusts nothing by address).
+    ip = request.headers.get("Cf-Connecting-Ip") or request.remote_addr or "?"
     if not remote.enabled():
         return jsonify({"ok": False, "error": "remote access is off on this Console"}), 403
     if not remote.login_allowed(ip):
