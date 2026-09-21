@@ -3635,6 +3635,7 @@ function applyTextSize(pct, persist) {
   const root = document.documentElement;
   if (pct === 100) root.style.removeProperty("zoom");
   else root.style.zoom = pct / 100;
+  window.dispatchEvent(new Event("mist:zoom"));   // phone metrics derive from the zoom
   const val = $("#tsizeVal");
   if (val) val.textContent = pct + "%";
   try { localStorage.setItem("textSize", String(pct)); } catch (_) {}
@@ -5323,9 +5324,14 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   // to close, the drawer following the finger. Released past halfway, or with
   // a flick, it goes the rest of the way. Movement that starts vertical is a
   // scroll, and the gesture stands down without touching the event.
-  const EDGE = 28, SLOP = 8, FLICK = 0.35;   // px from the left, px before deciding, px per ms
-  let mode = null, startX = 0, startY = 0, width = 0, x = 0, lastX = 0, lastT = 0, vx = 0;
-  const railWidth = () => rail.getBoundingClientRect().width || Math.min(window.innerWidth * 0.86, 340);
+  const EDGE = 28, SLOP = 8, FLICK = 0.35;   // CSS px from the left, px before deciding, px per ms
+  let mode = null, startX = 0, startY = 0, width = 0, x = 0, lastX = 0, lastT = 0, vx = 0, zr = 1;
+  // Text size is a zoom on the root. Chromium reports rects and touch points
+  // in zoomed pixels, Apple's WKWebView in unzoomed ones, and the transform we
+  // write is in CSS px either way; so the ratio is measured, not assumed
+  // (the same trick anchorCard uses).
+  const rectScale = () => (rail.getBoundingClientRect().width / (rail.offsetWidth || 1)) || 1;
+  const railWidth = () => rail.offsetWidth || Math.min(window.innerWidth * 0.86, 340);
   const place = (px) => {
     x = Math.min(0, Math.max(-width, px));
     rail.style.transform = "translateX(" + x + "px)";
@@ -5335,7 +5341,8 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
     mode = null;
     if (!isPhone() || e.touches.length !== 1) return;
     const t = e.touches[0];
-    if (!isOpen() && t.clientX > EDGE) return;
+    zr = rectScale();
+    if (!isOpen() && t.clientX > EDGE * zr) return;
     if (isOpen() && !(rail.contains(e.target) || e.target === backdrop)) return;
     if (e.target.closest && e.target.closest("input, textarea, select")) return;
     mode = "pending";
@@ -5345,7 +5352,7 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   document.addEventListener("touchmove", (e) => {
     if (!mode) return;
     const t = e.touches[0];
-    const mx = t.clientX - startX, my = t.clientY - startY;
+    const mx = (t.clientX - startX) / zr, my = (t.clientY - startY) / zr;
     if (mode === "pending") {
       if (Math.abs(mx) < SLOP && Math.abs(my) < SLOP) return;
       if (Math.abs(my) > Math.abs(mx)) { mode = null; return; }
@@ -5356,7 +5363,7 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
     }
     e.preventDefault();
     const now = performance.now();
-    vx = (t.clientX - lastX) / Math.max(1, now - lastT);
+    vx = (t.clientX - lastX) / zr / Math.max(1, now - lastT);
     lastX = t.clientX; lastT = now;
     place(isOpen() ? mx : -width + mx);
   }, { passive: false });
@@ -5390,6 +5397,7 @@ if (isTouch()) input.placeholder = "Talk to MIST…";
     // zoomed, so the visual height is divided by the zoom or a 125% Console
     // gets a body 25% taller than the screen (the top bar scrolled off it).
     const zoom = parseFloat(document.documentElement.style.zoom) || 1;
+    document.documentElement.style.setProperty("--zoom", String(zoom));   // vw-sized things divide by it (style.css)
     document.documentElement.style.setProperty("--vvh", Math.round(vv.height / zoom) + "px");
     if (window.scrollY) window.scrollTo(0, 0);
     const a = activeId && sessions.get(activeId);
@@ -5399,6 +5407,7 @@ if (isTouch()) input.placeholder = "Talk to MIST…";
   vv.addEventListener("resize", queue);
   vv.addEventListener("scroll", queue);
   PHONE_MQ.addEventListener("change", queue);
+  window.addEventListener("mist:zoom", queue);   // text size changed; --vvh and --zoom follow
   sync();
 })();
 

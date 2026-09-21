@@ -17,10 +17,14 @@ running.
   on and the caller holds the token. See the "iPhone app" section of the main
   README for the security model.
 - **Web UI** adapts itself under 760px (`static/style.css`, the "phone"
-  block) and when the app's user agent (`MISTShell/…`) is present: the chat
-  rail becomes a drawer, the composer clears the home indicator, the return
+  blocks) and when the app's user agent (`MISTShell/…`) is present: the chat
+  rail becomes a drawer (tap the menu or the chat title, or swipe in from the
+  left edge; swipe it or its backdrop leftward to close), the top bar shows
+  the active chat's title, the composer clears the home indicator, the return
   key inserts a newline (the send button sends), the attach button opens the
-  photo library and the photo rides along as an image attachment.
+  photo library and the photo rides along as an image attachment, and the
+  close-x on chat rows is off (closing deletes the chat; there is no hover to
+  reveal it on intent).
 - **This directory** is the shell: `MIST/Sources` (Swift), `MIST/Resources`
   (icon, colors), `project.yml` (XcodeGen), `scripts/`.
 
@@ -115,6 +119,11 @@ config, so `ios-sideload/refresh.py` can re-sign it with the others.
   viewport alone, so the page tracks `visualViewport.height` into `--vvh`
   (app.js) and sizes the body from it. Do not "fix" this in Swift by
   resizing the web view; the page already handles it.
+- **Text size is a CSS zoom on the root**, and a px length inside it renders
+  zoomed. Anything sized from a measured viewport value (`--vvh`) has to be
+  divided by that zoom first, or a 125% Console gets a body 25% taller than
+  the screen and the top bar scrolls off. The body is pinned
+  (`position: fixed`) on phones so nothing can scroll the document anyway.
 - **The web view never scrolls as a document** (`bounces = false`); the
   transcript is its own scroller. If something starts rubber-banding, a
   layout change let the document grow past the viewport.

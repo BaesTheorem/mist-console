@@ -1387,7 +1387,8 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
   #railToggle, #railResize { display: none; }
   #tabrail, #mid.rail-collapsed #tabrail {
     position: fixed; top: var(--topbar-h, 44px); bottom: 0; left: 0;
-    width: min(86vw, 340px); flex-basis: auto; z-index: 35; overflow: visible;
+    /* vw does not shrink with the root zoom (text size), so divide it out */
+    width: calc(min(86vw, 340px) / var(--zoom, 1)); flex-basis: auto; z-index: 35; overflow: visible;
     border-right: 1px solid var(--line);
     padding-bottom: env(safe-area-inset-bottom);
     transform: translateX(-102%); transition: transform .2s ease;
@@ -1401,7 +1402,7 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
   #capPanel, #notesPanel { width: 100%; border-left: 0; }
   #modelCard, #permCard, #thinkCard, #ctxCard {
     left: 8px !important; right: 8px !important; width: auto !important;
-    max-height: 70vh; overflow-y: auto;
+    max-height: calc(70vh / var(--zoom, 1)); overflow-y: auto;
   }
   #slashMenu { left: 8px; right: 8px; }
   #jumpBtn { bottom: 10px; }
