@@ -1,0 +1,25 @@
+#!/bin/bash
+# Restart the Console server once nobody is using it: no chat transcript
+# written for QUIET_MIN minutes AND no keyboard/mouse input for the same span.
+# For backend edits landed while other chats are mid-turn, where an immediate
+# bin/restart-server would cut them off.
+#
+# Same rules as restart-server: run it DETACHED through /bin/bash,
+#   launchctl remove com.exobrain.mist-console-restart 2>/dev/null
+#   launchctl submit -l com.exobrain.mist-console-restart -- /bin/bash "$(pwd)/bin/restart-server-when-idle"
+# The job label is removed by restart-server's last step (this script execs
+# into it), or here if it gives up after 12 hours.
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"
+QUIET=${QUIET_MIN:-3}
+for _ in $(seq 1 720); do
+  idle_ns=$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print $NF; exit}')
+  idle_s=$(( ${idle_ns:-0} / 1000000000 ))
+  busy=$(find "$HERE/../data" -maxdepth 1 -name '*.jsonl' -mmin "-$QUIET" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$busy" -eq 0 ] && [ "$idle_s" -ge $((QUIET * 60)) ]; then
+    exec /bin/bash "$HERE/restart-server"
+  fi
+  sleep 60
+done
+[ -n "${XPC_SERVICE_NAME:-}" ] && exec launchctl remove "$XPC_SERVICE_NAME"
+exit 0
