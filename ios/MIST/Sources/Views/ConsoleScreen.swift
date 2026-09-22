@@ -4,6 +4,7 @@ import SwiftUI
 struct ConsoleScreen: View {
     @EnvironmentObject var store: ServerStore
     @EnvironmentObject var link: ConsoleLink
+    @EnvironmentObject var cache: ChatCache
 
     var body: some View {
         ZStack {
@@ -28,7 +29,8 @@ struct ConsoleScreen: View {
         case .idle, .probing:
             StatusCard(title: "finding your Mac", message: store.pairing?.name ?? "", spinning: true, actions: [])
         case .unreachable(let why):
-            StatusCard(title: "can't reach the Mac", message: why, spinning: false, actions: [
+            StatusCard(title: "can't reach the Mac", message: why, spinning: false, actions:
+                (cache.isEmpty ? [] : [("read cached chats", { link.showReader = true })]) + [
                 ("try again", { link.reconnect(store: store) }),
                 ("addresses & pairing", { link.showSettings = true }),
             ])

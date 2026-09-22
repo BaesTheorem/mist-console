@@ -8,6 +8,7 @@ import SwiftUI
 struct MISTApp: App {
     @StateObject private var store = ServerStore()
     @StateObject private var link = ConsoleLink()
+    @StateObject private var cache = ChatCache()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -15,7 +16,9 @@ struct MISTApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(link)
+                .environmentObject(cache)
                 .preferredColorScheme(.dark)
+                .onAppear { link.cache = cache }
                 .onOpenURL { url in handle(url) }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active { link.becameActive(store: store) }

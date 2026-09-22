@@ -294,7 +294,9 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 served by the Mac: pair it once, and every chat is there, live, because they
 are the same chats. Nothing runs on the phone, so the Mac has to be awake with
 the Console open. It ships Lock Screen and Home Screen widgets (open the
-Console, or open it in a new chat). Build and pairing steps are in
+Console, or open it in a new chat) and keeps a read-only text copy of every
+chat on the phone (`/sessions/<id>/transcript`, `transcript.py`) for when the
+Mac is out of reach. Build and pairing steps are in
 [`ios/README.md`](ios/README.md).
 
 What changed on the server for it (`remote.py`, the `/remote/*` routes):

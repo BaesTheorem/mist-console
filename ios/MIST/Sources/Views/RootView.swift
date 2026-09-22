@@ -17,6 +17,9 @@ struct RootView: View {
                 .environmentObject(store)
                 .environmentObject(link)
         }
+        .sheet(isPresented: $link.showReader) {
+            OfflineReaderView()
+        }
     }
 }
 

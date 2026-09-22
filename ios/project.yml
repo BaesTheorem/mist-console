@@ -30,8 +30,8 @@ targets:
       path: MIST/Info.plist
       properties:
         CFBundleDisplayName: MIST
-        CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "1.2"
+        CFBundleVersion: "3"
         UILaunchScreen:
           UIColorName: LaunchBackground
         # The Console is a dark surface; keep the status bar and keyboard on it.
@@ -65,8 +65,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        MARKETING_VERSION: "1.1"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "1.2"
+        CURRENT_PROJECT_VERSION: "3"
         SWIFT_STRICT_CONCURRENCY: minimal
     dependencies:
       - target: MISTWidget   # the Lock Screen / Home Screen widgets, embedded as a plug-in
@@ -85,8 +85,8 @@ targets:
       path: MISTWidget/Info.plist
       properties:
         CFBundleDisplayName: MIST
-        CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "1.2"
+        CFBundleVersion: "3"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
@@ -97,6 +97,6 @@ targets:
         ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME: WidgetBackground
         TARGETED_DEVICE_FAMILY: "1,2"
         SKIP_INSTALL: YES
-        MARKETING_VERSION: "1.1"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "1.2"
+        CURRENT_PROJECT_VERSION: "3"
         SWIFT_STRICT_CONCURRENCY: minimal

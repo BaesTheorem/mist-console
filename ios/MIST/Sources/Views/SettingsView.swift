@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store: ServerStore
     @EnvironmentObject var link: ConsoleLink
+    @EnvironmentObject var cache: ChatCache
     @Environment(\.dismiss) private var dismiss
 
     @State private var newURL = ""
@@ -62,6 +63,25 @@ struct SettingsView: View {
                     Text("addresses, tried in order")
                 } footer: {
                     Text("The Mac's own network address comes first, then a tunnel or a Tailscale name for when you're away. Swipe to remove one. The Mac republishes new addresses to this list whenever the app connects.")
+                }
+                Section {
+                    row("chats on the phone", "\(cache.chats.filter { $0.syncedActivity >= 0 }.count) of \(cache.chats.count)")
+                    row("size", ByteCountFormatter.string(fromByteCount: cache.sizeOnDisk, countStyle: .file))
+                    row("last sync", cache.lastSync.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "never")
+                    if cache.syncing {
+                        Text(cache.pending > 0 ? "syncing, \(cache.pending) to go" : "syncing").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if let e = cache.lastError { Text(e).font(.footnote).foregroundStyle(.secondary) }
+                    Button("read cached chats") { link.showReader = true }
+                    Button("sync now") {
+                        if let base = link.base, let token = store.pairing?.token { cache.sync(base: base, token: token) }
+                    }
+                    .disabled(link.base == nil || cache.syncing)
+                    Button("clear the cache", role: .destructive) { cache.clear() }
+                } header: {
+                    Text("offline copy")
+                } footer: {
+                    Text("Every chat, as text, copied to the phone whenever the app is connected, newest first. Readable when the Mac is out of reach; not editable.")
                 }
                 Section("pairing") {
                     Button("scan a new pairing code") { scanning = true }

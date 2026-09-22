@@ -32,6 +32,9 @@ final class ConsoleLink: ObservableObject {
     /// JavaScript the web view runs once the page is loaded (a widget deep
     /// link asking for a new chat, for instance), then clears.
     @Published var pendingScript: String?
+    @Published var showReader = false
+    /// The offline copy of every chat; refreshed after each successful connect.
+    weak var cache: ChatCache?
 
     private var inFlight = false
     private var streamDown = false
@@ -159,6 +162,7 @@ final class ConsoleLink: ObservableObject {
                 loadGeneration += 1
                 state = .connected
             }
+            cache?.sync(base: url, token: pairing.token)   // keep the offline copy current
         case .wrongToken:
             state = .rejected("The Mac rejected this phone's token. Re-pair from the phone section of the Console's settings.")
         case .off:

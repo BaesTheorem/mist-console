@@ -56,6 +56,18 @@ purpose (an App Group would add an entitlement to the signing story for a
 subtitle nobody needs). If MIST does not appear in the gallery right after an
 install, open the app once and look again.
 
+## Offline copy of every chat
+
+`ChatCache` keeps every chat on the phone as text (`GET /sessions/<id>/transcript`,
+built by `transcript.py`: the user's text, MIST's text, one line per tool
+call; no thinking, no tool output). It syncs after every successful connect:
+the registry is compared with the index, chats with newer activity are fetched
+newest first two at a time, closed chats are dropped. When the Mac is out of
+reach the status card offers **read cached chats**, a read-only list with
+title search and a transcript view; the same reader and a sync/clear control
+live in the app's settings under "offline copy". Storage is Application
+Support/chats (index.json plus one JSON per chat).
+
 ## Pairing
 
 On the Mac: MIST settings, **phone**, switch on **remote access**. The section

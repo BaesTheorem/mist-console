@@ -30,6 +30,7 @@ import quickaccess
 import remote
 import search as chat_search
 import share
+import transcript
 from bridge import (ClaudeSession, CLAUDE, DATA_DIR, HARNESS, RATE_LIVE_PATH,
                     RATE_UTIL_PATH, DEFAULT_PERMISSION_MODE, IDLE_REAP_SEC)
 
@@ -806,6 +807,21 @@ def sessions():
     resp = jsonify(_session_list())
     resp.headers["X-Now"] = repr(now)
     return resp
+
+
+@app.route("/sessions/<sid>/transcript")
+def session_transcript(sid):
+    """The chat as readable text (user, assistant, one line per tool call), for
+    the phone's offline cache. See transcript.py."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"error": "no session"}), 404
+    s.ensure_imported()
+    path = os.path.join(DATA_DIR, f"{sid}.jsonl")
+    doc = transcript.build(path, sid=sid, title=s.title or "New chat")
+    doc["last_activity"] = s.last_activity
+    doc["pinned"] = bool(s.pinned)
+    return jsonify(doc)
 
 
 @app.route("/events")
