@@ -4769,6 +4769,17 @@ logs.addEventListener("scroll", hideCtxMenu, true);
 window.addEventListener("blur", hideCtxMenu);
 
 /* ---------- boot ---------- */
+// Which chat the window opens on. Pinned chats are the ones Alex actually lives
+// in, so the app lands on the pinned chat with the freshest activity rather than
+// whatever sits at the top of the manual pin order. No pins: fall back to the
+// rail's own first row (newest unpinned chat).
+function bootChat() {
+  const pins = [...sessions.values()].filter((s) => s.pinned);
+  if (pins.length) {
+    return pins.reduce((best, s) => (s.lastActivity > best.lastActivity ? s : best));
+  }
+  return sortedSessions()[0];
+}
 async function boot() {
   try {
     const cfg = await (await fetch("/config")).json();
@@ -4780,7 +4791,7 @@ async function boot() {
   _syncSince = parseFloat(bootList.headers.get("X-Now")) || Date.now() / 1000;   // server clock, for syncSessions
   if (existing.length) {
     existing.forEach((info) => sessions.set(info.id, new Session(info.id, info.title, info)));
-    switchTo(sortedSessions()[0].id);
+    switchTo(bootChat().id);
   } else {
     await createSession();
   }
