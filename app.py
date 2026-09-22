@@ -1500,7 +1500,7 @@ def remote_update():
     """{enabled?, tunnel?, remote_url?}: only the keys present change."""
     body = request.get_json(silent=True) or {}
     return jsonify(remote.update(enabled_=body.get("enabled"), tunnel_=body.get("tunnel"),
-                                 remote_url=body.get("remote_url")))
+                                 remote_url=body.get("remote_url"), keep_awake=body.get("keep_awake")))
 
 
 @app.route("/remote/rotate", methods=["POST"])

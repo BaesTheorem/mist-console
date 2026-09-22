@@ -95,6 +95,7 @@ def _load():
             _cfg.setdefault("enabled", False)
             _cfg.setdefault("tunnel", False)
             _cfg.setdefault("remote_url", "")
+            _cfg.setdefault("keep_awake", True)
             dirty = False
             if not _cfg.get("token"):
                 _cfg["token"] = secrets.token_urlsafe(32)
@@ -421,6 +422,7 @@ def _supervise():
         try:
             _republish_if_moved()
             cfg = _load()
+            _keep_awake(bool(cfg.get("enabled") and cfg.get("keep_awake") and _on_ac_power()))
             want = bool(cfg.get("enabled") and cfg.get("tunnel"))
             if want:
                 if not tunnel.running():
@@ -434,6 +436,46 @@ def _supervise():
         except Exception:
             pass
         time.sleep(5)
+
+
+# ---- keep the Mac reachable: no display sleep while remote access is on ----
+# Measured 2026-09-22: with system sleep already disabled, the display going
+# off still dropped this Mac's Wi-Fi (airportd rejoined on the display-on
+# trigger), which took the phone's direct path AND the tunnel down until the
+# Mac was woken. A display-sleep assertion (caffeinate -d -i) keeps the radio
+# up. Held only on AC power: on battery the Mac keeps its own schedule.
+_awake = {"proc": None, "on_ac": None, "checked": 0}
+
+
+def _on_ac_power():
+    if time.time() - _awake["checked"] > 30:
+        out = _run(["pmset", "-g", "batt"], timeout=3)
+        _awake["on_ac"] = ("AC Power" in out) if out else None
+        _awake["checked"] = time.time()
+    return _awake["on_ac"]
+
+
+def _keep_awake(want):
+    p = _awake["proc"]
+    running = p is not None and p.poll() is None
+    if want and not running:
+        try:
+            _awake["proc"] = subprocess.Popen(
+                ["/usr/bin/caffeinate", "-d", "-i"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            _awake["proc"] = None
+    elif not want and running:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+        _awake["proc"] = None
+
+
+def awake_status():
+    p = _awake["proc"]
+    return {"holding": p is not None and p.poll() is None, "on_ac": _on_ac_power()}
 
 
 _supervisor_started = False
@@ -514,6 +556,8 @@ def status():
         "tunnel": bool(cfg.get("tunnel")),
         "tunnel_state": tunnel.status(),
         "remote_url": cfg.get("remote_url") or "",
+        "keep_awake": bool(cfg.get("keep_awake")),
+        "awake": awake_status(),
         "lan_urls": lan_urls(),
         "urls": urls(),
         "pairing": pairing() if cfg.get("enabled") else None,
@@ -525,13 +569,15 @@ def status():
     }
 
 
-def update(enabled_=None, tunnel_=None, remote_url=None):
+def update(enabled_=None, tunnel_=None, remote_url=None, keep_awake=None):
     cfg = _load()
     with _lock:
         if enabled_ is not None:
             cfg["enabled"] = bool(enabled_)
         if tunnel_ is not None:
             cfg["tunnel"] = bool(tunnel_)
+        if keep_awake is not None:
+            cfg["keep_awake"] = bool(keep_awake)
         if remote_url is not None:
             remote_url = str(remote_url).strip()
             if remote_url and not re.match(r"^https?://[^\s/]+", remote_url):

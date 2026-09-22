@@ -5552,6 +5552,13 @@ function renderRemote(st) {
   $("#remoteBody").hidden = !st.enabled;
   const ru = $("#remoteUrl");
   if (document.activeElement !== ru) ru.value = st.remote_url || "";
+  const ka = $("#keepAwake");
+  if (ka) {
+    ka.selected = !!st.keep_awake;
+    const a = st.awake || {};
+    $("#awakeState").textContent = !st.keep_awake ? "" : a.holding ? "holding" : a.on_ac === false ? "on battery, not held" : "";
+    $("#awakeState").classList.toggle("on", !!a.holding);
+  }
   const lan = $("#remoteLan");
   lan.innerHTML = "";
   (st.lan_urls || []).forEach((u) => lan.appendChild(el("div", "ru", '<span class="msi">wifi</span>' + esc(u))));
@@ -5601,6 +5608,7 @@ if ($("#remoteEnabled")) {
   $("#remoteEnabled").addEventListener("change", (e) => postRemote({ enabled: e.target.selected }));
   $("#tunnelEnabled").addEventListener("change", (e) => postRemote({ tunnel: e.target.selected }));
   $("#remoteUrl").addEventListener("change", (e) => postRemote({ remote_url: e.target.value }));
+  $("#keepAwake").addEventListener("change", (e) => postRemote({ keep_awake: e.target.selected }));
   $("#pairCopy").addEventListener("click", async () => {
     const p = $("#pairQr").dataset.pairing;
     if (!p) return;

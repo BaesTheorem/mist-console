@@ -169,6 +169,12 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
           <input id="remoteUrl" type="url" placeholder="https://mist.tailnet-name.ts.net:5014" spellcheck="false" autocapitalize="off" autocomplete="off">
         </div>
         <div class="qa-note">A Tailscale MagicDNS name, or anything else that reaches this Mac from anywhere. Sturdier than the quick tunnel; needs Tailscale on both devices.</div>
+        <div class="remote-sub">while the mac is reachable</div>
+        <div class="qa-row">
+          <label class="qa-toggle"><md-switch id="keepAwake"></md-switch> keep the display awake on power</label>
+          <span class="remote-state" id="awakeState"></span>
+        </div>
+        <div class="qa-note">This Mac drops its Wi-Fi when the display sleeps, which takes the phone's path and the tunnel with it. On power, the Console holds the display awake while remote access is on; on battery it never does.</div>
         <div id="remoteDiscovery" class="qa-note"></div>
         <button id="phoneNative" class="qa-link shell-only" type="button">phone settings (server list, re-pair)</button>
       </div>
