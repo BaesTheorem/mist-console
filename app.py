@@ -1575,6 +1575,15 @@ def stream(sid):
         return jsonify({"error": "no session"}), 404
 
     s.ensure_imported()                     # lazily convert an imported session
+    # A reconnecting client (sleep/wake, a network hop, the phone coming back
+    # from the background) says where it left off; if that point is still in
+    # the in-memory history, only what it missed is sent and the page keeps
+    # its transcript instead of wiping and re-rendering it.
+    after = request.headers.get("Last-Event-ID") or request.args.get("after")
+    try:
+        after = int(after) if after is not None else None
+    except ValueError:
+        after = None
 
     def gen():
         # Subscribe FIRST, then snapshot: anything broadcast while the (network-
@@ -1585,7 +1594,16 @@ def stream(sid):
         q = s.subscribe()
         try:
             last_seq = 0
-            for i, ev in enumerate(s.snapshot_history()):     # replay full transcript
+            history = s.snapshot_history()
+            if after is not None and after > 0:
+                seqs = [ev.get("seq") for ev in history if isinstance(ev.get("seq"), int)]
+                # Resumable only if the client's last event is still inside the
+                # buffer (or the buffer is empty past it); otherwise full replay.
+                if seqs and seqs[0] <= after + 1:
+                    history = [ev for ev in history if not (isinstance(ev.get("seq"), int) and ev["seq"] <= after)]
+                    last_seq = after
+                    yield _sse({"type": "resumed", "after": after, "missed": len(history)})
+            for i, ev in enumerate(history):     # replay (full, or only what was missed)
                 sq = ev.get("seq")
                 if isinstance(sq, int) and sq > last_seq:
                     last_seq = sq
@@ -2422,7 +2440,11 @@ def watchers_delete():
 
 
 def _sse(obj):
-    return "data: " + json.dumps(obj) + "\n\n"
+    # Events carry their seq as the SSE id, so a browser that reconnects sends
+    # Last-Event-ID and the stream can resume instead of replaying everything.
+    sq = obj.get("seq") if isinstance(obj, dict) else None
+    head = f"id: {sq}\n" if isinstance(sq, int) else ""
+    return head + "data: " + json.dumps(obj) + "\n\n"
 
 
 def _import_existing():

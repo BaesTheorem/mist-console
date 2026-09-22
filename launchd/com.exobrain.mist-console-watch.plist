@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.exobrain.mist-console-watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/alexhedtke/Documents/mist-console/bin/console-watch</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>StandardOutPath</key><string>/Users/alexhedtke/Library/Logs/exobrain/mist-console-watch.log</string>
+  <key>StandardErrorPath</key><string>/Users/alexhedtke/Library/Logs/exobrain/mist-console-watch.log</string>
+</dict>
+</plist>

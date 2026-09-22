@@ -1,0 +1,18 @@
+#!/bin/bash
+# Keep the MIST Console up: if nothing answers on its port, open the app.
+# Run by launchd every minute (launchd/com.exobrain.mist-console-watch.plist),
+# so the Console comes back after a crash, a quit, or a login, and the phone
+# can reach the Mac whenever the Mac is on. `open -a` goes through
+# LaunchServices, so the app keeps its own TCC grants (a direct spawn from
+# launchd would not).
+if curl -s -m 3 -o /dev/null "http://127.0.0.1:5014/remote/ping"; then
+  exit 0
+fi
+# The restart script owns the window for a few seconds after it fires; give it room.
+guard=/tmp/mist-console-restart.last
+if [ -f "$guard" ] && [ -n "$(find "$guard" -mmin -2 2>/dev/null)" ]; then
+  exit 0
+fi
+pgrep -x "MIST Console" >/dev/null 2>&1 && exit 0   # starting up, not dead
+logger -t mist-console-watch "Console not answering on :5014; opening it"
+open -a "MIST Console"

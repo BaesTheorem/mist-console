@@ -37,6 +37,13 @@ final class ConsoleLink: ObservableObject {
     weak var cache: ChatCache?
 
     private var inFlight = false
+    /// The address that worked last time, tried alone first: on a warm start
+    /// that is one round trip, not a race with a timeout in it.
+    private var lastGood: URL? {
+        get { UserDefaults.standard.string(forKey: "lastGoodBase").flatMap(URL.init(string:)) }
+        set { UserDefaults.standard.set(newValue?.absoluteString, forKey: "lastGoodBase") }
+    }
+    private static func isTunnel(_ u: URL) -> Bool { (u.host ?? "").hasSuffix("trycloudflare.com") }
     private var streamDown = false
     private var streamTimer: Timer?
     private var retryTimer: Timer?
@@ -119,11 +126,25 @@ final class ConsoleLink: ObservableObject {
         retryTimer?.invalidate()
 
         let wasConnectedTo: URL? = (state == .connected) ? base : nil
-        state = .probing
+        // Already on the page and just re-checking (foreground, a path change):
+        // stay connected and look quietly. The overlay is for a real outage.
+        let quiet = wasConnectedTo != nil && !force
+        if !quiet { state = .probing }
 
+        // Fast path: the address that worked last time, alone, short timeout.
+        var picked: URL? = nil
+        var results: [String: Bool] = [:]
+        if let last = wasConnectedTo ?? lastGood, await Probe.ping(last, timeout: 1.5) {
+            picked = last
+            results[last.absoluteString] = true
+        }
         // Round one: what the phone remembers, then the discovery document.
         let candidates = pairing.urls.compactMap { URL(string: $0) }
-        var (picked, results) = await Probe.pick(candidates)
+        if picked == nil {
+            let (p1, r1) = await Probe.pick(candidates)
+            picked = p1
+            results = r1
+        }
         if picked == nil, let d = pairing.discovery, let du = URL(string: d) {
             let extra = await Probe.discover(du).filter { !pairing.urls.contains($0) }
             if !extra.isEmpty {
@@ -142,19 +163,27 @@ final class ConsoleLink: ObservableObject {
         }
 
         // Round two: the Mac's own current list, LAN first. A better address
-        // that answers replaces the one round one found.
+        // that answers replaces the one round one found. On a quiet re-check
+        // only a direct address replacing the tunnel is worth a reload.
         if let cfg = await Probe.config(url, token: pairing.token) {
             store.merge(urls: cfg.urls, discovery: cfg.discovery)
             let fresh = cfg.urls.compactMap { URL(string: $0) }
             let (better, r3) = await Probe.pick(fresh)
             results.merge(r3) { $1 }
-            if let better { url = better }
+            if let better, better != url {
+                if !quiet || (Self.isTunnel(url) && !Self.isTunnel(better)) { url = better }
+            }
         }
         lastResults = results
         lastProbeAt = Date()
 
+        if quiet, wasConnectedTo == url {
+            lastGood = url
+            return   // nothing to do: same address, still answering
+        }
         switch await Probe.login(url, token: pairing.token) {
         case .ok:
+            lastGood = url
             if !force, wasConnectedTo == url {
                 state = .connected   // same page, same address: leave it alone
             } else {

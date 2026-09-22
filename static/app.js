@@ -649,31 +649,44 @@ class Session {
     this.es = new EventSource("/stream/" + this.id);
     this._openCount = 0;
     this.es.onopen = () => {
-      if (this._openCount++) {
-        // EventSource auto-reconnected (sleep/wake, server hiccup). The backend
-        // replays the FULL history on every connection, so wipe the transcript
-        // and re-enter replay mode — otherwise the whole conversation renders a
-        // second time and replayed permission/task events act like live ones.
-        this.logEl.innerHTML = "";
-        this.current = null; this.blocks = {}; this.toolInputs = {};
-        this.unansweredUsers = []; this.splitPending = false;
-        this.spinnerEl = null;               // it lived inside logEl; gone now
-        this.bgTasks.clear();
-        this.progressBars.clear();   // their elements went with the wiped log
-        this.agentModels.clear();    // ditto; entries repopulate from the replay
-        if (this.permCards) this.permCards.clear();
-        this._replaying = true;
-      }
+      // EventSource auto-reconnected (sleep/wake, a network hop, the phone back
+      // from the background). The browser sent Last-Event-ID, so the server
+      // either resumes (first event "resumed": keep the transcript, the missed
+      // events follow as live ones) or replays everything (wipe first). The
+      // decision waits for that first event.
+      if (this._openCount++) this._pendingReconnect = true;
       // a successful (re)connect clears the sticky "disconnected" badge
       if (this.statusState === "error" && this.statusLabel === "disconnected")
         this.setStatus("idle", "idle");
       if (this.active) shellStream("up");
     };
-    this.es.onmessage = (m) => { try { this.onEvent(JSON.parse(m.data)); } catch (_) {} };
+    this.es.onmessage = (m) => {
+      let ev;
+      try { ev = JSON.parse(m.data); } catch (_) { return; }
+      if (this._pendingReconnect) {
+        this._pendingReconnect = false;
+        if (ev.type === "resumed") return;   // nothing lost; what was missed streams in next
+        this.wipeForReplay();
+      }
+      try { this.onEvent(ev); } catch (_) {}
+    };
     this.es.onerror = () => {
       this.setStatus("error", "disconnected");
       if (this.active) shellStream("down");   // the shell may need to move to another address
     };
+  }
+  // The transcript is about to be replayed in full: clear everything that
+  // lived in the log (a replayed permission/task event must not act as live).
+  wipeForReplay() {
+    this.logEl.innerHTML = "";
+    this.current = null; this.blocks = {}; this.toolInputs = {};
+    this.unansweredUsers = []; this.splitPending = false;
+    this.spinnerEl = null;               // it lived inside logEl; gone now
+    this.bgTasks.clear();
+    this.progressBars.clear();   // their elements went with the wiped log
+    this.agentModels.clear();    // ditto; entries repopulate from the replay
+    if (this.permCards) this.permCards.clear();
+    this._replaying = true;
   }
   // Drop the stream and replay the transcript from scratch. Used after a rewind
   // changed what is on disk; the same wipe an auto-reconnect does.

@@ -23,8 +23,9 @@ enum Probe {
     }()
 
     /// GET /remote/ping: is a MIST Console answering at this base?
-    static func ping(_ base: URL) async -> Bool {
-        let req = URLRequest(url: base.appending(path: "remote/ping"))
+    static func ping(_ base: URL, timeout: TimeInterval = 4) async -> Bool {
+        var req = URLRequest(url: base.appending(path: "remote/ping"))
+        req.timeoutInterval = timeout
         guard let (data, resp) = try? await session.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
