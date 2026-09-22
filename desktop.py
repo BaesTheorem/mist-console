@@ -50,6 +50,28 @@ _window_closed = False
 _quick_window = None
 _quiet_launch = False   # True when summoned via hotkey with the console hidden
 
+# The Flask server (and every chat's stream, and the tunnel's origin) lives in
+# this GUI process. Behind the lock screen or under another window, macOS would
+# App Nap it: timers coalesce, I/O gets deprioritised, and the phone's
+# requests stall until the Mac is "woken". Holding an activity opts the whole
+# process out. The token must stay referenced or the activity ends.
+_no_nap = None
+
+
+def _disable_app_nap():
+    global _no_nap
+    try:
+        from Foundation import NSProcessInfo
+        # NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical
+        opts = 0x00FFFFFF & ~(1 << 20) | 0xFF00000000
+        _no_nap = NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
+            opts, "MIST Console serves chats to the phone")
+    except Exception:
+        _no_nap = None
+
+
+_disable_app_nap()
+
 
 def _activate():
     try:

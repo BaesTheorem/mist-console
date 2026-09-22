@@ -95,7 +95,7 @@ def _load():
             _cfg.setdefault("enabled", False)
             _cfg.setdefault("tunnel", False)
             _cfg.setdefault("remote_url", "")
-            _cfg.setdefault("keep_awake", True)
+            _cfg.setdefault("keep_awake", False)
             dirty = False
             if not _cfg.get("token"):
                 _cfg["token"] = secrets.token_urlsafe(32)
@@ -438,12 +438,11 @@ def _supervise():
         time.sleep(5)
 
 
-# ---- keep the Mac reachable: no display sleep while remote access is on ----
-# Measured 2026-09-22: with system sleep already disabled, the display going
-# off still dropped this Mac's Wi-Fi (airportd rejoined on the display-on
-# trigger), which took the phone's direct path AND the tunnel down until the
-# Mac was woken. A display-sleep assertion (caffeinate -d -i) keeps the radio
-# up. Held only on AC power: on battery the Mac keeps its own schedule.
+# ---- optional: no display sleep while remote access is on ----
+# Off by default. The 2026-09-22 drop with the display off turned out NOT to
+# be the radio (the log shows the association held; the DHCP line was a lease
+# renewal), so the display need not stay lit. The switch stays for a network
+# that does behave that way. Held only on AC power.
 _awake = {"proc": None, "on_ac": None, "checked": 0}
 
 

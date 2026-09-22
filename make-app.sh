@@ -84,6 +84,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>CFBundleName</key><string>MIST Console</string>
   <key>CFBundleDisplayName</key><string>MIST Console</string>
   <key>CFBundleIdentifier</key><string>com.exobrain.mist-console</string>
+  <key>NSAppSleepDisabled</key><true/>
   <key>CFBundleVersion</key><string>1.0</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>

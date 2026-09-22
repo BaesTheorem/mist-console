@@ -174,7 +174,7 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
           <label class="qa-toggle"><md-switch id="keepAwake"></md-switch> keep the display awake on power</label>
           <span class="remote-state" id="awakeState"></span>
         </div>
-        <div class="qa-note">This Mac drops its Wi-Fi when the display sleeps, which takes the phone's path and the tunnel with it. On power, the Console holds the display awake while remote access is on; on battery it never does.</div>
+        <div class="qa-note">Off by default: the Mac keeps its Wi-Fi with the display asleep. Turn it on only if a network drops the Mac when the screen goes dark. Held on power only, never on battery.</div>
         <div id="remoteDiscovery" class="qa-note"></div>
         <button id="phoneNative" class="qa-link shell-only" type="button">phone settings (server list, re-pair)</button>
       </div>
