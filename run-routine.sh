@@ -56,7 +56,7 @@ MODEL_ARGS=()
 # that runs on Opus. The retry-with-backoff path could never fix this: waiting
 # 30 seconds does not refill a credit balance.
 FALLBACK_MODEL="$(awk 'BEGIN{fm=0} /^---[[:space:]]*$/{fm++; next} fm==1 && /^fallback_model:/{sub(/^fallback_model:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$SK")"
-FALLBACK_MODEL="${FALLBACK_MODEL:-${ROUTINE_FALLBACK_MODEL:-claude-opus-5}}"
+FALLBACK_MODEL="${FALLBACK_MODEL:-${ROUTINE_FALLBACK_MODEL:-claude-opus-5-5[1m]}}"
 [ "$FALLBACK_MODEL" = "none" ] && FALLBACK_MODEL=""
 
 # Connector preflight, prepended to every routine.
