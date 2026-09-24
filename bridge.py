@@ -6,6 +6,7 @@ persistence so conversations survive reloads, tab switches, and app restarts.
 A session can be DORMANT (loaded from disk, transcript visible, no process) and
 starts its claude process lazily on the first send.
 """
+import collections
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ import time
 import urllib.error
 import urllib.request
 
+import archive
 import embeds
 import v4first
 
@@ -162,29 +164,53 @@ CTX_HARD_PCT = 80
 IDLE_REAP_SEC = int(os.environ.get("MIST_CONSOLE_IDLE_REAP_SEC", "900"))
 
 
-def _tail_lines(path, max_lines):
-    """Return the last `max_lines` lines of a (possibly huge) jsonl without reading
-    the whole file. Seeks backward from EOF in 1 MiB blocks until enough newlines
-    are collected. A single conversation's jsonl can be hundreds of MB; reading it
-    end-to-end just to keep the last HISTORY_CAP events is what made cold start
-    take ~10s+ (worse after a reboot). This bounds the read to roughly the tail
-    we actually keep."""
-    max_lines = max(1, max_lines)
-    block = 1 << 20  # 1 MiB
-    chunks = []      # collected newest-first, joined once (prepending in a loop is O(n^2))
-    newlines = 0
-    with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        pos = f.tell()
-        while pos > 0 and newlines <= max_lines:
-            step = min(block, pos)
-            pos -= step
-            f.seek(pos)
-            chunk = f.read(step)
-            chunks.append(chunk)
-            newlines += chunk.count(b"\n")
-    data = b"".join(reversed(chunks))
-    return data.decode("utf-8", "replace").splitlines()[-max_lines:]
+def _iter_jsonl(path):
+    """Yield the parsed events of a Console jsonl in order, one line at a time.
+    A truncated or corrupt line is skipped, the rest are kept."""
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except Exception:  # noqa: S110, BLE001 -- a corrupt line is skipped, the rest are kept
+                pass
+
+
+def fold_history(events, cap=None):
+    """Bound a chat's in-memory replay window without losing its beginning.
+
+    The newest `cap` (default HISTORY_CAP) raw events stay exactly as recorded,
+    deltas and all, so a live turn keeps streaming and rewind anchors are exact.
+    Everything older goes through archive.Condenser: each assistant message
+    becomes one `mist_msg` event and the stream deltas, hook ticks and tool
+    sidecars that make up ~97% of a chat's lines are dropped. The raw tail is
+    then cut back to the first `user_text` inside it so the seam falls on a turn
+    boundary rather than mid-message (a single turn longer than `cap` events
+    keeps a mid-message seam, which the renderer already tolerates). Under
+    `cap` events the input comes back unchanged.
+
+    WHY: the old window was the last HISTORY_CAP raw events, full stop. The
+    FRI work trial chat had 38,893 events for 9 user turns, so the replay
+    began three turns from the end and the rail showed a chat with no start.
+    138 chats in data/ were over the cap."""
+    cap = HISTORY_CAP if cap is None else cap
+    tail = collections.deque()
+    cond = None
+    for obj in events:
+        if len(tail) >= cap:
+            if cond is None:
+                cond = archive.Condenser()
+            cond.feed(tail.popleft())
+        tail.append(obj)
+    if cond is None:
+        return list(tail)
+    first_user = next((i for i, o in enumerate(tail) if o.get("type") == "user_text"), None)
+    if first_user:
+        for _ in range(first_user):
+            cond.feed(tail.popleft())
+    return cond.finish() + list(tail)
 
 # Live rate-limit store, refreshed from each Console turn's rate_limit_event.
 # WHY: the usage badges' % comes from ~/.claude/usage-cache.json, which only the
@@ -556,19 +582,16 @@ class ClaudeSession:
             if not self._jsonl or not os.path.exists(self._jsonl):
                 return
             try:
-                loaded = []
-                for line in _tail_lines(self._jsonl, HISTORY_CAP):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        loaded.append(json.loads(line))
-                    except Exception:
-                        pass  # skip a truncated/corrupt line, keep the rest
+                # One streaming pass over the jsonl (a chat can be hundreds of
+                # MB, so it is never read into memory whole): the newest
+                # HISTORY_CAP events stay raw, everything older is condensed on
+                # the way through (see fold_history), so the replay still
+                # starts at the first message. This is lazy, per chat, on first
+                # open; cold start never touches it.
+                loaded = fold_history(_iter_jsonl(self._jsonl))
                 # Anything recorded while we were reading the file is NEWER than
                 # every line in it — it belongs after the loaded tail.
                 self.history = loaded + self.history
-                self.history = self.history[-HISTORY_CAP:]
                 # keep the event stamp monotonic across dormancy (stream() dedup
                 # compares live queue stamps against replayed history stamps)
                 for obj in self.history:
@@ -580,7 +603,7 @@ class ClaudeSession:
                     if obj.get("type") == "context":
                         self.context_pct = obj.get("pct")
                         break
-            except Exception:
+            except Exception:  # noqa: S110, BLE001 -- best effort: an unreadable jsonl opens empty rather than failing the page
                 pass
 
     def _record(self, obj):
@@ -591,7 +614,10 @@ class ClaudeSession:
         with self._hist_lock:
             self.history.append(obj)
             if len(self.history) > HISTORY_CAP:
-                self.history = self.history[-HISTORY_CAP:]
+                # Condense the older half rather than drop it, so a page that
+                # reconnects to a long live session still replays from the top.
+                # Runs once per HISTORY_CAP/2 new events; milliseconds.
+                self.history = fold_history(self.history, HISTORY_CAP // 2)
             # The file append stays under the lock too: a large event is many
             # write() syscalls, and two threads appending concurrently interleave
             # them — both lines land mangled and replay silently skips them.
