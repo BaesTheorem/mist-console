@@ -89,6 +89,10 @@ function esc(s) {
    Local absolute paths (and ~ / file://) route through the backend /file
    server so the WebView can fetch them; http(s) passes through. Anything
    else returns null so the markdown is left as plain text. */
+/* Timestamp (epoch seconds) of the bubble being rendered, set by md(); /file
+   uses it to serve the snapshot of the file taken for that message, so a path
+   overwritten in a later turn does not rewrite earlier bubbles (embeds.py). */
+let EMBED_AT = 0;
 function imgSrc(p) {
   p = String(p).trim();
   // The markdown pass runs esc() BEFORE the image pass, so a path reaching here
@@ -98,7 +102,9 @@ function imgSrc(p) {
        .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
   if (/^https?:\/\//i.test(p)) return p;
   if (p.startsWith("file://")) p = decodeURIComponent(p.slice(7));
-  if (p.startsWith("~") || p.startsWith("/")) return "/file?path=" + encodeURIComponent(p);
+  if (p.startsWith("~") || p.startsWith("/")) {
+    return "/file?path=" + encodeURIComponent(p) + (EMBED_AT ? "&at=" + EMBED_AT : "");
+  }
   return null;
 }
 /* Display name for an attachment card: entity-undo (same as imgSrc), strip
@@ -323,7 +329,12 @@ function extractTables(src, sink) {
   }
   return out.join("\n");
 }
-function md(src) {
+function md(src, at) {
+  const prev = EMBED_AT;
+  EMBED_AT = at ? Number(at) : 0;
+  try { return _md(src); } finally { EMBED_AT = prev; }
+}
+function _md(src) {
   const fences = [];
   src = src.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     let html = null;
@@ -1592,7 +1603,7 @@ class Session {
         // and the final summary lands last instead of buried up top.
         const te = el("div", "md");
         this.current.body.appendChild(te);
-        this.blocks[idx] = { type: "text", el: te, text: "" };
+        this.blocks[idx] = { type: "text", el: te, text: "", ts: ev.ts };
       } else if (cb.type === "tool_use") {
         this.blocks[idx] = this.makeToolCard(cb.name);
         this.toolInputs[idx] = "";
@@ -1610,7 +1621,7 @@ class Session {
         if (!b._mdTimer) {
           b._mdTimer = setTimeout(() => {
             b._mdTimer = null;
-            b.el.innerHTML = md(b.text) + '<span class="cursor">&nbsp;</span>';
+            b.el.innerHTML = md(b.text, b.ts) + '<span class="cursor">&nbsp;</span>';
             b.el._mdsrc = b.text;
             this.scroll();
           }, 150);
@@ -1623,7 +1634,7 @@ class Session {
       const b = this.blocks[e.index];
       if (b && b.type === "text") {
         if (b._mdTimer) { clearTimeout(b._mdTimer); b._mdTimer = null; }
-        b.el.innerHTML = md(b.text || ""); b.el._mdsrc = b.text || "";
+        b.el.innerHTML = md(b.text || "", b.ts); b.el._mdsrc = b.text || "";
       } else if (b && b.type === "thinking" && !b.el.textContent.trim()) {
         // Thinking arrived with empty text (display "omitted" — the model
         // default before we opted into "summarized", still replayed from old
@@ -1640,7 +1651,7 @@ class Session {
     const body = this.addMsg("mist", "MIST", tsMs(ts), this.takeAnchor());
     blocks.forEach((b) => {
       if (b.kind === "text") {
-        const tdiv = el("div", "md", md(b.text));
+        const tdiv = el("div", "md", md(b.text, ts));
         tdiv._mdsrc = b.text || "";   // raw source for "copy message", kept off the DOM
         body.appendChild(tdiv);
       } else if (b.kind === "thinking") {
@@ -1698,7 +1709,7 @@ class Session {
             // Interjected mid-paragraph: freeze the text written so far in place
             // (it stays above the message), then continue this same text block in a
             // fresh bubble below the message with a clean buffer.
-            live.el.innerHTML = md(live.text || "");
+            live.el.innerHTML = md(live.text || "", live.ts);
             live.el._mdsrc = live.text || "";
             this.current = { body: this.addMsg("mist", "MIST", tsMs(o.ts)) };
             const te = el("div", "md");
@@ -4348,8 +4359,10 @@ function openExternal(href) {
 // backend re-validates the path against its allowlist.
 async function saveToDownloads(src, btn) {
   if (!src) return;
-  const path = new URLSearchParams(src.slice(src.indexOf("?") + 1)).get("path");
+  const qs = new URLSearchParams(src.slice(src.indexOf("?") + 1));
+  const path = qs.get("path");
   if (!path) return;
+  const at = Number(qs.get("at")) || undefined;
   const isText = btn && btn.classList.contains("lightbox-btn");
   const orig = isText && btn ? btn.textContent : "";
   let ok = false;
@@ -4357,7 +4370,7 @@ async function saveToDownloads(src, btn) {
     const r = await fetch("/save-to-downloads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ path, at }),
     });
     ok = r.ok;
   } catch (_) { ok = false; }

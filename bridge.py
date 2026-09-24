@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 
+import embeds
 import v4first
 
 HARNESS = "/Users/alexhedtke/Documents/Exobrain harness"
@@ -568,6 +569,9 @@ class ClaudeSession:
 
     def _record(self, obj):
         obj = _slim_event(obj)
+        # Media a reply embeds is copied aside now, so the bubble keeps showing
+        # this version even if the file is overwritten later (see embeds.py).
+        embeds.snapshot_event(obj)
         with self._hist_lock:
             self.history.append(obj)
             if len(self.history) > HISTORY_CAP:

@@ -26,6 +26,7 @@ import time
 from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory
 
 import archive
+import embeds
 import quickaccess
 import remote
 import search as chat_search
@@ -575,38 +576,12 @@ def index():
 
 # Serve a local media file inline so generated images (mist-image -> ~/Downloads)
 # and generated songs (mist-music -> tmp/audio) can render/play in the chat.
-# Locked to known media extensions under a small allowlist of roots so a stray
-# ?path= can't read arbitrary files. ?download=1 forces a save.
-_IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
-_VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm"}
-_MEDIA_EXTS = _IMG_EXTS | _AUDIO_EXTS | _VIDEO_EXTS
-# Types the WebView may render in the app's origin. Everything else is served
-# Content-Disposition: attachment, so a stray .html/.svg under an allowlisted
-# root can never execute same-origin.
-_INLINE_EXTS = _MEDIA_EXTS | {".pdf"}
-# Never serve these even under an allowlisted root; the harness .env lives in
-# one of the roots and localhost is reachable cross-origin from a browser.
-_SECRET_EXTS = {".env", ".pem", ".key", ".p12", ".keychain"}
-_IMG_ROOTS = [os.path.realpath(os.path.expanduser(p)) for p in (
-    "~/Downloads", "~/Exobrain/Attachments", "~/Documents/Exobrain harness")]
-
-
-def _safe_image_path(raw):
-    """Resolve `raw` to a servable file under the allowlist, or None. Any
-    extension is allowed (the chat embeds arbitrary files as download cards),
-    but hidden files/dirs and credential-shaped extensions stay unreachable,
-    and only _INLINE_EXTS render in the page (see /file)."""
-    path = os.path.realpath(os.path.expanduser(raw or ""))
-    for root in _IMG_ROOTS:
-        if path == root or path.startswith(root + os.sep):
-            rel = path[len(root):]
-            if any(part.startswith(".") for part in rel.split(os.sep) if part):
-                return None
-            if os.path.splitext(path)[1].lower() in _SECRET_EXTS:
-                return None
-            return path if os.path.isfile(path) else None
-    return None
+# The allowlist of roots, the extension sets and the per-message snapshots that
+# keep an overwritten file from rewriting older bubbles live in embeds.py.
+_IMG_EXTS = embeds.IMG_EXTS
+_MEDIA_EXTS = embeds.MEDIA_EXTS
+_INLINE_EXTS = embeds.INLINE_EXTS
+_safe_image_path = embeds.safe_path
 
 
 # Pasted/dropped images from the composer land here. tmp/images under the harness
@@ -698,16 +673,30 @@ def _save_pasted_image(data_url):
     return path
 
 
+def _versioned_path(raw, at):
+    """The file to serve for `raw` as embedded in a bubble stamped `at`: the
+    snapshot taken for that message when there is one, else the live file.
+    Returns (path_to_send, display_name) or (None, None)."""
+    if not embeds.safe_path(raw, must_exist=False):
+        return None, None
+    snap = embeds.resolve(raw, at)
+    if snap:
+        return snap, os.path.basename(embeds.realpath(raw))
+    live = _safe_image_path(raw)
+    return (live, os.path.basename(live)) if live else (None, None)
+
+
 @app.route("/file")
 def serve_local_file():
-    path = _safe_image_path(request.args.get("path", ""))
-    if not path:
-        abort(404)
-    inline_ok = os.path.splitext(path)[1].lower() in _INLINE_EXTS
+    path, name = _versioned_path(request.args.get("path", ""),
+                                 request.args.get("at", type=float))
+    if not path or not name:
+        return abort(404)
+    inline_ok = os.path.splitext(name)[1].lower() in _INLINE_EXTS
     # conditional=True enables Range requests, which <video> needs to seek.
     return send_file(path,
                      as_attachment=(request.args.get("download") == "1" or not inline_ok),
-                     download_name=os.path.basename(path),
+                     download_name=name,
                      conditional=True)
 
 
@@ -715,12 +704,15 @@ def serve_local_file():
 def save_to_downloads():
     # Copy a gallery image into ~/Downloads (deduping the name) so Alex can save
     # a keeper in one click without a browser round-trip. Same allowlist as /file.
-    path = _safe_image_path((request.get_json(silent=True) or {}).get("path", ""))
-    if not path:
-        abort(404)
+    body = request.get_json(silent=True) or {}
+    at = body.get("at")
+    path, name = _versioned_path(body.get("path", ""),
+                                 float(at) if isinstance(at, (int, float)) else None)
+    if not path or not name:
+        return abort(404)
     downloads = os.path.expanduser("~/Downloads")
     os.makedirs(downloads, exist_ok=True)
-    stem, ext = os.path.splitext(os.path.basename(path))
+    stem, ext = os.path.splitext(name)
     dest = os.path.join(downloads, stem + ext)
     i = 1
     while os.path.exists(dest):

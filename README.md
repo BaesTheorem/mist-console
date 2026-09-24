@@ -211,6 +211,22 @@ caller's main executable against its bundle record, and the Console's
 script→python launch chain can never pass (UNErrorDomain Code=1). Details and
 the other macOS 26 landmines live in the harness `mist-notifier/README.md`.
 
+## Inline media (versioned embeds)
+
+A reply embeds a local file as `![alt](/abs/path.png)`; the page loads it through
+`GET /file?path=...` (allowlisted roots and extension rules in `embeds.py`).
+Because that lookup happens when the bubble renders, a file overwritten in a
+later turn (the same image edited five times, always saved to one name) used to
+rewrite every earlier bubble and lightbox on reload, and the phone always loads
+fresh. So `bridge._record` snapshots every media file an assistant message
+embeds into `data/embeds/<sha1[:12]>-<name>` (content-addressed, so an
+unchanged file is stored once) and appends `{path, ts, snap}` to
+`data/embeds/index.jsonl`. Each text block renders with `md(text, ts)` and the
+image URL carries that stamp (`&at=<ts>`); `/file` and `/save-to-downloads`
+serve the first snapshot taken at or after it, which is the one made for that
+message, and fall back to the live file when there is none (chats older than
+this, files over 64 MB).
+
 ## Share links (public read-only snapshots)
 
 The **share** button in the top bar emulates claude.ai's "share chat": it
