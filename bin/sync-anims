@@ -1,0 +1,9 @@
+#!/bin/sh
+# Copy the 96 px WebP pack from mist-anims into static/anims (gitignored; see static/anims/README.md).
+set -e
+SRC="${1:-$HOME/Documents/mist-anims/dist/webp96}"
+DST="$(cd "$(dirname "$0")/.." && pwd)/static/anims"
+[ -f "$SRC/meta.json" ] || { echo "no pack at $SRC (run: cd ~/Documents/mist-anims && node render.mjs --pack --webp-only --size=96)" >&2; exit 1; }
+mkdir -p "$DST"
+rsync -a --delete --exclude README.md "$SRC/" "$DST/"
+echo "synced $(find "$DST" -name '*.webp' | wc -l | tr -d ' ') clips into $DST"

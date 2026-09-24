@@ -229,6 +229,16 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab .dot.thinking { background: var(--violet); animation: dot-breathe 1.15s ease-in-out infinite; }
 .tab .dot.working { background: var(--teal); animation: dot-breathe 1.15s ease-in-out infinite; }
 .tab .dot.error { background: var(--err); }
+/* MIST's crystal (static/anims, optional): the header mark, the spinner glyph and the
+   markers of LIVE chats are animated WebPs; idle chats keep the flat rhombus above.
+   The <img> is drawn larger than its box so the crystal itself matches the rhombus. */
+.tab .dot { width: 16px; height: 16px; flex-basis: 16px; clip-path: polygon(50% 8%, 75% 50%, 50% 92%, 25% 50%); }
+.tab .dot.live, #phoneStatus .ps-dot.live { clip-path: none; background: none !important; animation: none !important; overflow: visible; }
+.tab .dot.live img, #phoneStatus .ps-dot.live img { width: 26px; height: 26px; margin: -5px; display: block; }
+.crystal-hdr { width: 36px; height: 36px; display: block; margin: -6px 0; }
+.spinner .crystal-sp { width: 28px; height: 28px; display: block; margin: -7px -4px; }
+.crystalrow { display: flex; align-items: center; gap: 6px; }
+.crystalrow img { width: 22px; height: 22px; margin: -4px 0; }
 @keyframes dot-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 .tab .ttitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab .trename { flex: 1; min-width: 0; background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--teal);

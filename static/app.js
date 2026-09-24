@@ -550,6 +550,104 @@ const PIN_ICON = '<svg class="pin-ico" viewBox="0 0 24 24" aria-hidden="true"><p
    above all. The rail's status markers get the same silhouette from CSS
    (clip-path), where a background-color already carried the state. */
 const MIST_MARK = '<svg class="mist-ico" viewBox="0 0 12 22" aria-hidden="true"><path d="M6 0 12 11 6 22 0 11Z"/></svg>';
+
+/* ---------- MIST's crystal ----------
+   The animated crystal (the mist-anims pack, served from static/anims/<look>/<anim>.webp,
+   see static/anims/README.md) stands in for the flat rhombus wherever the Console shows
+   MIST herself. The header mark reflects the ACTIVE chat: what it is doing (thinking,
+   running tools, waiting on a permission card, erroring), what you are doing (typing,
+   playing one of her audio replies), and how her last reply felt, read off the kaomoji
+   every reply opens with. The spinner glyph and the rail markers reflect each chat's own
+   state. The pack is optional: when the files are missing everything keeps the old marks. */
+const CRYSTAL_LOOKS = { classic: "Classic", midnight: "Midnight", prism: "Prism", frost: "Frost", ember: "Ember", gold: "Gold", holo: "Hologram" };
+const CRYSTAL_ONESHOT_MS = { appear: 1700 };
+const EMOTION_HOLD_MS = 10000, TYPING_HOLD_MS = 2500, SLEEP_AFTER_MS = 10 * 60 * 1000;
+// kaomoji -> animation, from the faces MIST's persona uses (CLAUDE.md, Tone)
+const KAOMOJI = [
+  ["happy", ["(◠▽◠)", "(ˆωˆ)", "(>‿<)", "(◠‿O)", "(ᵔwᵔ)", "(´‿`)"]],
+  ["curious", ["(o.o)", "(○ ○)", "(・_・)"]],
+  ["alert", ["(⊙o⊙)", "(´o`)"]],
+  ["confused", ["(ə_e)", "(－_－)", "(￢_￢)"]],
+  ["proud", ["(¬‿¬)", "(→_→)"]],
+  ["angry", ["(¬_¬)", "(눈_눈)", "(⇀‸↼)", "(>ᴗ<)", "(>_<)", "(`_´)", "(`Д´)", "(＃`皿´)"]],
+  ["scared", ["(ó﹏ò)", "(ó︵ò)"]],
+  ["sad", ["(´‸`)", "(◞‸◟)", "(;﹏;)", "(T▽T)", "(>×<)"]],
+  ["sleeping", ["(－ω－)", "(－o－)"]],
+];
+const crystal = { look: "classic", on: true, avail: false, header: null, cur: "",
+                  emotion: null, emotionAt: 0, typingAt: 0, audioPlaying: 0, lastActivity: Date.now() };
+try {
+  crystal.look = CRYSTAL_LOOKS[localStorage.getItem("crystalLook")] ? localStorage.getItem("crystalLook") : "classic";
+  crystal.on = localStorage.getItem("crystalAnim") !== "0";
+} catch (_) {}
+const crystalSrc = (anim, look) => "anims/" + (look || crystal.look) + "/" + anim + ".webp";
+function crystalEmotionFrom(text) {
+  const head = (text || "").trimStart().slice(0, 24);
+  for (const [anim, faces] of KAOMOJI) for (const f of faces) if (head.startsWith(f)) return anim;
+  if (/^[^\n]{0,12}[♥❤💙💜]/.test(head)) return "love";
+  return null;
+}
+// What the header crystal should be doing right now, in priority order.
+function crystalResolve() {
+  const s = sessions.get(activeId), now = Date.now();
+  if (!s) return { anim: "idle" };
+  if (s.permCards && s.permCards.size) return { anim: "alert" };
+  if (s.statusState === "error") return { anim: "error", look: "ember" };
+  if (s.statusState === "thinking") return { anim: "thinking" };
+  if (s.statusState === "working" || s.bgActiveCount() > 0) return { anim: "loading" };
+  if (crystal.audioPlaying > 0) return { anim: "speaking" };
+  if (now - crystal.typingAt < TYPING_HOLD_MS) return { anim: "listening" };
+  if (crystal.emotion && now - crystal.emotionAt < EMOTION_HOLD_MS) return { anim: crystal.emotion };
+  if (now - crystal.lastActivity > SLEEP_AFTER_MS) return { anim: "sleeping" };
+  return { anim: "idle" };
+}
+function crystalRefresh() {
+  const img = crystal.header, logo = $("#logoImg");
+  if (!img) return;
+  const show = crystal.avail && crystal.on;
+  // style, not the hidden attribute: both marks carry an author display:block that would beat it
+  img.style.display = show ? "" : "none"; if (logo) logo.style.display = show ? "none" : "";
+  if (!show || crystal._oneshotUntil > Date.now()) return;
+  const r = crystalResolve(), src = crystalSrc(r.anim, r.look);
+  if (crystal.cur !== src) { crystal.cur = src; img.src = src; img.title = "MIST · " + r.anim; }
+}
+// Play a one-shot (appear) on the header, then fall back to whatever the state says.
+function crystalOneshot(anim) {
+  const img = crystal.header;
+  if (!img || !crystal.avail || !crystal.on) return;
+  crystal.cur = crystalSrc(anim); img.src = crystal.cur; img.title = "MIST";
+  crystal._oneshotUntil = Date.now() + (CRYSTAL_ONESHOT_MS[anim] || 2000);
+  setTimeout(() => { crystal._oneshotUntil = 0; crystalRefresh(); }, CRYSTAL_ONESHOT_MS[anim] || 2000);
+}
+// A rail marker (or the phone chip's) for a chat in `state`: the flat rhombus for idle
+// chats (there can be a thousand of them), the animated crystal for the few that are live.
+function crystalDot(dot, state) {
+  const live = crystal.avail && crystal.on && (state === "thinking" || state === "working" || state === "bg" || state === "error");
+  let img = dot.querySelector("img");
+  if (!live) { if (img) img.remove(); dot.classList.remove("live"); return; }
+  const anim = state === "error" ? "error" : state === "thinking" ? "thinking" : "loading";
+  const src = crystalSrc(anim, state === "error" ? "ember" : crystal.look);
+  if (!img) { img = el("img"); img.alt = ""; img.draggable = false; dot.appendChild(img); }
+  dot.classList.add("live");   // every time: setStatus rewrites className around this call
+  if (img.getAttribute("src") !== src) img.src = src;
+}
+function crystalGlyph(state) {
+  if (!crystal.avail || !crystal.on) return MIST_MARK;
+  return '<img class="crystal-sp" alt="" draggable="false" src="' + crystalSrc(state === "working" ? "loading" : "thinking") + '">';
+}
+function setCrystalLook(look, on) {
+  if (look) crystal.look = CRYSTAL_LOOKS[look] ? look : "classic";
+  if (on != null) crystal.on = !!on;
+  try { localStorage.setItem("crystalLook", crystal.look); localStorage.setItem("crystalAnim", crystal.on ? "1" : "0"); } catch (_) {}
+  crystal.cur = ""; crystalRefresh();
+  document.querySelectorAll(".tab .dot, #phoneStatus .ps-dot").forEach((d) => {
+    const st = d.classList.contains("bg") ? "bg" : d.classList.contains("thinking") ? "thinking"
+      : d.classList.contains("working") ? "working" : d.classList.contains("error") ? "error" : "idle";
+    crystalDot(d, st);
+  });
+  document.querySelectorAll(".spinner .sv-glyph").forEach((g) => { g.innerHTML = crystalGlyph("thinking"); });
+  if (typeof renderCrystalList === "function") renderCrystalList();
+}
 /* ---------- timestamps ---------- */
 /* Every message shows the wall-clock time it was sent. ts is epoch ms; live
    messages stamp Date.now(), replayed ones use the server `ts` carried on each
@@ -750,8 +848,10 @@ class Session {
   showSpinner() {
     if (!this.spinnerEl) {
       this.spinnerEl = el("div", "spinner",
-        '<span class="sv-glyph">' + MIST_MARK + '</span> <span class="sv"></span>');
+        '<span class="sv-glyph">' + crystalGlyph(this.statusState) + '</span> <span class="sv"></span>');
     }
+    const g = this.spinnerEl.querySelector(".crystal-sp");
+    if (g) { const want = crystalSrc(this.statusState === "working" ? "loading" : "thinking"); if (g.getAttribute("src") !== want) g.src = want; }
     this.spinnerEl.querySelector(".sv").textContent =
       (SPINNER_VERBS[spinnerIdx % SPINNER_VERBS.length] || "Thinking") + "…";
     this.logEl.appendChild(this.spinnerEl);   // move to bottom
@@ -1035,7 +1135,7 @@ class Session {
       row.remove();
       fields.forEach((f) => f.freeze());
       head.appendChild(el("span", "perm-verdict", verdict));
-      if (this.permCards) this.permCards.delete(o.request_id);
+      if (this.permCards) { this.permCards.delete(o.request_id); crystalRefresh(); }
       fetch("/sessions/" + this.id + "/elicitation-response", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: o.request_id, action, content }),
@@ -1058,7 +1158,7 @@ class Session {
     row.appendChild(ok); row.appendChild(decline); row.appendChild(cancel);
     card.appendChild(row);
     (this.current && this.current.body ? this.current.body : this.logEl).appendChild(card);
-    this.permCards.set(o.request_id, card);
+    this.permCards.set(o.request_id, card); crystalRefresh();
     this.scroll();
   }
   _elicitField(name, schema, required, body) {
@@ -1133,7 +1233,7 @@ class Session {
       row.remove();
       head.appendChild(el("span", "perm-verdict",
         decision === "allow" ? (remember ? "allowed · session" : "allowed") : "denied"));
-      if (this.permCards) this.permCards.delete(o.request_id);
+      if (this.permCards) { this.permCards.delete(o.request_id); crystalRefresh(); }
       fetch("/sessions/" + this.id + "/permission-response", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: o.request_id, decision, remember: !!remember }),
@@ -1147,7 +1247,7 @@ class Session {
     row.appendChild(deny);
     card.appendChild(row);
     (this.current && this.current.body ? this.current.body : this.logEl).appendChild(card);
-    this.permCards.set(o.request_id, card);
+    this.permCards.set(o.request_id, card); crystalRefresh();
     this.scroll();
     // Focus Allow for keyboard users — but never steal focus from the composer
     // (an invisible focus move made the next Enter answer the card instead of
@@ -1183,7 +1283,7 @@ class Session {
       row.remove();
       blocks.forEach((b) => b.freeze());
       head.appendChild(el("span", "perm-verdict", verdict));
-      if (this.permCards) this.permCards.delete(o.request_id);
+      if (this.permCards) { this.permCards.delete(o.request_id); crystalRefresh(); }
       fetch("/sessions/" + this.id + "/permission-response", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(Object.assign({ request_id: o.request_id }, payload)),
@@ -1208,7 +1308,7 @@ class Session {
     row.appendChild(dismiss);
     card.appendChild(row);
     (this.current && this.current.body ? this.current.body : this.logEl).appendChild(card);
-    this.permCards.set(o.request_id, card);
+    this.permCards.set(o.request_id, card); crystalRefresh();
     this.scroll();
   }
   /* One question inside a question card. Choice questions get option buttons
@@ -1314,6 +1414,7 @@ class Session {
       }
     });
     this.permCards.clear();
+    crystalRefresh();
   }
   setStatus(state, label) {
     const busy = state === "thinking" || state === "working";
@@ -1323,6 +1424,9 @@ class Session {
     this.statusState = state;
     this.statusLabel = label || state;
     if (busy) this.showSpinner(); else this.hideSpinner();
+    // the rail rebuilds on its own 1.5 s tick; move this chat's marker now so the state reads at once
+    const d = document.querySelector('.tab[data-sid="' + this.id + '"] .dot');
+    if (d) { const bg = this.bgActiveCount() > 0; d.className = "dot " + (bg ? "working bg" : state); crystalDot(d, bg ? "bg" : state); }
     if (this.active) applyStatus(this);
   }
 
@@ -1664,6 +1768,7 @@ class Session {
       if (b && b.type === "text") {
         if (b._mdTimer) { clearTimeout(b._mdTimer); b._mdTimer = null; }
         b.el.innerHTML = md(b.text || "", b.ts); b.el._mdsrc = b.text || "";
+        if (!this._replaying) { const em = crystalEmotionFrom(b.text); if (em) this.emotion = em; }
       } else if (b && b.type === "thinking" && !b.el.textContent.trim()) {
         // Thinking arrived with empty text (display "omitted" — the model
         // default before we opted into "summarized", still replayed from old
@@ -1870,6 +1975,11 @@ class Session {
         break;
       case "result":
         this.current = null;
+        if (!this._replaying && this.emotion) {   // how the reply felt: the header crystal acts it out for a moment
+          if (this.active) { crystal.emotion = this.emotion; crystal.emotionAt = Date.now(); }
+          this.emotion = null;
+        }
+        crystal.lastActivity = Date.now();
         this.splitPending = false;   // turn over; any unanswered interjection gets its own turn
         this.clearPermCards();       // any unanswered permission cards are moot now
         clearTimeout(this._pauseNudge);
@@ -1984,6 +2094,8 @@ function applyStatus(s) {
     statusEl.dataset.state = s.statusState;
     statusEl.textContent = s.statusLabel;
   }
+  if (s.statusState === "thinking" || s.statusState === "working" || n > 0) crystal.lastActivity = Date.now();
+  crystalRefresh();
   if (typeof reflectSend === "function") reflectSend();
 }
 
@@ -2605,6 +2717,7 @@ function renderTabs() {
     });
     const bg = s.bgActiveCount();
     const dot = el("span", "dot " + (bg > 0 ? "working bg" : s.statusState));
+    crystalDot(dot, bg > 0 ? "bg" : s.statusState);
     if (bg > 0) dot.title = bg + " running in background";
     t.appendChild(dot);
     t.appendChild(el("span", "ttitle", esc(s.title)));
@@ -2767,6 +2880,7 @@ async function togglePin(id) {
   try { await fetch("/sessions/" + id + "/pin", { method: "POST" }); } catch (_) {}
 }
 function switchTo(id) {
+  crystal.emotion = null; crystal.lastActivity = Date.now();
   const s = sessions.get(id);
   if (!s) return;
   activeId = id;
@@ -3632,6 +3746,45 @@ function renderThemeList() {
 // localStorage doesn't clobber the server-persisted choice.
 applyTheme(localStorage.getItem("theme") || document.documentElement.dataset.theme || "terminal");
 renderThemeList();
+
+/* ---------- crystal look (see the crystal block near MIST_MARK) ---------- */
+function renderCrystalList() {
+  const list = $("#crystalList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!crystal.avail) { list.appendChild(el("div", "modelnote", "Animation pack not installed (static/anims/README.md).")); return; }
+  Object.entries(CRYSTAL_LOOKS).forEach(([id, label]) => {
+    const row = el("div", "modelrow crystalrow" + (id === crystal.look ? " sel" : ""),
+      '<img alt="" draggable="false" src="' + crystalSrc("idle", id) + '"> ' + esc(label));
+    row.addEventListener("click", () => setCrystalLook(id, null));
+    list.appendChild(row);
+  });
+  const tog = el("div", "modelrow" + (crystal.on ? "" : " sel"), crystal.on ? "Animated · click for the still logo" : "Still logo · click to animate");
+  tog.addEventListener("click", () => setCrystalLook(null, !crystal.on));
+  list.appendChild(tog);
+}
+(function () {
+  crystal.header = $("#crystalImg");
+  const probe = new Image();
+  probe.onload = () => {
+    crystal.avail = true;
+    renderCrystalList();
+    crystalRefresh();
+    crystalOneshot("appear");
+    setInterval(crystalRefresh, 1000);   // moods and holds expire on their own clock
+  };
+  probe.onerror = () => { crystal.avail = false; renderCrystalList(); crystalRefresh(); };
+  probe.src = crystalSrc("idle", "classic");
+  // you typing = listening; one of MIST's audio replies playing = speaking
+  const input = $("#input");
+  if (input) input.addEventListener("input", () => { crystal.typingAt = Date.now(); crystalRefresh(); });
+  const recount = () => {
+    let n = 0;
+    document.querySelectorAll("#logs audio").forEach((a) => { if (!a.paused && !a.ended) n++; });
+    crystal.audioPlaying = n; crystalRefresh();
+  };
+  for (const evn of ["play", "playing", "pause", "ended", "emptied"]) document.addEventListener(evn, (e) => { if (e.target && e.target.tagName === "AUDIO") recount(); }, true);
+})();
 
 /* ---------- font switcher ----------
    One font for ALL text everywhere. Every rule in the sheet reads var(--mono)
@@ -5581,6 +5734,7 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   if (!dot || !text || !status || !model || !ctx) return;
   const sync = () => {
     chip.dataset.state = status.dataset.state || "idle";
+    crystalDot(dot, chip.dataset.state);
     // "claude-opus-5[1m]" -> "opus-5[1m]"; "model —" / "model: default" -> nothing
     let m = (model.textContent || "").trim();
     m = /^model\b/.test(m) ? "" : m.replace(/^claude-/, "");

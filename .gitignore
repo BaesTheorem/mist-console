@@ -16,3 +16,5 @@ dist/
 # iOS app (ios/): generated project + per-machine signing
 ios/MIST.xcodeproj/
 ios/Config/Signing.xcconfig
+static/anims/*/
+static/anims/meta.json
