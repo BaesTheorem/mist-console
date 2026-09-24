@@ -248,15 +248,10 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 
 /* section headers in the rail — pinned first, then date buckets (today, yesterday, …).
    They are dividers, not rows: a tonal band one step above the rail with a
-   full-strength hairline on top, brighter and heavier text than the chat titles
-   under it, and sticky so the bucket you are scrolling through keeps its label. */
+   full-strength hairline on top and brighter, heavier text than the chat titles
+   under it. Not sticky on purpose: a stuck header in WKWebView at a fractional
+   text-size zoom left a seam above it that the scrolled rows showed through. */
 .tabsection {
-  /* Stuck 3px above the list's edge on purpose: with a fractional root zoom the
-     list's top lands between device pixels and a header pinned at exactly 0 can
-     sit a pixel or two below it, letting the row scrolling underneath show
-     through the seam. The overlap is clipped by the list, so nothing changes
-     visually except that the seam is gone. */
-  position: sticky; top: -3px; z-index: 2;
   padding: 7px 9px 6px; font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase;
   color: var(--md-sys-color-on-surface-variant);
   background: var(--md-sys-color-surface-container-highest);
