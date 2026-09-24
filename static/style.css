@@ -129,6 +129,7 @@ html[data-theme="terminal"] #logs { background: #000; }
 #status[data-state="thinking"] { color: var(--violet); border-color: var(--violet); }
 #status[data-state="working"]  { color: var(--teal);   border-color: var(--teal); }
 #status[data-state="error"]    { color: var(--err);    border-color: var(--err); }
+#status[data-state="paused"]   { color: var(--warn);   border-color: var(--warn); }
 .actions { display: flex; gap: 6px; }
 button {
   font-family: var(--mono); font-size: 12px;
@@ -1170,6 +1171,34 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   --md-filled-icon-button-pressed-icon-color: var(--md-sys-color-on-error-container);
 }
 
+/* pause (graceful: MIST finishes the tool call in flight, writes a checkpoint
+   and ends the turn) sits left of send while a turn runs; once the turn has
+   ended on a pause the same button offers resume. Hidden otherwise. */
+#pauseBtn {
+  --md-icon-button-state-layer-width: 38px;
+  --md-icon-button-state-layer-height: 38px;
+  --md-icon-button-icon-size: 22px;
+  --md-icon-button-icon-color: var(--warn);
+  --md-icon-button-hover-icon-color: var(--warn);
+  --md-icon-button-hover-state-layer-color: var(--warn);
+}
+#pauseBtn[hidden] { display: none !important; }   /* :host display beats the UA [hidden] rule */
+#pauseBtn[data-mode="pausing"] { opacity: .55; pointer-events: none; }
+#pauseBtn[data-mode="resume"] {
+  --md-icon-button-icon-color: var(--teal);
+  --md-icon-button-hover-icon-color: var(--teal);
+  --md-icon-button-hover-state-layer-color: var(--md-sys-color-primary);
+}
+/* pause / resume echo as a small control chip, not as something Alex typed */
+.msg.user.ctl .who { display: none; }
+.msg.user.ctl .body {
+  display: inline-block; background: transparent; color: var(--dim);
+  border: 1px solid var(--line); padding: 2px 10px; font-size: 12px;
+  font-family: var(--mono); letter-spacing: .3px;
+}
+.msg.user.ctl-pause .body { color: var(--warn); border-color: var(--warn); }
+.msg.user.ctl-resume .body { color: var(--teal); border-color: var(--teal); }
+
 /* ============================================================
    Material Design 3 components + Sharp icons (facelift 2026-07)
    md-* elements read --md-sys-color-* from md-tokens.css and the
@@ -1485,6 +1514,7 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
   #phoneStatus[data-state="thinking"] .ps-dot { background: var(--violet); animation: dot-breathe 1.15s ease-in-out infinite; }
   #phoneStatus[data-state="working"] .ps-dot { background: var(--teal); animation: dot-breathe 1.15s ease-in-out infinite; }
   #phoneStatus[data-state="error"] .ps-dot { background: var(--err); }
+  #phoneStatus[data-state="paused"] .ps-dot { background: var(--warn); }
   #phoneStatus.open, #phoneStatus:active { border-color: var(--teal); color: var(--teal); }
   .meta { display: none; }
   #topbar.info-open .meta {

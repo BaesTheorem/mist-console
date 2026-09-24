@@ -114,6 +114,8 @@ Hover a message (or right-click it) for **edit & resend**, **regenerate**, **bra
 
 Press **Esc** (or click the send button, which becomes **stop** while a turn runs and the composer is empty) to cancel an in-flight turn. This sends an `interrupt` control_request. The process is **not** killed, so context is preserved and the next message just continues (unlike the old kill/restart).
 
+**Pause** (the ⏸ button left of send while a turn runs, **Shift+Esc**, or `/pause`) is the graceful cousin of stop. Nothing is interrupted: the bridge sends a mid-turn user message (`bridge.PAUSE_PROMPT`) asking MIST to finish the tool call in flight, write a short checkpoint (done / in progress / next step) and end the turn, so it lands at the model's next step rather than instantly. The echo shows as a small control chip (a `user_text` event with `kind: "pause"`), the status reads *pausing…*, and when the result arrives the bridge broadcasts `paused`: the status turns amber, the same button becomes **▶ resume** (`/resume` too), which sends `RESUME_PROMPT`. Any other message also clears the pause. If a minute passes without the turn ending, a notice points at stop, which is still one Esc away. Routes: `POST /sessions/<id>/pause` (`state`: `ok` / `idle`), `POST /sessions/<id>/resume`.
+
 ## Look: theme, font, text size
 
 Settings carries three appearance controls, all persisted **twice** — localStorage

@@ -1309,6 +1309,30 @@ def interrupt_turn(sid):
     return jsonify({"ok": True})
 
 
+@app.route("/sessions/<sid>/pause", methods=["POST"])
+def pause_turn(sid):
+    """Graceful pause (the composer's pause button / Shift+Esc): a mid-turn
+    message asks MIST to finish the tool call in flight, write a checkpoint and
+    end the turn. The chat reports `paused` when that result lands."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    state = s.pause()
+    if state == "dead":
+        return jsonify({"ok": False, "error": "backend not running"}), 409
+    return jsonify({"ok": True, "state": state})
+
+
+@app.route("/sessions/<sid>/resume", methods=["POST"])
+def resume_turn(sid):
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    ok = s.resume()
+    _touch(s)
+    return jsonify({"ok": ok})
+
+
 @app.route("/sessions/<sid>/tasks/<task_id>/stop", methods=["POST"])
 def stop_bg_task(sid, task_id):
     """Kill one background task on a session (the ✕ in the task monitor).

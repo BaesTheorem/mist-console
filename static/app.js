@@ -779,6 +779,35 @@ class Session {
         if (this.statusLabel === "stopping…") this.setStatus("error", "couldn't stop");
       });
   }
+  // Graceful pause: a mid-turn message asks MIST to finish the tool call in
+  // flight, write a checkpoint and end the turn (bridge.PAUSE_PROMPT). Unlike
+  // interrupt() nothing is cut off, so it lands at the model's next step; if
+  // that takes a while, stop is still right there.
+  pause() {
+    if (this.statusState !== "thinking" && this.statusState !== "working") return;
+    if (this.statusLabel === "pausing…") return;
+    this.setStatus("working", "pausing…");
+    clearTimeout(this._pauseNudge);
+    this._pauseNudge = setTimeout(() => {
+      if (this.statusLabel === "pausing…")
+        this.notice("Still working a minute after the pause request. Stop (Esc) interrupts right away.");
+    }, 60000);
+    fetch("/sessions/" + this.id + "/pause", { method: "POST" })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.state === "idle") this.setStatus(this.paused ? "paused" : "idle", this.paused ? "paused" : "idle");
+        else if (!j.ok) this.setStatus("error", "couldn't pause");
+      })
+      .catch(() => { if (this.statusLabel === "pausing…") this.setStatus("error", "couldn't pause"); });
+  }
+  resume() {
+    this.paused = false;
+    this.setStatus("thinking", "resuming");
+    fetch("/sessions/" + this.id + "/resume", { method: "POST" })
+      .then((r) => r.json())
+      .then((j) => { if (!j.ok) this.setStatus("error", "couldn't resume"); })
+      .catch(() => this.setStatus("error", "couldn't resume"));
+  }
   /* ---- per-message actions (claude.ai style) ----
      Hover a message for edit / regenerate / branch / copy. Edit and regenerate
      rewind THIS chat in place (the tail is discarded, after a confirm); branch
@@ -1685,6 +1714,8 @@ class Session {
         // Always render immediately so a message can never get swallowed.
         const ubody = this.addMsg("user", "Alex", tsMs(o.ts));
         ubody.textContent = o.text;
+        if (o.kind) ubody.parentNode.classList.add("ctl", "ctl-" + o.kind);   // pause / resume chip
+        if (o.kind !== "pause") this.paused = false;
         // Position + raw text, for edit / regenerate / branch (see msgActions).
         if (o.seq != null) ubody.parentNode.dataset.seq = o.seq;
         ubody.parentNode._utext = o.text || "";
@@ -1826,6 +1857,12 @@ class Session {
         // An out-of-band action (auth flow) finished; clear the thinking spinner.
         this.setStatus("idle", "idle");
         break;
+      case "paused":
+        // The turn ended on a pause request; the composer offers resume.
+        this.paused = true;
+        clearTimeout(this._pauseNudge);
+        this.setStatus("paused", "paused");
+        break;
       case "rate_limit_event":
         // account-wide live 5h/7d reset + status — update the badges regardless
         // of which session it arrived on
@@ -1835,6 +1872,7 @@ class Session {
         this.current = null;
         this.splitPending = false;   // turn over; any unanswered interjection gets its own turn
         this.clearPermCards();       // any unanswered permission cards are moot now
+        clearTimeout(this._pauseNudge);
         this.lastUsage = usageText(o);
         if (this.active) $("#usage").textContent = this.lastUsage;
         // A turn just finished, so the usage may have moved — refresh the 5h/7d
@@ -1852,6 +1890,8 @@ class Session {
           // at /login (which the Console now handles out of band).
           if (/log ?in|sign ?in|\bauth|credential|401|unauthor|expired|api key/i.test(msg))
             this.notice("It looks like MIST needs to sign in. Type /login to authenticate.");
+        } else if (this.paused) {
+          this.setStatus("paused", "paused");
         } else {
           this.setStatus("idle", "idle");
         }
@@ -3399,6 +3439,18 @@ function handleLocalCommand(text) {
     else setAirdropClaim(activeId, "AirDropped photos will land in this chat for the next 5 minutes.");
     return true;
   }
+  if (/^\/pause$/i.test(text)) {
+    const a = activeId && sessions.get(activeId);
+    input.value = ""; growInput(); hideSlash();
+    if (a) a.pause();
+    return true;
+  }
+  if (/^\/resume$/i.test(text)) {
+    const a = activeId && sessions.get(activeId);
+    input.value = ""; growInput(); hideSlash();
+    if (a) a.resume();
+    return true;
+  }
   if (/^\/photos$/i.test(text)) {
     setAirdropClaim("dedicated", "AirDropped photos will land in the 📷 iPhone Photos chat for the next 5 minutes.");
     return true;
@@ -3426,7 +3478,9 @@ input.addEventListener("keydown", (e) => {
     // Esc interrupts the in-flight turn (the TUI's stop), when nothing else claimed it.
     const a = activeId && sessions.get(activeId);
     if (a && (a.statusState === "thinking" || a.statusState === "working")) {
-      e.preventDefault(); a.interrupt(); return;
+      e.preventDefault();
+      if (e.shiftKey) a.pause(); else a.interrupt();   // Shift+Esc: graceful pause
+      return;
     }
   }
   if (e.key === "Enter" && !e.shiftKey) {
@@ -3501,7 +3555,24 @@ function reflectSend() {
   const ic = $("#sendIcon");                       // md-filled-icon-button — swap the glyph, not textContent
   if (ic) ic.textContent = stop ? "stop" : "send";
   sendBtn.title = stop ? "Stop this turn" : "Send  (Enter)";
+  const pb = $("#pauseBtn"), pi = $("#pauseIcon");
+  if (pb) {
+    const mode = busy ? (a.statusLabel === "pausing…" ? "pausing" : "pause")
+               : (a && a.paused ? "resume" : "off");
+    pb.dataset.mode = mode;
+    pb.hidden = mode === "off";
+    if (pi) pi.textContent = mode === "resume" ? "play_arrow" : "pause";
+    pb.title = mode === "resume" ? "Resume from the checkpoint"
+             : mode === "pausing" ? "Pausing: MIST finishes the current step, then stops"
+             : "Pause gracefully  (Shift+Esc)";
+    pb.setAttribute("aria-label", pb.title);
+  }
 }
+$("#pauseBtn").addEventListener("click", () => {
+  const a = activeId && sessions.get(activeId);
+  if (!a) return;
+  if ($("#pauseBtn").dataset.mode === "resume") a.resume(); else a.pause();
+});
 sendBtn.addEventListener("click", () => {
   if (sendBtn.dataset.mode === "stop") {
     const a = activeId && sessions.get(activeId);

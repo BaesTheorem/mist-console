@@ -57,6 +57,20 @@ DATA_DIR = (os.environ.get("MIST_CONSOLE_DATA_DIR")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 DEFAULT_PERMISSION_MODE = "bypassPermissions"
+
+# Graceful pause (the composer's pause button, next to stop). Stop is the CLI's
+# hard interrupt: the turn ends wherever it is. Pause is a mid-turn user message,
+# so it reaches the model at its next step; the model finishes the tool call in
+# flight, writes a checkpoint and ends the turn on its own. Resume sends the
+# matching nudge. Both are recorded as user_text events with a `kind` so the
+# page renders them as control chips, not as things Alex typed.
+PAUSE_PROMPT = ("[Console: pause requested] Finish only the tool call already in flight, "
+                "then stop; start nothing new. End this turn with a short checkpoint "
+                "under a '⏸ Paused' heading: what is done, what was in progress, and the "
+                "exact next step, so a later resume picks up cleanly. Then wait.")
+PAUSE_DISPLAY = "⏸ Pause"
+RESUME_PROMPT = "[Console: resume] Pick up from your last checkpoint and carry on with the next step."
+RESUME_DISPLAY = "▶ Resume"
 HISTORY_CAP = 8000   # max events kept in memory for replay (jsonl keeps all)
 
 # Where the Console answers, and where its own CLI tools live. Both are handed to
@@ -503,6 +517,8 @@ class ClaudeSession:
         self._saw_init = False
         self._intentional_stop = False
         self._turn_active = False    # a send is in flight (no result yet); blocks reaping
+        self._pause_pending = False  # a pause was sent; the next result marks the chat paused
+        self.paused = False          # last turn ended on a pause; cleared by the next send
         self._ctx_warned = False     # one-shot soft warning at CTX_WARN_PCT
         self._ctx_override = False    # one-shot hard-cap override (next send passes)
         self._ctl_seq = 0            # control_request id counter (stop_task)
@@ -945,6 +961,12 @@ class ClaudeSession:
                 self.last_activity = time.time()
                 self._turn_active = False   # turn done; reaper may reclaim once idle
                 self._emit_context(obj)
+                if self._pause_pending:
+                    # The turn ended after a pause request: this chat is paused
+                    # until the next send (the composer offers resume).
+                    self._pause_pending = False
+                    self.paused = True
+                    self._broadcast({"type": "paused"})
                 if on_activity:
                     try:
                         on_activity(self)
@@ -1341,12 +1363,14 @@ class ClaudeSession:
                 self._subscribers.remove(q)
 
     # ---- public api --------------------------------------------------------
-    def send(self, text, image_path=None, url=None):
+    def send(self, text, image_path=None, url=None, kind=None, display=None):
+        """`kind` marks a Console control message (pause / resume): it is shown
+        as `display` in a control chip and never titles the chat."""
         self.ensure_started()
         if not self.alive or not self.proc or self.proc.stdin is None:
             return False
         full = text
-        display = text
+        display = display if display is not None else text
         if url:
             full = (text + "\n\n" if text else "") + f"[Current page: {url}]"
             display = (text + "\n" if text else "") + f"🔗 {url}"
@@ -1367,7 +1391,7 @@ class ClaudeSession:
                 img_for_display = image_path
             except Exception:
                 pass
-        if not self.title:
+        if not self.title and not kind:
             t = text or "Screenshot" if image_path else (text or url or "New chat")
             self.title = (t[:40] + "…") if len(t) > 40 else t
         # Reserve the turn BEFORE broadcasting/writing, under the session lock:
@@ -1378,7 +1402,11 @@ class ClaudeSession:
                 return False
             self.last_activity = time.time()
             self._turn_active = True   # cleared on the matching result (or exit)
+            self.paused = False        # any message after a pause is a resume
+            self._pause_pending = kind == "pause"
         ev = {"type": "user_text", "text": display}   # for live + replay
+        if kind:
+            ev["kind"] = kind
         if img_for_display:
             ev["image"] = img_for_display
         self._broadcast(ev)
@@ -1778,9 +1806,24 @@ class ClaudeSession:
         if not self.alive or not self.proc or self.proc.stdin is None:
             return False
         self._pending_perms.clear()
+        self._pause_pending = False   # a hard stop is not a pause
         req = {"type": "control_request", "request_id": self._next_ctl_id("interrupt"),
                "request": {"subtype": "interrupt"}}
         return self._write_stdin(req)
+
+    def pause(self):
+        """Ask the running turn to wind down at its next step (see PAUSE_PROMPT).
+        Returns "ok", "idle" (nothing to pause) or "dead" (no backend)."""
+        if not self._turn_active:
+            return "idle"
+        if not self.alive or not self.proc or self.proc.stdin is None:
+            return "dead"
+        return "ok" if self.send(PAUSE_PROMPT, kind="pause", display=PAUSE_DISPLAY) else "dead"
+
+    def resume(self):
+        """Continue from the checkpoint a pause left. Safe when not paused: the
+        model just carries on with whatever was next."""
+        return self.send(RESUME_PROMPT, kind="resume", display=RESUME_DISPLAY)
 
     # ---- auth slash commands ----------------------------------------------
     # The headless `claude -p` stream-json process does NOT execute interactive
