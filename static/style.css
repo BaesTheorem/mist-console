@@ -246,18 +246,36 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab:hover .tclose { opacity: 1; }
 .tab .tclose:hover { color: var(--err); }
 
-/* section headers in the rail — pinned first, then date buckets (today, yesterday, …) */
+/* section headers in the rail — pinned first, then date buckets (today, yesterday, …).
+   They are dividers, not rows: a tonal band one step above the rail with a
+   full-strength hairline on top, brighter and heavier text than the chat titles
+   under it, and sticky so the bucket you are scrolling through keeps its label. */
 .tabsection {
-  padding: 8px 9px 5px; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
-  color: var(--dim); border-bottom: 1px solid var(--line-soft); user-select: none;
+  position: sticky; top: 0; z-index: 2;
+  padding: 7px 9px 6px; font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container-highest);
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line-soft);
+  border-left: 2px solid var(--line);   /* same gutter the chat rows carry, filled in */
+  user-select: none;
 }
-.tabsection.pinned { color: var(--teal); }
-.tabsection.collapsible { cursor: pointer; display: flex; align-items: center; gap: 4px; }
-.tabsection.collapsible:not(.pinned):hover { color: var(--text); }
+.tabsection:first-child { border-top: 0; }
+.tabsection.pinned { color: var(--teal); border-left-color: var(--teal);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 14%, var(--md-sys-color-surface-container-highest)); }
+.tabsection.collapsible { cursor: pointer; display: flex; align-items: center; gap: 5px;
+  transition: background .12s ease, color .12s ease; }
+.tabsection.collapsible:not(.pinned):hover { color: var(--text); border-left-color: var(--teal); }
 .tabsection.collapsible:focus-visible { outline: 1px solid var(--teal); outline-offset: -1px; }
-.tabsection .sec-chev { font-size: 13px; }
+.tabsection .sec-chev { font-size: 15px; transition: transform .12s ease; }
 .tabsection.collapsed .sec-chev { transform: rotate(-90deg); }
-.tabsection .sec-count { margin-left: auto; letter-spacing: 0; }
+/* collapsed buckets show how many chats are folded away, as a small outlined chip */
+.tabsection .sec-count {
+  margin-left: auto; letter-spacing: 0; font-size: 10px; font-weight: 600; line-height: 1;
+  padding: 2px 5px; border: 1px solid currentColor; color: inherit; opacity: .85;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tabsection.collapsible, .tabsection .sec-chev { transition: none; }
+}
 
 /* pinned conversations get a tinted band + a teal edge so they read as a group */
 .tab.pinned { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container-low)); border-left-color: var(--teal); }
