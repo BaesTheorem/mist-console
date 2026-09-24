@@ -109,6 +109,24 @@ html[data-theme="terminal"] #logs { background: #000; }
 .meta { display: flex; gap: 6px; flex: 1; flex-wrap: nowrap; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .meta::-webkit-scrollbar { display: none; }
 .badge { flex: 0 0 auto; }
+/* Fit tiers (app.js measures the strip and sets these). The badge's own text
+   collapses to nothing and a ::before paints the short form, so textContent
+   stays the long form for everything that reads it. */
+#topbar.fit1 .badge[data-short], #topbar.fit2 .badge[data-short] { font-size: 0; line-height: 0; }
+#topbar.fit1 .badge[data-short]::before, #topbar.fit2 .badge[data-short]::before {
+  content: attr(data-short); font-size: 11px; line-height: normal;
+}
+#topbar.fit2 .badge[data-shorter]::before { content: attr(data-shorter); }
+#topbar.fit1, #topbar.fit2 { gap: 10px; }
+#topbar.fit1 .meta, #topbar.fit2 .meta { gap: 4px; }
+#topbar.fit2 .badge { padding: 2px 5px; }
+/* still too wide at fit2: the strip scrolls, and the right edge fades so the
+   cut is visibly a cut and not the end of the row */
+.meta.scrolls {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+          mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+.brand, .actions { flex: 0 0 auto; }
 .badge {
   border: 1px solid var(--line); color: var(--dim);
   padding: 2px 7px; font-size: 11px; white-space: nowrap;

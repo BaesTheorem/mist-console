@@ -1,0 +1,79 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyobjc-framework-WebKit", "pyobjc-framework-Cocoa"]
+# ///
+"""Snapshot a region of the live Console at several window widths, in the
+system WKWebView (the desktop app's real engine; Playwright's WebKit is not).
+
+    bin/console-snap OUTDIR 1440,1240,1040 [ZOOM] [JS] [SELECTOR]
+
+ZOOM defaults to the value in data/textsize.json. JS, if given, runs once
+after load (inject a busy status, a long badge, whatever the bug needs).
+SELECTOR defaults to #topbar. Renders off screen, no focus steal; the window
+sits at x=-4000 with a Prohibited activation policy.
+"""
+import sys, json, pathlib
+from Foundation import NSURL, NSURLRequest, NSRunLoop, NSDate, NSMakeRect
+from AppKit import NSApplication, NSWindow, NSBitmapImageRep, NSPNGFileType, NSApplicationActivationPolicyProhibited
+from WebKit import WKWebView, WKWebViewConfiguration, WKSnapshotConfiguration
+
+OUT = sys.argv[1]
+WIDTHS = [int(w) for w in sys.argv[2].split(",")]
+HERE = pathlib.Path(__file__).resolve().parent.parent
+def _zoom():
+    try: return json.loads((HERE / "data" / "textsize.json").read_text())["pct"] / 100
+    except Exception: return 1.0
+ZOOM = float(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else _zoom()
+SEL = sys.argv[5] if len(sys.argv) > 5 else "#topbar"
+
+app = NSApplication.sharedApplication()
+app.setActivationPolicy_(NSApplicationActivationPolicyProhibited)
+
+def pump(sec):
+    NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(sec))
+
+def js(wv, code):
+    box = {}
+    def done(res, err): box["res"] = res; box["err"] = err
+    wv.evaluateJavaScript_completionHandler_(code, done)
+    while "res" not in box: pump(0.05)
+    if box["err"]: print("JS ERR", box["err"])
+    return box["res"]
+
+def snap(wv, rect, path, scale=2):
+    cfg = WKSnapshotConfiguration.alloc().init()
+    cfg.setRect_(NSMakeRect(*rect))
+    cfg.setSnapshotWidth_(rect[2] * scale)
+    box = {}
+    def done(img, err): box["img"] = img; box["err"] = err
+    wv.takeSnapshotWithConfiguration_completionHandler_(cfg, done)
+    while "img" not in box: pump(0.05)
+    if box["err"]: print("SNAP ERR", box["err"]); return
+    tiff = box["img"].TIFFRepresentation()
+    rep = NSBitmapImageRep.imageRepWithData_(tiff)
+    rep.representationUsingType_properties_(NSPNGFileType, None).writeToFile_atomically_(path, True)
+
+win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(NSMakeRect(-4000, 0, WIDTHS[0], 500), 1 | 2 | 8, 2, False)
+wv = WKWebView.alloc().initWithFrame_configuration_(NSMakeRect(0, 0, WIDTHS[0], 500), WKWebViewConfiguration.alloc().init())
+win.setContentView_(wv)
+win.orderBack_(None)
+wv.loadRequest_(NSURLRequest.requestWithURL_(NSURL.URLWithString_("http://127.0.0.1:5014/")))
+pump(4)
+js(wv, f"document.documentElement.style.zoom='{ZOOM}'")
+pump(1.5)
+if len(sys.argv) > 4:
+    js(wv, sys.argv[4]); pump(0.5)
+for w in WIDTHS:
+    win.setFrame_display_(NSMakeRect(-4000, 0, w, 500), True)
+    wv.setFrame_(NSMakeRect(0, 0, w, 500))
+    pump(1.2)
+    info = js(wv, "(function(){const e=document.querySelector(%s);if(!e)return null;const r=e.getBoundingClientRect();"
+      "return JSON.stringify({cls:e.className,x:r.left,y:r.top,w:r.width,h:r.height,"
+      "over:[...e.querySelectorAll('*')].filter(n=>n.scrollWidth>n.clientWidth+1).map(n=>n.id||n.className).slice(0,5)})})()" % json.dumps(SEL))
+    if not info: print(f"--- width {w}: no element matches {SEL}"); continue
+    d = json.loads(info)
+    print(f"--- width {w}: class='{d['cls']}' box={d['w']:.0f}x{d['h']:.0f} overflowing={d['over']}")
+    z = ZOOM   # rects come back unzoomed; the snapshot rect wants zoomed px
+    snap(wv, (d["x"] * z, d["y"] * z, d["w"] * z, d["h"] * z + 2), f"{OUT}/snap-{w}.png")
+print("done")

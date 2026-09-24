@@ -67,6 +67,66 @@ function updateJumpBtn() {
   window.addEventListener("resize", sync);
 })();
 
+// Fit the badge strip to the width it has. The strip never wraps and hides
+// its scrollbar, so on a narrow-enough window the rightmost badges were just
+// gone (the 7d badge read "7d 25% · re" against the gear) with nothing to say
+// more existed. Now it degrades in steps, re-measured on every resize and on
+// every badge rewrite:
+//   fit1  drops the decoration: repo owner, the "claude-" prefix, "Permissions",
+//         "resets", "running"
+//   fit2  drops the secondary numbers too: reset times, ctx decimals
+//   scrolls  still too wide: the strip scrolls and fades out at its right edge
+// The long text stays in textContent (the phone chip and the ctx card parse
+// it); a tier only swaps what is PAINTED, via data-short/data-shorter and a
+// ::before in style.css. Tooltips keep the full wording.
+(function () {
+  const tb = $("#topbar"), meta = tb && tb.querySelector(".meta");
+  if (!meta) return;
+  const shorten = (b) => {
+    const t = (b.textContent || "").trim();
+    let s1 = t, s2 = t;
+    switch (b.id) {
+      case "repo": s1 = s2 = t.replace(/^[^/\s]+\//, ""); break;
+      case "model": s1 = s2 = t.replace(/^claude-/, ""); break;
+      case "perm": {
+        const mode = t.replace(/^perm:\s*/, "").replace(/Permissions$/, "")
+          .replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+        s1 = "perm: " + mode; s2 = mode; break;
+      }
+      case "status":
+        s1 = t.replace(/⚙ (\d+) running/, "⚙$1 running");
+        s2 = t.replace(/⚙ (\d+) running/, "⚙$1"); break;
+      case "ctx": s2 = t.replace(/(\d+\.\d+)%/, (_, n) => Math.round(parseFloat(n)) + "%"); break;
+      case "r5h": case "r7d":
+        s1 = t.replace(" limit reached", " limit").replace(" · resets ", " · ");
+        s2 = t.replace(" limit reached", " limit").replace(/ · resets .*$/, ""); break;
+    }
+    b.dataset.short = s1; b.dataset.shorter = s2;
+  };
+  const overflows = () => meta.scrollWidth > meta.clientWidth + 1;
+  let busy = false;
+  const fit = () => {
+    if (busy) return;
+    busy = true;
+    try {
+      meta.querySelectorAll(".badge").forEach(shorten);
+      tb.classList.remove("fit1", "fit2");
+      meta.classList.remove("scrolls");
+      if (PHONE_MQ.matches) return;   // the phone folds the strip under a chip instead
+      if (!overflows()) return;
+      tb.classList.add("fit1");
+      if (!overflows()) return;
+      tb.classList.replace("fit1", "fit2");
+      meta.classList.toggle("scrolls", overflows());
+    } finally { busy = false; }
+  };
+  fit();
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(meta);
+  window.addEventListener("resize", fit);
+  new MutationObserver(fit).observe(meta, { childList: true, characterData: true, subtree: true });
+  PHONE_MQ.addEventListener("change", fit);
+})();
+
 // Track the composer's height too (it grows to ~220px with a multi-line draft).
 // The fixed overlays that sit above it (#usage, #bgMonitor) anchor to
 // --composer-h instead of assuming a one-line row.
