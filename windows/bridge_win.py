@@ -216,6 +216,32 @@ CONSOLE_SURFACE_PROMPT = (
     "desktop notifications from this surface."
 )
 
+# Fable is the orchestrator, never the worker: subagents are pinned to Opus 5.5
+# (1M) at the CLI and the prompt tells Fable to delegate. Mirrors bridge.py.
+FABLE_WORKER_MODEL = "claude-opus-5-5[1m]"
+FABLE_ORCHESTRATOR_ENV = {
+    "CLAUDE_CODE_SUBAGENT_MODEL": FABLE_WORKER_MODEL,
+    "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
+}
+FABLE_ORCHESTRATOR_PROMPT = (
+    "You are running on Fable, and in the MIST Console Fable is ONLY the "
+    "orchestrator. Do not do the work yourself. Your job is to understand the "
+    "request, break it into tasks, hand each task to an Opus 5.5 (1M context) "
+    "subagent with the Agent tool, check what comes back, and write the reply. "
+    "Subagents are pinned to " + FABLE_WORKER_MODEL + " by the Console, so leave "
+    "the Agent tool's `model` parameter unset, and never use the `fork` subagent "
+    "type (forks inherit your model). Delegate anything that means reading more "
+    "than a file or two, searching, editing, running commands, research, or "
+    "writing longer than a short reply. Run independent tasks as parallel Agent "
+    "calls in one message. Give each subagent a self-contained prompt: the goal, "
+    "the relevant paths and facts from this conversation, constraints, and what "
+    "to report back, since it cannot see this chat."
+)
+
+
+def is_fable(model):
+    return "fable" in (model or "").lower()
+
 
 def _spawn_kwargs():
     """Common Popen keyword arguments for claude subprocesses."""
@@ -350,7 +376,10 @@ class ClaudeSession:
         # Current models default thinking display to "omitted" (empty thinking
         # text in the stream); opt into readable summaries for the UI cards.
         cmd += ["--thinking-display", "summarized"]
-        cmd += ["--append-system-prompt", CONSOLE_SURFACE_PROMPT]
+        prompt = CONSOLE_SURFACE_PROMPT
+        if is_fable(self.model):
+            prompt += "\n\n" + FABLE_ORCHESTRATOR_PROMPT
+        cmd += ["--append-system-prompt", prompt]
         return cmd
 
     def ensure_started(self):
@@ -369,9 +398,16 @@ class ClaudeSession:
                     os.makedirs(self.cwd, exist_ok=True)
                 except Exception:
                     pass
+            # Fable orchestrates, Opus 5.5 (1M) works (see bridge.py).
+            env = dict(os.environ)
+            for k, v in FABLE_ORCHESTRATOR_ENV.items():
+                if is_fable(self.model):
+                    env[k] = v
+                else:
+                    env.pop(k, None)
             try:
                 self.proc = subprocess.Popen(
-                    self._build_cmd(claude), cwd=self.cwd,
+                    self._build_cmd(claude), cwd=self.cwd, env=env,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     **_spawn_kwargs())
             except Exception as e:

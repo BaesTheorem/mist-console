@@ -498,6 +498,46 @@ PROGRESS_PROMPT = (
 )
 
 
+# Fable is the orchestrator, never the worker (Alex, 2026-09-24). Whenever a
+# Console chat runs on a Fable model, it plans, delegates and synthesizes, and
+# every piece of real work goes to an Opus 5.5 (1M) subagent. Two layers:
+#   1. Env, which the CLI enforces whatever the model decides:
+#      CLAUDE_CODE_SUBAGENT_MODEL is the model every Agent/Workflow subagent
+#      gets, and CLAUDE_CODE_SUBAGENT_MODEL_FORCE makes the CLI drop any
+#      per-call `model` override (checked in claude 2.1.x: "Workflow agent
+#      model ... ignored: CLAUDE_CODE_SUBAGENT_MODEL_FORCE is set").
+#   2. FABLE_ORCHESTRATOR_PROMPT, which tells Fable to delegate in the first
+#      place, and to skip `fork` subagents, which inherit the parent's model.
+# Both are fixed at spawn, so set_model restarts the backend whenever a switch
+# crosses the Fable boundary instead of switching live.
+FABLE_WORKER_MODEL = "claude-opus-5-5[1m]"
+FABLE_ORCHESTRATOR_ENV = {
+    "CLAUDE_CODE_SUBAGENT_MODEL": FABLE_WORKER_MODEL,
+    "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
+}
+FABLE_ORCHESTRATOR_PROMPT = (
+    "You are running on Fable, and in the MIST Console Fable is ONLY the "
+    "orchestrator. Do not do the work yourself. Your job is to understand the "
+    "request, break it into tasks, hand each task to an Opus 5.5 (1M context) "
+    "subagent with the Agent tool, check what comes back, and write the reply to "
+    "Alex. Subagents are pinned to " + FABLE_WORKER_MODEL + " by the Console, so "
+    "leave the Agent tool's `model` parameter unset, and never use the `fork` "
+    "subagent type (forks inherit your model). Delegate anything that means "
+    "reading more than a file or two, searching, editing, running commands, "
+    "research, or writing longer than a short reply. Run independent tasks as "
+    "parallel Agent calls in one message. Give each subagent a self-contained "
+    "prompt: the goal, the relevant paths and facts from this conversation, "
+    "constraints, and what to report back, since it cannot see this chat. "
+    "Keep your own tool use to what orchestration needs: a quick look to scope a "
+    "task, reading subagent output, and asking Alex a question."
+)
+
+
+def is_fable(model):
+    """True for any Fable model id or alias (claude-fable-5-1, fable, ...)."""
+    return "fable" in (model or "").lower()
+
+
 class ClaudeSession:
     """One conversation: a persisted event history + (lazily) a claude process."""
 
@@ -720,8 +760,10 @@ class ClaudeSession:
         # explicit request still gets a rendered, embedded track. Other surfaces
         # (news-briefing podcast, note narration, the mist-terminal greeting)
         # are untouched, and we don't edit CLAUDE.md.
-        cmd += ["--append-system-prompt",
-                NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT + "\n\n" + RECIPE_PROMPT]
+        prompt = NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT + "\n\n" + RECIPE_PROMPT
+        if is_fable(self.model):
+            prompt += "\n\n" + FABLE_ORCHESTRATOR_PROMPT
+        cmd += ["--append-system-prompt", prompt]
         return cmd
 
     def ensure_started(self):
@@ -739,6 +781,14 @@ class ClaudeSession:
             # and its bar renders inline in the conversation that started it.
             env["MIST_CONSOLE_SESSION"] = self.id or ""
             env["MIST_CONSOLE_URL"] = CONSOLE_URL
+            # Fable orchestrates, Opus 5.5 (1M) works: pin subagents at the CLI.
+            # Popped otherwise so a Console launched from a Fable shell doesn't
+            # leak the pin into Opus/Sonnet chats.
+            for k, v in FABLE_ORCHESTRATOR_ENV.items():
+                if is_fable(self.model):
+                    env[k] = v
+                else:
+                    env.pop(k, None)
             try:
                 self.proc = subprocess.Popen(
                     self._build_cmd(), cwd=self.cwd, env=env,
@@ -850,8 +900,15 @@ class ClaudeSession:
         just records the choice for its next spawn (--model), and a live one
         whose control call fails falls back to the old dormant-and-resume path."""
         model = model or None
+        crosses_fable = is_fable(model) != is_fable(self.model)
         self.model = model
         if not self.alive:
+            return False
+        if crosses_fable:
+            # The orchestrator prompt and subagent pin are set at spawn, so a
+            # switch into or out of Fable has to respawn (resume keeps context).
+            self._resume_tried = False
+            self.stop()
             return False
         payload = {"model": model} if model else {}
         ok, _ = self.control_call("set_model", payload)
