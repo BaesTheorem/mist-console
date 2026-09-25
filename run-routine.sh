@@ -59,12 +59,6 @@ FALLBACK_MODEL="$(awk 'BEGIN{fm=0} /^---[[:space:]]*$/{fm++; next} fm==1 && /^fa
 FALLBACK_MODEL="${FALLBACK_MODEL:-${ROUTINE_FALLBACK_MODEL:-claude-opus-5-5[1m]}}"
 [ "$FALLBACK_MODEL" = "none" ] && FALLBACK_MODEL=""
 
-# Fable is the orchestrator, never the worker (Alex, 2026-09-24). On a Fable
-# run, subagents are pinned to Opus 5.5 (1M) via the CLI's subagent-model env
-# (FORCE drops any per-call override) and this prompt tells Fable to delegate.
-FABLE_WORKER_MODEL="claude-opus-5-5[1m]"
-FABLE_ORCHESTRATOR_PROMPT="You are running on Fable, and Fable is ONLY the orchestrator. Do not do the work yourself: break the routine into tasks, hand each to an Opus 5.5 (1M context) subagent with the Agent tool, check what comes back, and assemble the result. Subagents are pinned to $FABLE_WORKER_MODEL, so leave the Agent tool's model parameter unset and never use the fork subagent type (forks inherit your model). Run independent tasks as parallel Agent calls, and give each subagent a self-contained prompt with the goal, paths, constraints, and what to report back. The routine's own rules (sentinels, output format, where to write) still apply to your final output."
-
 # Connector preflight, prepended to every routine.
 #
 # The network gate below runs BEFORE claude launches, so it can't cover DNS
@@ -159,18 +153,7 @@ attempt=0
 while :; do
 	attempt=$((attempt + 1))
 	set +e
-	# Fable only orchestrates; Opus 5.5 (1M) subagents do the work (same rule
-	# and env pin as bridge.py). Re-checked each attempt because a credits
-	# fallback can move MODEL off Fable mid-loop.
-	ORCH_ARGS=()
-	ORCH_ENV=(env -u CLAUDE_CODE_SUBAGENT_MODEL -u CLAUDE_CODE_SUBAGENT_MODEL_FORCE)
-	case "$(printf '%s' "$MODEL" | tr '[:upper:]' '[:lower:]')" in
-	*fable*)
-		ORCH_ARGS=(--append-system-prompt "$FABLE_ORCHESTRATOR_PROMPT")
-		ORCH_ENV=(env CLAUDE_CODE_SUBAGENT_MODEL="$FABLE_WORKER_MODEL" CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1)
-		;;
-	esac
-	OUT="$("${ORCH_ENV[@]}" "$CLAUDE" -p --dangerously-skip-permissions "${MODEL_ARGS[@]}" "${ORCH_ARGS[@]}" "$PROMPT" 2>&1)"
+	OUT="$("$CLAUDE" -p --dangerously-skip-permissions "${MODEL_ARGS[@]}" "$PROMPT" 2>&1)"
 	RC=$?
 	set -e
 	printf '%s\n' "$OUT"
