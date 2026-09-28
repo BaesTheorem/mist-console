@@ -634,13 +634,38 @@ const KAOMOJI = [
   ["sad", ["(´‸`)", "(◞‸◟)", "(;﹏;)", "(T▽T)", "(>×<)"]],
   ["sleeping", ["(－ω－)", "(－o－)"]],
 ];
-const crystal = { look: "classic", on: true, avail: false, header: null, cur: "",
+const crystal = { look: "classic", on: true, avail: false, wallAvail: false, header: null, cur: "", wallCur: "",
                   emotion: null, emotionAt: 0, typingAt: 0, audioPlaying: 0, lastActivity: Date.now() };
 try {
   crystal.look = CRYSTAL_LOOKS[localStorage.getItem("crystalLook")] ? localStorage.getItem("crystalLook") : "classic";
   crystal.on = localStorage.getItem("crystalAnim") !== "0";
 } catch (_) {}
 const crystalSrc = (anim, look) => "anims/" + (look || crystal.look) + "/" + anim + ".webp";
+/* The transcript wallpaper is the same crystal, mirroring the header: whatever the
+   header <img> is playing (the active chat's state, a mood, the appear one-shot), the
+   chat's background plays too, from the 256 px pack (anims/256/, see static/anims/
+   README.md) since the 96 px chrome set would be stretched 6x. It rides the existing
+   --wp-image / --wp-opacity knobs on #logs (style.css), so the still mist-wall.png stays
+   the CSS default and comes back the moment the pack is missing or animation is off.
+   Opacity is measured, not eyeballed, like the still one: composited over black the
+   clips peak at luma 204-250 (celebrate the brightest), and .22 keeps the painted peak
+   near the still logo's (#112635 at .40), so the contrast figures in style.css hold. */
+const WALL_OPACITY = 0.22;
+const wallSrc = (src) => src.replace(/^anims\//, "anims/256/");
+function wallSync() {
+  const logs = $("#logs");
+  if (!logs) return;
+  const show = crystal.avail && crystal.wallAvail && crystal.on && crystal.cur;
+  if (!show) {
+    if (crystal.wallCur) { crystal.wallCur = ""; logs.style.removeProperty("--wp-image"); logs.style.removeProperty("--wp-opacity"); }
+    return;
+  }
+  const src = wallSrc(crystal.cur);
+  if (crystal.wallCur === src) return;
+  crystal.wallCur = src;
+  logs.style.setProperty("--wp-image", 'url("' + src + '")');
+  logs.style.setProperty("--wp-opacity", String(WALL_OPACITY));
+}
 function crystalEmotionFrom(text) {
   const head = (text || "").trimStart().slice(0, 24);
   for (const [anim, faces] of KAOMOJI) for (const f of faces) if (head.startsWith(f)) return anim;
@@ -667,15 +692,17 @@ function crystalRefresh() {
   const show = crystal.avail && crystal.on;
   // style, not the hidden attribute: both marks carry an author display:block that would beat it
   img.style.display = show ? "" : "none"; if (logo) logo.style.display = show ? "none" : "";
-  if (!show || crystal._oneshotUntil > Date.now()) return;
+  if (!show || crystal._oneshotUntil > Date.now()) { wallSync(); return; }
   const r = crystalResolve(), src = crystalSrc(r.anim, r.look);
   if (crystal.cur !== src) { crystal.cur = src; img.src = src; img.title = "MIST · " + r.anim; }
+  wallSync();
 }
 // Play a one-shot (appear) on the header, then fall back to whatever the state says.
 function crystalOneshot(anim) {
   const img = crystal.header;
   if (!img || !crystal.avail || !crystal.on) return;
   crystal.cur = crystalSrc(anim); img.src = crystal.cur; img.title = "MIST";
+  wallSync();
   crystal._oneshotUntil = Date.now() + (CRYSTAL_ONESHOT_MS[anim] || 2000);
   setTimeout(() => { crystal._oneshotUntil = 0; crystalRefresh(); }, CRYSTAL_ONESHOT_MS[anim] || 2000);
 }
@@ -3835,6 +3862,10 @@ function renderCrystalList() {
   };
   probe.onerror = () => { crystal.avail = false; renderCrystalList(); crystalRefresh(); };
   probe.src = crystalSrc("idle", "classic");
+  const wprobe = new Image();
+  wprobe.onload = () => { crystal.wallAvail = true; crystalRefresh(); };
+  wprobe.onerror = () => { crystal.wallAvail = false; wallSync(); };
+  wprobe.src = wallSrc(crystalSrc("idle", "classic"));
   // you typing = listening; one of MIST's audio replies playing = speaking
   const input = $("#input");
   if (input) input.addEventListener("input", () => { crystal.typingAt = Date.now(); crystalRefresh(); });

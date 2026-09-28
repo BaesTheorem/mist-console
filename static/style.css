@@ -75,6 +75,9 @@ body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
      asset, not this number, if it ever needs to go brighter still. */
   --wp-image: url("mist-wall.png");
   --wp-opacity: .40; --wp-blend: normal;
+  /* When the animation pack is present, app.js (wallSync) overrides these two on
+     #logs inline with the 256 px crystal clip mirroring the header, at its own
+     measured opacity (WALL_OPACITY). The still logo stays the fallback. */
   --wp-size: auto 70%; --wp-repeat: no-repeat; --wp-pos: center;
 }
 /* the conversation is a black canvas in this theme, not the navy chrome ground */

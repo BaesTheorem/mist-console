@@ -1,9 +1,16 @@
 #!/bin/sh
-# Copy the 96 px WebP pack from mist-anims into static/anims (gitignored; see static/anims/README.md).
+# Copy the crystal packs from mist-anims into static/anims (gitignored; see static/anims/README.md):
+# the 96 px WebPs for UI chrome (header, spinner, rail markers) at the top level, and the
+# 256 px WebPs the transcript wallpaper stretches to the chat's height under 256/.
 set -e
-SRC="${1:-$HOME/Documents/mist-anims/dist/webp96}"
+SRCDIR="${1:-$HOME/Documents/mist-anims/dist}"
 DST="$(cd "$(dirname "$0")/.." && pwd)/static/anims"
-[ -f "$SRC/meta.json" ] || { echo "no pack at $SRC (run: cd ~/Documents/mist-anims && node render.mjs --pack --webp-only --size=96)" >&2; exit 1; }
+[ -f "$SRCDIR/webp96/meta.json" ] || { echo "no 96 px pack at $SRCDIR/webp96 (run: cd ~/Documents/mist-anims && node render.mjs --pack --webp-only --size=96)" >&2; exit 1; }
 mkdir -p "$DST"
-rsync -a --delete --exclude README.md "$SRC/" "$DST/"
+rsync -a --delete --exclude README.md --exclude 256 "$SRCDIR/webp96/" "$DST/"
+if [ -d "$SRCDIR/webp" ]; then
+  rsync -a --delete "$SRCDIR/webp/" "$DST/256/"
+else
+  echo "no 256 px pack at $SRCDIR/webp (run: cd ~/Documents/mist-anims && node render.mjs --pack --webp-only); the wallpaper stays the still logo" >&2
+fi
 echo "synced $(find "$DST" -name '*.webp' | wc -l | tr -d ' ') clips into $DST"
