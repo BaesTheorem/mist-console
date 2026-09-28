@@ -359,6 +359,7 @@ class _Tunnel:
     def _read(self, proc):
         try:
             for line in proc.stderr:
+                _tunnel_log(line.rstrip())
                 m = _TUNNEL_URL.search(line)
                 if m and m.group(0) != self.url:
                     self.url = m.group(0)
@@ -391,10 +392,71 @@ class _Tunnel:
     def status(self):
         return {"running": self.running(), "url": self.url, "error": self.error,
                 "origin": self.origin, "since": self.started_at,
+                "last_ok": _health["last_ok"], "restarts": _health["restarts"],
                 "installed": bool(self.binary())}
 
 
 tunnel = _Tunnel()
+
+# cloudflared's stderr, kept so a dead tunnel leaves a trail. It used to go
+# nowhere, which is why the 2026-09-27 death has no recorded cause.
+TUNNEL_LOG = os.path.expanduser("~/Library/Logs/exobrain/mist-console-tunnel.log")
+_TUNNEL_LOG_MAX = 2_000_000
+
+
+def _tunnel_log(line):
+    try:
+        if os.path.exists(TUNNEL_LOG) and os.path.getsize(TUNNEL_LOG) > _TUNNEL_LOG_MAX:
+            os.replace(TUNNEL_LOG, TUNNEL_LOG + ".1")
+        with open(TUNNEL_LOG, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+    except Exception:
+        pass
+
+
+# ---- tunnel health ----------------------------------------------------------
+# A live cloudflared process is not a live tunnel. On 2026-09-27 the process
+# had been up 2.5 days while its trycloudflare hostname no longer resolved:
+# the edge had dropped the quick tunnel and cloudflared never exited, so the
+# supervisor (which only checked the pid) kept publishing a dead URL and the
+# phone had no off-LAN path. So probe the public URL itself, and restart after
+# a few misses, but only when a control request to Cloudflare succeeds (a Mac
+# that is offline would fail both, and a restart would not help).
+HEALTH_EVERY = 60        # seconds between probes
+HEALTH_GRACE = 45        # a fresh URL 530s for a few seconds; leave it alone
+HEALTH_MISSES = 3        # consecutive failed probes before a restart
+_CONTROL_URL = "https://www.cloudflare.com/cdn-cgi/trace"
+_health = {"at": 0, "misses": 0, "last_ok": None, "restarts": 0}
+
+
+def _probe(url, timeout=10):
+    import urllib.request
+    from v4first import opener
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "MIST-health/1"})
+        with opener.open(req, timeout=timeout) as r:
+            return 200 <= r.status < 300
+    except Exception:
+        return False
+
+
+def _check_tunnel_health():
+    url, since = tunnel.url, tunnel.started_at or 0
+    now = time.time()
+    if not url or now - since < HEALTH_GRACE or now - _health["at"] < HEALTH_EVERY:
+        return
+    _health["at"] = now
+    if _probe(url + "/remote/ping"):
+        _health.update(misses=0, last_ok=now)
+        return
+    if not _probe(_CONTROL_URL):
+        return   # we are offline; not the tunnel's fault
+    _health["misses"] += 1
+    _tunnel_log(f"[health] {url} unreachable ({_health['misses']}/{HEALTH_MISSES})")
+    if _health["misses"] >= HEALTH_MISSES:
+        _health.update(misses=0, restarts=_health["restarts"] + 1)
+        _tunnel_log("[health] restarting cloudflared for a fresh URL")
+        tunnel.stop()   # the supervisor starts a new one on its next pass
 
 
 _published = {"urls": None, "at": 0}
@@ -431,6 +493,7 @@ def _supervise():
                         tunnel._backoff = min(tunnel._backoff * 2, 120)
                         time.sleep(tunnel._backoff)
                         continue
+                _check_tunnel_health()
             elif tunnel.running():
                 tunnel.stop()
         except Exception:
