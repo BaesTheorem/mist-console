@@ -377,12 +377,30 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
    selection survives even if the flag regresses. It has to cover the whole
    subtree, not just `.msg .body`. The old allowlist left the `.msg` wrapper
    itself unselectable, which chopped any drag that crossed a message boundary,
-   and left think blocks, tool lines and file cards dead entirely. Chrome that
-   shouldn't be selectable (icon ligatures, tab titles, gutter glyphs) declares
-   `user-select: none` on itself, which beats this by directness. */
+   and left think blocks, tool lines and file cards dead entirely. */
 #logs, #logs * {
   -webkit-user-select: text; user-select: text;
 }
+/* The opt-outs. Chrome inside the transcript that must not end up in a copy:
+   icon ligatures (their text is "refresh", "call_split", "content_copy"), the
+   per-message action buttons, code and table copy buttons, the jump pill, and
+   diff gutter glyphs. These need the #logs prefix: a bare `.msi` or
+   `.msg-actions` rule loses to `#logs *` on specificity (an id beats any
+   number of classes; there is no "directness" bonus in the cascade), which
+   is how "refresh call_split content_copy" was leaking into every selection
+   that crossed a message header until 2026-09-28. */
+#logs .msi, #logs .msg-actions, #logs .copy-btn, #logs button, #logs .dl .dg {
+  -webkit-user-select: none; user-select: none;
+}
+/* The rail and its edge chrome are never part of a transcript selection. */
+#tabrail, #railToggle, #railResize { -webkit-user-select: none; user-select: none; }
+/* While a drag-select is in flight (app.js sets body.log-drag on mousedown in
+   a log), the floating chrome gets out of the pointer's way. WebKit resolves a
+   drag over a user-select:none element to the FIRST selectable position in the
+   document, which turns a drag that grazes the jump pill or an action button
+   into a selection of the entire transcript. Hidden elements are skipped by
+   the hit test, so the pointer falls through to the text beneath instead. */
+body.log-drag #jumpBtn, body.log-drag .msg-actions, body.log-drag .copy-btn { visibility: hidden; }
 #logs { cursor: auto; }
 .msg .body { cursor: text; }
 ::selection { background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent); color: var(--text); }

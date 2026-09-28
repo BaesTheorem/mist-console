@@ -1,0 +1,85 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyobjc-framework-WebKit", "pyobjc-framework-Cocoa"]
+# ///
+"""Drive the live Console with REAL mouse events in the system WKWebView (the
+desktop app's engine) and report what the page did: the selection after a
+drag, the right-click menu's placement, the element under a point.
+
+    bin/console-mouse '[ACTION, ...]' [ZOOM] [STAGE_JS]
+
+Actions (coordinates are painted px from the top-left, i.e. what a mouse at
+that screen spot would send; multiply a getBoundingClientRect() value by the
+zoom to get here, since Apple's WKWebView reports rects in CSS px):
+    {"drag": [x1, y1, x2, y2]}   left-button drag, then prints the selection
+    {"rclick": [x, y]}           right-click, then prints #ctxMenu's rect
+    {"under": [x, y]}            elementFromPoint
+ZOOM defaults to data/textsize.json. STAGE_JS runs once after load (scroll a
+message into view, toggle a state). The window sits at x=-4000 with a
+Prohibited activation policy: nothing on screen, no focus steal.
+
+Gotchas learned 2026-09-28: synthetic NSEvents report e.buttons=0 (WebKit
+reads the hardware button state), so page code keyed on `buttons` will not
+see a drag from here; and each mousedown on a <summary> toggles it, so
+re-stage between actions that hit one.
+"""
+import sys, json, time, pathlib
+from Foundation import NSURL, NSURLRequest, NSRunLoop, NSDate, NSMakeRect, NSMakePoint
+from AppKit import (NSApplication, NSWindow, NSEvent, NSEventTypeLeftMouseDown, NSEventTypeLeftMouseDragged,
+                    NSEventTypeLeftMouseUp, NSEventTypeRightMouseDown, NSEventTypeRightMouseUp,
+                    NSApplicationActivationPolicyProhibited)
+from WebKit import WKWebView, WKWebViewConfiguration
+
+HERE = pathlib.Path(__file__).resolve().parent.parent
+ACTIONS = json.loads(sys.argv[1])
+def _zoom():
+    try: return json.loads((HERE / "data" / "textsize.json").read_text())["pct"] / 100
+    except Exception: return 1.0
+ZOOM = float(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else _zoom()
+W, H = 1100, 700
+
+app = NSApplication.sharedApplication()
+app.setActivationPolicy_(NSApplicationActivationPolicyProhibited)
+def pump(sec): NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(sec))
+def js(wv, code):
+    box = {}
+    def done(res, err): box["res"] = res; box["err"] = err
+    wv.evaluateJavaScript_completionHandler_(code, done)
+    while "res" not in box: pump(0.05)
+    if box["err"]: print("JS ERR", box["err"])
+    return box["res"]
+
+win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(NSMakeRect(-4000, 0, W, H), 1 | 2 | 8, 2, False)
+wv = WKWebView.alloc().initWithFrame_configuration_(NSMakeRect(0, 0, W, H), WKWebViewConfiguration.alloc().init())
+win.setContentView_(wv); win.orderBack_(None)
+wv.loadRequest_(NSURLRequest.requestWithURL_(NSURL.URLWithString_("http://127.0.0.1:5014/")))
+pump(5)
+js(wv, f"document.documentElement.style.zoom='{ZOOM}'"); pump(1)
+if len(sys.argv) > 3 and sys.argv[3]:
+    js(wv, sys.argv[3]); pump(0.5)
+
+def ev(kind, x, y):   # AppKit window coords are bottom-left
+    return NSEvent.mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
+        kind, NSMakePoint(x, H - y), 0, time.time(), win.windowNumber(), None, 0, 1, 1.0)
+
+SEL_JS = """(()=>{const s=getSelection();const t=s.toString();const nm=n=>n?(n.nodeType===3?'#text<'+n.parentElement.tagName+'.'+n.parentElement.className+'>':n.tagName+'.'+n.className):null;
+return JSON.stringify({len:t.length,head:t.slice(0,60),tail:t.slice(-60),anchor:nm(s.anchorNode),focus:nm(s.focusNode)})})()"""
+MENU_JS = """(()=>{const m=document.getElementById('ctxMenu');if(!m||m.hidden)return 'no menu';const r=m.getBoundingClientRect();
+return JSON.stringify({left:m.style.left,top:m.style.top,rect:[r.left,r.top,r.width,r.height]})})()"""
+for a in ACTIONS:
+    if "drag" in a:
+        x1, y1, x2, y2 = a["drag"]
+        wv.mouseDown_(ev(NSEventTypeLeftMouseDown, x1, y1)); pump(0.1)
+        for i in range(1, 11):
+            wv.mouseDragged_(ev(NSEventTypeLeftMouseDragged, x1 + (x2 - x1) * i / 10, y1 + (y2 - y1) * i / 10)); pump(0.03)
+        wv.mouseUp_(ev(NSEventTypeLeftMouseUp, x2, y2)); pump(0.3)
+        print(f"drag {a['drag']} ->", js(wv, SEL_JS))
+    elif "rclick" in a:
+        x, y = a["rclick"]
+        wv.rightMouseDown_(ev(NSEventTypeRightMouseDown, x, y)); pump(0.1)
+        wv.rightMouseUp_(ev(NSEventTypeRightMouseUp, x, y)); pump(0.3)
+        print(f"rclick {a['rclick']} -> menu", js(wv, MENU_JS), f"(painted top should be {y}: style.top x zoom)")
+    elif "under" in a:
+        x, y = a["under"]
+        print(f"under {a['under']} ->", js(wv, f"(()=>{{const e=document.elementFromPoint({x},{y});return e?e.tagName+'#'+e.id+'.'+e.className:null}})()"))

@@ -4967,23 +4967,28 @@ function openCtxMenu(x, y, items) {
     b.addEventListener("click", () => { hideCtxMenu(); it.run(); });
     ctxMenu.appendChild(b);
   });
-  // Two rulers are in play and they disagree whenever the text-size control is
-  // off 100%, because applyTextSize sets `zoom` on <html>. Event clientX/clientY,
-  // getBoundingClientRect() and innerWidth are all unzoomed viewport px; style.left
-  // and offsetWidth are zoomed CSS px. So: clamp in viewport px, then divide by
-  // the zoom on the way back out. Measuring the ratio off the element beats
-  // reading the zoom value, since it degrades to 1 when the property is unset.
-  // Reveal only after placing, or the menu flashes at the pre-clamp spot.
+  // Three rulers are in play whenever the text-size control is off 100%
+  // (applyTextSize sets `zoom` on <html>). Event clientX/clientY and
+  // innerWidth/innerHeight are painted px. style.left/top and offsetWidth are
+  // CSS px, painted at ze = the root zoom. getBoundingClientRect() is CSS px in
+  // Apple's shipped WKWebView but painted px in Chromium (zr, measured off the
+  // element so it degrades to 1). The old code divided by zr alone, which is 1
+  // in the desktop app, so the menu painted at 125% of the click position: a
+  // right-click 330px down the window opened the menu 80px below it. Clamp in
+  // painted px, convert to CSS px with ze, and take the origin offset out in
+  // the rect's own units. Reveal only after placing, or it flashes at 0,0.
   ctxMenu.style.visibility = "hidden";
   ctxMenu.style.left = "0px";
   ctxMenu.style.top = "0px";
   ctxMenu.hidden = false;
   const r = ctxMenu.getBoundingClientRect();
-  const z = (ctxMenu.offsetWidth && r.width / ctxMenu.offsetWidth) || 1;
-  const left = Math.max(4, Math.min(x, window.innerWidth - r.width - 4));
-  const top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4));
-  ctxMenu.style.left = (left - r.left) / z + "px";
-  ctxMenu.style.top = (top - r.top) / z + "px";
+  const zr = (ctxMenu.offsetWidth && r.width / ctxMenu.offsetWidth) || 1;
+  const ze = parseFloat(document.documentElement.style.zoom) || 1;
+  const w = ctxMenu.offsetWidth * ze, h = ctxMenu.offsetHeight * ze;
+  const left = Math.max(4, Math.min(x, window.innerWidth - w - 4));
+  const top = Math.max(4, Math.min(y, window.innerHeight - h - 4));
+  ctxMenu.style.left = (left / ze - r.left / zr) + "px";
+  ctxMenu.style.top = (top / ze - r.top / zr) + "px";
   ctxMenu.style.visibility = "";
 }
 
@@ -5063,6 +5068,63 @@ document.addEventListener("pointerdown", (e) => {
   if (!ctxMenu.hidden && !(e.target.closest && e.target.closest("#ctxMenu"))) hideCtxMenu();
 }, true);
 logs.addEventListener("scroll", hideCtxMenu, true);
+
+/* ---- drag-select guard ----
+   WebKit resolves a drag-select whose pointer is over something unselectable
+   (the rail, the composer, the top bar, an icon ligature, a button) to the
+   FIRST selectable position in the document, not the nearest one. In a
+   transcript that means a drag that drifts a few px past the text's left edge
+   onto the rail toggle, or below the log into the composer, snaps the
+   selection to the top of the chat: tens of thousands of characters, painted
+   as scattered highlight blocks. Probed in the shipped WKWebView 2026-09-28.
+   preventDefault on mousemove does not stop the native extension (it runs
+   after the listeners), so the correction happens on selectionchange, which
+   fires after WebKit has moved the focus: if the pointer is not on selectable
+   transcript text, extend the selection to the caret nearest the pointer with
+   the pointer clamped into the message column. mouseup gets one more pass a
+   tick later, because WebKit re-applies its own extent on release. */
+(function () {
+  let drag = null;   // { log, x, y } in painted px while a left-button drag from a log is live
+  const zoomOf = () => parseFloat(document.documentElement.style.zoom) || 1;
+  const rectScale = (el) => { const r = el.getBoundingClientRect(); return (el.offsetWidth && r.width / el.offsetWidth) || 1; };
+  const selectable = (n) => {
+    const e = n && (n.nodeType === 3 ? n.parentElement : n);
+    return !!e && getComputedStyle(e).webkitUserSelect !== "none";
+  };
+  function clampSelection() {
+    if (!drag) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+    const under = document.elementFromPoint(drag.x, drag.y);
+    if (under && drag.log.contains(under) && selectable(under)) return;   // on transcript text: WebKit is right
+    // Rects are CSS px (WKWebView) or painted px (Chromium); k takes either to painted.
+    const k = zoomOf() / rectScale(drag.log);
+    const lr = drag.log.getBoundingClientRect();
+    const col = (drag.log.querySelector(".msg") || drag.log).getBoundingClientRect();
+    const cx = Math.min(Math.max(drag.x, col.left * k + 2), col.right * k - 2);
+    const cy = Math.min(Math.max(drag.y, lr.top * k + 2), lr.bottom * k - 2);
+    const caret = document.caretRangeFromPoint ? document.caretRangeFromPoint(cx, cy) : null;
+    if (!caret || !drag.log.contains(caret.startContainer) || !selectable(caret.startContainer)) return;
+    if (sel.focusNode === caret.startContainer && sel.focusOffset === caret.startOffset) return;
+    sel.extend(caret.startContainer, caret.startOffset);
+  }
+  function endDrag() {
+    if (!drag) return;
+    document.body.classList.remove("log-drag");
+    setTimeout(() => { clampSelection(); drag = null; }, 0);
+  }
+  logs.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    const log = e.target.closest(".session-log");
+    if (!log) return;
+    drag = { log, x: e.clientX, y: e.clientY };
+    document.body.classList.add("log-drag");   // floating chrome steps out of the pointer's way (style.css)
+  });
+  window.addEventListener("mousemove", (e) => { if (drag) { drag.x = e.clientX; drag.y = e.clientY; } });
+  window.addEventListener("mouseup", endDrag, true);
+  window.addEventListener("blur", endDrag);
+  document.addEventListener("selectionchange", clampSelection);
+})();
 window.addEventListener("blur", hideCtxMenu);
 
 /* ---------- boot ---------- */
