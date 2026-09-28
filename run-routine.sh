@@ -149,14 +149,68 @@ TRANSIENT_RE='connection closed|failedtoopensocket|unable to connect|session lim
 # retrying the same model is pointless, and the fix is a different model.
 CREDITS_RE='out of usage credits|usage credits|credit balance is too low|insufficient credits'
 FELL_BACK=0
+LIMIT_WAITED=0
+NOTIFY="$HOME/Documents/Exobrain harness/mist-voice/bin/mist-notify"
+
+# Overall wall-clock budget for the claude runs (default 45 min). There was no
+# timeout at all, so a hung session held the routine, and its catch-up marker,
+# indefinitely. macOS has no timeout(1): each attempt runs in the background
+# under a watchdog that kills it when the budget is spent. A deliberate
+# session-limit wait (below) extends the deadline by the time slept.
+TIMEOUT_SEC="${ROUTINE_TIMEOUT_SEC:-2700}"
+DEADLINE=$(( $(date +%s) + TIMEOUT_SEC ))
+TIMED_OUT=0
+run_claude() {
+	local tmp pid wd remaining
+	remaining=$(( DEADLINE - $(date +%s) ))
+	if [ "$remaining" -le 0 ]; then
+		OUT="routine budget of ${TIMEOUT_SEC}s spent before this attempt"; RC=124; TIMED_OUT=1
+		return
+	fi
+	tmp="$(mktemp -t routine-out)"
+	"$CLAUDE" -p --dangerously-skip-permissions --permission-prompts none ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$PROMPT" >"$tmp" 2>&1 &
+	pid=$!
+	( sleep "$remaining"; kill -TERM "$pid" 2>/dev/null && { sleep 10; kill -KILL "$pid" 2>/dev/null; } ) &
+	wd=$!
+	wait "$pid"; RC=$?
+	pkill -P "$wd" 2>/dev/null; kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+	[ "$(date +%s)" -ge "$DEADLINE" ] && [ "$RC" -ne 0 ] && TIMED_OUT=1
+	OUT="$(cat "$tmp")"; rm -f "$tmp"
+}
+
+# Seconds until the reset time in a session-limit message ("resets 11:40pm
+# (America/Chicago)" or "resets 3pm"), plus a minute of slack. Empty when the
+# message carries no parseable time.
+limit_wait_seconds() {
+	local line hh mm ap tz target now
+	line="$(printf '%s' "$1" | grep -oiE 'resets [0-9]{1,2}(:[0-9]{2})? ?(am|pm)( \([A-Za-z_/]+\))?' | head -1)"
+	[ -n "$line" ] || return 0
+	hh="$(printf '%s' "$line" | sed -E 's/^[Rr]esets ([0-9]{1,2}).*/\1/')"
+	mm="$(printf '%s' "$line" | grep -oE ':[0-9]{2}' | tr -d ':')"; mm="${mm:-00}"
+	ap="$(printf '%s' "$line" | grep -oiE '(am|pm)' | head -1 | tr '[:lower:]' '[:upper:]')"
+	tz="$(printf '%s' "$line" | grep -oE '\([A-Za-z_/]+\)' | tr -d '()')"
+	# An empty TZ means UTC to date(1), so only override it when the message names a zone.
+	[ -n "$tz" ] || tz="${TZ:-$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')}"
+	now=$(date +%s)
+	target=$(TZ="$tz" date -j -f '%Y-%m-%d %I:%M:%S%p' "$(TZ="$tz" date +%Y-%m-%d) $hh:$mm:00$ap" +%s 2>/dev/null) || return 0
+	[ "$target" -le "$now" ] && target=$(( target + 86400 ))
+	echo $(( target - now + 60 ))
+}
+
 attempt=0
 while :; do
 	attempt=$((attempt + 1))
 	set +e
-	OUT="$("$CLAUDE" -p --dangerously-skip-permissions "${MODEL_ARGS[@]}" "$PROMPT" 2>&1)"
-	RC=$?
+	run_claude
 	set -e
 	printf '%s\n' "$OUT"
+
+	if [ "$TIMED_OUT" -eq 1 ]; then
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: killed after the ${TIMEOUT_SEC}s routine budget (rc=$RC); flagging."
+		[ -x "$NOTIFY" ] && "$NOTIFY" "$DIR hung and was killed after $((TIMEOUT_SEC / 60)) min." \
+			"MIST routine timeout" Basso "$HOME/Library/Logs/mist-routines.log" || true
+		exit 124
+	fi
 
 	# Checked BEFORE the rc=0 path on purpose: a session that lost its connectors
 	# still exits 0. Treat it exactly like a transient network failure, because
@@ -208,9 +262,32 @@ while :; do
 		# transient rather than broken, but it kills every routine until it
 		# clears, which is worth a banner.
 		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: out of usage credits on $MODEL with no fallback left (rc=$RC); incomplete rather than failed."
-		NOTIFY="$HOME/Documents/Exobrain harness/mist-voice/bin/mist-notify"
 		[ -x "$NOTIFY" ] && "$NOTIFY" \
 			"$DIR could not run: out of usage credits on $MODEL and on the fallback." \
+			"MIST routine blocked" Basso "https://claude.ai/settings/usage" || true
+		[ "${ROUTINE_SIGNAL_TRANSIENT:-0}" = "1" ] && exit 75
+		exit 0
+	fi
+
+	# Session limit: it resets at a stated clock time, often hours away, so the
+	# 30/60 s backoff below could never outlast it. Sleep until the reset (cap
+	# 3 h), once, then retry; past the cap, give up as transient. Banner once.
+	if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qi 'session limit'; then
+		WAIT_S="$(limit_wait_seconds "$OUT")"
+		CAP=$(( ${ROUTINE_LIMIT_WAIT_CAP_SEC:-10800} ))
+		if [ "$LIMIT_WAITED" -eq 0 ] && [ -n "$WAIT_S" ] && [ "$WAIT_S" -le "$CAP" ]; then
+			LIMIT_WAITED=1
+			UNTIL="$(date -r $(( $(date +%s) + WAIT_S )) '+%H:%M')"
+			echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: session limit hit; sleeping ${WAIT_S}s until $UNTIL, then retrying once."
+			[ -x "$NOTIFY" ] && "$NOTIFY" "$DIR hit the session limit; it will retry at $UNTIL." \
+				"MIST routine waiting" Purr "https://claude.ai/settings/usage" || true
+			sleep "$WAIT_S"
+			DEADLINE=$(( DEADLINE + WAIT_S ))
+			attempt=$((attempt - 1))
+			continue
+		fi
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: session limit hit (reset ${WAIT_S:-unparsed}s away, cap ${CAP}s, already waited: $LIMIT_WAITED); incomplete rather than failed."
+		[ "$LIMIT_WAITED" -eq 0 ] && [ -x "$NOTIFY" ] && "$NOTIFY" "$DIR could not run: session limit, reset too far off to wait for." \
 			"MIST routine blocked" Basso "https://claude.ai/settings/usage" || true
 		[ "${ROUTINE_SIGNAL_TRANSIENT:-0}" = "1" ] && exit 75
 		exit 0
