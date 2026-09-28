@@ -5148,6 +5148,12 @@ logs.addEventListener("scroll", hideCtxMenu, true);
     if (e.button !== 0) return;
     const log = e.target.closest(".session-log");
     if (!log) return;
+    // Only a press on selectable text starts a drag-select. A press on a
+    // control must not: body.log-drag hides the copy and action buttons, and a
+    // button hidden between mousedown and mouseup never receives the click.
+    // That killed every Copy button for the hour after the guard shipped.
+    if (!selectable(e.target)) return;
+    if (e.target.closest("button, a, input, textarea, select, summary, [contenteditable]")) return;
     drag = { log, x: e.clientX, y: e.clientY };
     document.body.classList.add("log-drag");   // floating chrome steps out of the pointer's way (style.css)
   });
