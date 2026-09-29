@@ -311,6 +311,13 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 /* pinned conversations get a tinted band + a teal edge so they read as a group */
 .tab.pinned { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container-low)); border-left-color: var(--teal); }
 .tab.pinned:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container-high)); }
+/* drag-to-pin: the pinned header lights up while an unpinned tab hovers the section,
+   and a rail with no pins yet grows a dashed strip to drop onto */
+.tabsection.pinned.drop-armed { color: var(--text);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 32%, var(--md-sys-color-surface-container-highest)); }
+.tabsection.drop-ghost { border-top: 1px dashed var(--teal); border-bottom: 1px dashed var(--teal); opacity: .85; }
+.tabsection.drop-ghost.drop-armed { opacity: 1; }
+body.tab-dragging .tab:not(.dragging):hover { background: inherit; color: inherit; border-left-color: transparent; }
 .tab.pinned.active { background: color-mix(in srgb, var(--md-sys-color-primary) 16%, var(--md-sys-color-surface-container-high)); }
 .tab.pinned .tpin { opacity: 1; }
 .tab.pinned .ttitle { color: var(--text); }

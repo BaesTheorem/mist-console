@@ -2824,7 +2824,7 @@ function renderTabs() {
     });
     t.addEventListener("contextmenu", (ev) => { ev.preventDefault(); startRename(s, t); });
     t.addEventListener("dblclick", (ev) => { ev.preventDefault(); startRename(s, t); });
-    if (s.pinned) wirePinDrag(t, s.id);   // pinned chats are drag-sortable
+    wireTabDrag(t, s);   // pinned: drag to reorder; unpinned: drag into the pinned section to pin
     frag.appendChild(t);
   });
   if (folded) {
@@ -2846,13 +2846,25 @@ function renderTabs() {
 }
 let _suppressTabClick = false;   // set after a drag so the trailing click doesn't switch tabs
 let _draggingPins = false;       // true mid-drag so the periodic refresh won't rebuild the rail
-// Pointer-based drag (HTML5 drag-and-drop doesn't fire in WKWebView). Smooth
-// reorder: the grabbed tab lifts and tracks the pointer 1:1 while the other pinned
-// tabs slide out of the way to open a gap; the new order commits on drop. Pinned
-// tabs are uniform height, so one `step` (top-to-top distance) drives the math.
-function wirePinDrag(t, id) {
+// Pointer-based drag (HTML5 drag-and-drop doesn't fire in WKWebView). One
+// gesture, two moves. A PINNED tab reorders within the pinned section: the
+// grabbed tab lifts and tracks the pointer 1:1 while the other pinned tabs slide
+// out of the way to open a gap, and the new order commits on drop. An UNPINNED
+// tab can be carried up into the pinned section: the section highlights, the
+// pinned tabs open a slot where it will land, and dropping there pins it at that
+// position (a rail with no pins yet grows a "drop to pin" strip at the top).
+// Pinned tabs are uniform height, so one `step` (top-to-top distance) drives the
+// math. Touch is left to the rail's own panning (#tabrail is touch-action: pan-y).
+function wireTabDrag(t, s) {
   t.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || e.target.closest(".tpin, .tclose, .trename")) return;
+    if (e.pointerType === "touch") return;
+    if (s.pinned) startPinReorder(e, t, s.id);
+    else startPinIn(e, t, s.id);
+  });
+}
+const DRAG_EASE = "transform .16s cubic-bezier(.2,.7,.3,1)";
+function startPinReorder(e, t, id) {
     const pins = [...tabsEl.querySelectorAll(".tab.pinned")];
     const from = pins.indexOf(t);
     if (from < 0 || pins.length < 2) return;   // nothing to reorder
@@ -2868,7 +2880,7 @@ function wirePinDrag(t, id) {
         let shift = 0;
         if (from < to && i > from && i <= to) shift = -step;       // dragging down
         else if (from > to && i >= to && i < from) shift = step;   // dragging up
-        p.style.transition = "transform .16s cubic-bezier(.2,.7,.3,1)";
+        p.style.transition = DRAG_EASE;
         p.style.transform = "translateY(" + shift + "px)";
       });
     };
@@ -2894,17 +2906,130 @@ function wirePinDrag(t, id) {
     const onUp = () => {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
       if (!dragging) { reset(); return; }
       _suppressTabClick = true;
       setTimeout(() => { _suppressTabClick = false; }, 90);   // backstop if no click fires
       // glide the lifted tab into its target slot, then commit + re-render
-      t.style.transition = "transform .16s cubic-bezier(.2,.7,.3,1)";
+      t.style.transition = DRAG_EASE;
       t.style.transform = "translateY(" + ((to - from) * step) + "px)";
       setTimeout(() => { reset(); if (to !== from) commitPinOrder(id, to); }, 165);
     };
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
-  });
+    document.addEventListener("pointercancel", onUp);
+}
+// Carry an unpinned tab into the pinned section. `to` is the slot it would take
+// among the pinned tabs (-1 while the pointer is outside the section). The tab
+// keeps its place in the flow and is moved with a transform, so the offset has
+// to include how far the rail scrolled since the grab; the rail autoscrolls
+// while the pointer sits near its top or bottom edge.
+function startPinIn(e, t, id) {
+    let sy = e.clientY;
+    const scroll0 = tabsEl.scrollTop;
+    const tabH = t.getBoundingClientRect().height;
+    let dragging = false, to = -1, ghost = null, raf = 0, lastY = sy;
+    const pins = () => [...tabsEl.querySelectorAll(".tab.pinned")];
+    const header = () => tabsEl.querySelector(".tabsection.pinned");
+    const zone = () => {
+      const h = header();
+      if (!h) return null;
+      const p = pins(), hr = h.getBoundingClientRect();
+      const r0 = p.length ? p[0].getBoundingClientRect() : null;
+      const step = p.length > 1 ? p[1].getBoundingClientRect().top - r0.top : (r0 ? r0.height : tabH);
+      const last = p.length ? p[p.length - 1].getBoundingClientRect() : hr;
+      return { h, n: p.length, top: hr.top - 6, bottom: last.bottom + step * 0.5,
+               first: r0 ? r0.top : hr.bottom, step };
+    };
+    const slide = () => {   // open one slot at `to`; pins at or past it move down a tab height
+      pins().forEach((p, i) => {
+        p.style.transition = DRAG_EASE;
+        p.style.transform = (to >= 0 && i >= to) ? "translateY(" + tabH + "px)" : "";
+      });
+    };
+    const place = () => {
+      t.style.transform = "translateY(" + ((lastY - sy) + (tabsEl.scrollTop - scroll0)) + "px)";
+    };
+    const arm = () => {
+      const z = zone();
+      if (!z) return;
+      let want = -1;
+      if (lastY >= z.top && lastY <= z.bottom) {
+        // no rows rendered (collapsed section, or the ghost strip): land at the end
+        want = z.n ? Math.max(0, Math.min(z.n, Math.round((lastY - z.first) / z.step))) : 1e9;
+      }
+      if (want !== to) { to = want; slide(); z.h.classList.toggle("drop-armed", to >= 0); }
+    };
+    const tick = () => {
+      if (!dragging) return;
+      const r = tabsEl.getBoundingClientRect();
+      if (lastY < r.top + 28) tabsEl.scrollTop -= 8;
+      else if (lastY > r.bottom - 28) tabsEl.scrollTop += 8;
+      place(); arm();
+      raf = requestAnimationFrame(tick);
+    };
+    const onMove = (ev) => {
+      lastY = ev.clientY;
+      if (!dragging) {
+        if (Math.abs(lastY - sy) < 5) return;
+        dragging = true; _draggingPins = true;
+        t.classList.add("dragging");
+        document.body.classList.add("tab-dragging");
+        t.style.transition = "none";
+        if (!header()) {   // nothing pinned yet: give the drop a place to land
+          const before = t.getBoundingClientRect().top;
+          ghost = el("div", "tabsection pinned drop-ghost", PIN_ICON + " drop here to pin");
+          tabsEl.prepend(ghost);
+          sy += t.getBoundingClientRect().top - before;   // the strip pushed the tab down; stay under the pointer
+        }
+        raf = requestAnimationFrame(tick);
+      }
+      place(); arm();
+    };
+    const reset = () => {
+      cancelAnimationFrame(raf);
+      pins().forEach((p) => { p.style.transition = ""; p.style.transform = ""; });
+      const h = header();
+      if (h) h.classList.remove("drop-armed");
+      if (ghost) { ghost.remove(); ghost = null; }
+      t.classList.remove("dragging");
+      t.style.transition = ""; t.style.transform = "";
+      document.body.classList.remove("tab-dragging");
+      _draggingPins = false;
+    };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      if (!dragging) { reset(); return; }
+      _suppressTabClick = true;
+      setTimeout(() => { _suppressTabClick = false; }, 90);
+      const dest = to;
+      reset();
+      if (dest >= 0) pinAt(id, dest);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+}
+// Pin a chat at a given slot among the pinned chats (drag-to-pin). The pin
+// button still appends (togglePin); this one takes the dropped position.
+async function pinAt(id, index) {
+  const s = sessions.get(id);
+  if (!s || s.pinned) return;
+  const order = sortedSessions().filter((x) => x.pinned).map((x) => x.id);
+  index = Math.max(0, Math.min(order.length, index));
+  order.splice(index, 0, id);
+  s.pinned = true;
+  order.forEach((sid, i) => { const x = sessions.get(sid); if (x) x.pinOrder = i; });
+  _tabsSig = "";
+  renderTabs();
+  try {
+    await fetch("/sessions/" + id + "/pin", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned: true, index }),
+    });
+  } catch (_) {}
 }
 function commitPinOrder(srcId, toIndex) {
   const src = sessions.get(srcId);

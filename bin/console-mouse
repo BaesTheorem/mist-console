@@ -17,6 +17,11 @@ zoom to get here, since Apple's WKWebView reports rects in CSS px):
     {"under": [x, y]}            elementFromPoint
     {"click": "css selector"}    scroll the first match into view, left-click its
                                  centre, then print its class list and text
+    {"dragto": [FROM, TO]}       press on FROM's centre, move in 24 steps to TO's
+                                 centre, release; FROM/TO are CSS selectors or
+                                 "js:<expression returning an element>". Prints
+                                 both elements' class lists (rail drag-to-pin).
+    {"eval": "js expression"}    print the expression's value (state checks)
 ZOOM defaults to data/textsize.json. STAGE_JS runs once after load (scroll a
 message into view, toggle a state). The window sits at x=-4000 with a
 Prohibited activation policy: nothing on screen, no focus steal.
@@ -24,7 +29,10 @@ Prohibited activation policy: nothing on screen, no focus steal.
 Gotchas learned 2026-09-28: synthetic NSEvents report e.buttons=0 (WebKit
 reads the hardware button state), so page code keyed on `buttons` will not
 see a drag from here; and each mousedown on a <summary> toggles it, so
-re-stage between actions that hit one.
+re-stage between actions that hit one. Also: a synthetic mouseUp never becomes a
+pointerup (pointerdown and pointermove do arrive), so pointer-event drags such as
+the rail's drag-to-pin lift and track here but never drop; test their drop logic
+by dispatching PointerEvents from an eval instead.
 """
 import sys, json, time, pathlib
 from Foundation import NSURL, NSURLRequest, NSRunLoop, NSDate, NSMakeRect, NSMakePoint
@@ -85,6 +93,24 @@ for a in ACTIONS:
     elif "under" in a:
         x, y = a["under"]
         print(f"under {a['under']} ->", js(wv, f"(()=>{{const e=document.elementFromPoint({x},{y});return e?e.tagName+'#'+e.id+'.'+e.className:null}})()"))
+    elif "eval" in a:
+        print(f"eval -> {js(wv, a['eval'])}")
+    elif "dragto" in a:
+        src, dst = a["dragto"]
+        def _find(spec):   # element lookup as a JS expression
+            return f"[...document.querySelectorAll({json.dumps(spec)})][0]" if not spec.startswith("js:") else f"({spec[3:]})"
+        js(wv, f"(()=>{{const e={_find(src)};if(e)e.scrollIntoView({{block:'center'}});}})()"); pump(0.3)
+        spots = js(wv, f"(()=>{{const a={_find(src)},b={_find(dst)};if(!a||!b)return null;"
+                       f"const r=a.getBoundingClientRect(),q=b.getBoundingClientRect();"
+                       f"return [(r.left+r.width/2)*{ZOOM},(r.top+r.height/2)*{ZOOM},(q.left+q.width/2)*{ZOOM},(q.top+q.height/2)*{ZOOM},a.className,b.className]}})()")
+        if not spots:
+            print(f"dragto {a['dragto']} -> element not found"); continue
+        x1, y1, x2, y2, ca, cb = spots
+        wv.mouseDown_(ev(NSEventTypeLeftMouseDown, x1, y1)); pump(0.1)
+        for i in range(1, 25):
+            wv.mouseDragged_(ev(NSEventTypeLeftMouseDragged, x1 + (x2 - x1) * i / 24, y1 + (y2 - y1) * i / 24)); pump(0.04)
+        wv.mouseUp_(ev(NSEventTypeLeftMouseUp, x2, y2)); pump(0.6)
+        print(f"dragto [{x1:.0f},{y1:.0f}] -> [{x2:.0f},{y2:.0f}] from <{ca}> to <{cb}>")
     elif "click" in a:
         sel = json.dumps(a["click"])
         # Rect is CSS px in Apple's WKWebView; the event wants painted px.

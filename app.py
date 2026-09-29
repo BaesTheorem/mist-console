@@ -1454,15 +1454,31 @@ def pin_session(sid):
     s = _sessions.get(sid)
     if not s:
         return jsonify({"ok": False}), 404
-    s.pinned = not s.pinned
-    if s.pinned:   # newly pinned -> drop to the end of the pinned list
-        # list() first: iterating the live dict while another request inserts a
-        # session raises RuntimeError and 500s the pin.
-        s.pin_order = max((x.pin_order for x in list(_sessions.values()) if x.pinned),
-                          default=-1) + 1
+    # No body: toggle (the pin button). {"pinned": true, "index": n}: pin at a
+    # slot among the pinned chats (drag-to-pin); the others renumber around it.
+    body = request.get_json(silent=True) or {}
+    # list() first: iterating the live dict while another request inserts a
+    # session raises RuntimeError and 500s the pin.
+    others = sorted((x for x in list(_sessions.values()) if x.pinned and x is not s),
+                    key=lambda x: x.pin_order)
+    if "pinned" in body:
+        s.pinned = bool(body["pinned"])
+        if s.pinned:
+            idx = body.get("index")
+            idx = len(others) if not isinstance(idx, int) else max(0, min(len(others), idx))
+            others.insert(idx, s)
+            for i, x in enumerate(others):
+                if x.pin_order != i:
+                    x.pin_order = i
+                    if x is not s:
+                        _touch(x)
+    else:
+        s.pinned = not s.pinned
+        if s.pinned:   # newly pinned -> drop to the end of the pinned list
+            s.pin_order = max((x.pin_order for x in others), default=-1) + 1
     _touch(s)
     _save_meta()
-    return jsonify({"ok": True, "pinned": s.pinned})
+    return jsonify({"ok": True, "pinned": s.pinned, "pin_order": s.pin_order})
 
 
 @app.route("/sessions/pin-order", methods=["POST"])
