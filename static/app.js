@@ -1727,6 +1727,41 @@ class Session {
     this.blocks = {};
     this.toolInputs = {};
   }
+  // Which model actually wrote this turn. When the API declines a request it
+  // re-runs it on a fallback model (Opus 4.8, as of 2026-09) and keeps routing
+  // there for a while; the CLI never says so. Each assistant event carries the
+  // serving model, and the first switched message carries a "fallback" block
+  // naming the model that declined. Compare against the chat's own choice (or
+  // the init's), tag the bubble, and light a top-bar badge until a turn comes
+  // back on the chosen model. Subagent messages are skipped: they run whatever
+  // the Agent call asked for.
+  noteServedModel(o) {
+    if (o.parent_tool_use_id) return;
+    const msg = o.message || {};
+    const served = msg.model;
+    if (!served || typeof served !== "string") return;
+    const fb = (msg.content || []).find((c) => c && c.type === "fallback");
+    const norm = (m) => (m || "").replace(/\[.*$/, "");
+    let expected = norm(this.model) || norm(lastInit && lastInit.model) || this.servedBase
+      || norm(fb && fb.from && fb.from.model);
+    if (!expected) { this.servedBase = norm(served); return; }
+    const isFallback = !!fb || norm(served) !== expected;
+    if (!isFallback) {
+      this.servedBase = this.servedBase || norm(served);
+      if (this.fallbackModel) { this.fallbackModel = ""; if (this.active) setFallbackBadge(""); }
+      return;
+    }
+    this.fallbackModel = norm(served);
+    if (this.active) setFallbackBadge(this.fallbackModel);
+    const wrap = this.current && this.current.body && this.current.body.parentNode;
+    const who = wrap && wrap.querySelector(".who");
+    if (!who || who.querySelector(".fb-tag")) return;
+    const declined = norm(fb && fb.from && fb.from.model) || expected;
+    const tag = el("span", "fb-tag", "served by " + esc(modelShort(served)));
+    tag.title = modelShort(declined) + " declined this request; the API re-ran it on "
+      + modelShort(served) + " and may keep routing there. A new chat resets it.";
+    who.appendChild(tag);
+  }
   // Called at each new content block. If you interjected mid-turn, seal the
   // current bubble and open a fresh one at the bottom so this turn's remaining
   // output lands below your message instead of above it. The pending
@@ -2006,6 +2041,7 @@ class Session {
       case "assistant":
         if (!this.current) this.beginAssistant(o.ts);
         this.finalizeToolInputs(o.message || {});
+        this.noteServedModel(o);
         break;
       case "user":
         this.applyToolResults(o.message || {});
@@ -2624,12 +2660,23 @@ function fillSettings(c) {
   setCount("#nSkills", c.skills);
   setCount("#nSlash", c.slash_commands);
 }
+function modelShort(id) {
+  const m = typeof MODELS !== "undefined" && MODELS.find((x) => x.id === id);
+  return (m && m.label) || (id || "").replace(/^claude-/, "");
+}
+function setFallbackBadge(model) {
+  const b = $("#fallback");
+  if (!b) return;
+  b.hidden = !model;
+  if (model) b.textContent = "fallback: " + modelShort(model);
+}
 function fillCaps(init, s) {
   // The badges show the chat's own selection first — the init event only says
   // what the last process launched with, which goes stale the moment you pick
   // a new model/mode (both apply at the next revive). Falling back to init
   // here is what made a selection look like it "reset" after a tab switch.
   $("#model").textContent = (s && s.model) || init.model || "model —";
+  setFallbackBadge(s && s.fallbackModel);
   $("#perm").textContent = "perm: " + ((s && s.permMode) || init.permissionMode || "—");
   // init carries no effort field, so the chat's own selection is the only source.
   $("#think").textContent = "think: " + effortLabel(s && s.effort);
@@ -3104,6 +3151,7 @@ function switchTo(id) {
   if (s.init) fillCaps(s.init, s);
   else {   // dormant chat, no init yet — still show its own selections
     $("#model").textContent = s.model || "model —";
+    setFallbackBadge(s.fallbackModel);
     $("#perm").textContent = "perm: " + (s.permMode || "—");
     $("#think").textContent = "think: " + effortLabel(s.effort);
   }
