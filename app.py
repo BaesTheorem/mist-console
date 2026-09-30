@@ -26,6 +26,7 @@ import time
 from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory
 
 import archive
+import bookmarks
 import embeds
 import quickaccess
 import remote
@@ -893,6 +894,7 @@ def close_session(sid):
     if s:
         s.stop()
         s.delete_data()
+        bookmarks.drop(sid)
         _deleted.append((sid, time.time()))
         _registry_publish({"type": "session_deleted", "id": sid})
     _save_meta()
@@ -1236,6 +1238,7 @@ def rewind_session(sid):
     ok, plan = s.rewind(seq)
     if not ok:
         return jsonify({"ok": False, "error": plan}), 409
+    bookmarks.prune(sid, seq)   # the marks on the discarded tail go with it
     _save_meta()
     text = (d.get("text") or "").strip()
     sent = s.send(text) if text else None
@@ -1850,118 +1853,71 @@ def usage():
                     "age_seconds": age})
 
 
-# ---- notes (app-wide persistent scratchpad) ---------------------------------
-# A single GLOBAL notes store (not per-chat), the source of truth on disk. Notes
-# persist across restarts, app close, force-quit, and app rebuilds — data/ is
-# gitignored runtime state that no deploy ever touches. A note is removed ONLY
-# when the user explicitly sends or deletes it; nothing else (closing a chat,
-# crashing, updating) can drop one. Writes are atomic (temp file + fsync +
-# os.replace), so an interrupted write leaves the previous good file intact and
-# never half-written.
-NOTES_PATH = os.path.join(DATA_DIR, "notes.json")
-_notes = []                       # list of {id, text, created, updated}
-_notes_counter = 0
-_notes_lock = threading.Lock()
+# ---- bookmarks + checklists (see bookmarks.py for the addressing rule) -------
+def _bookmark_view(b):
+    """A bookmark plus the live title of its chat, or None if the chat is gone."""
+    s = _sessions.get(b.get("sid"))
+    if not s:
+        return None
+    b = dict(b)
+    b["title"] = s.title or "New chat"
+    return b
 
 
-def _load_notes():
-    """Load the notes store at startup. Tolerates a missing/corrupt file by
-    starting empty rather than ever raising."""
-    global _notes, _notes_counter
+@app.route("/bookmarks")
+def bookmarks_all():
+    """Every bookmark across every chat, newest first, each with its chat's
+    title. Entries whose chat no longer exists are not shown."""
+    out = [v for v in (_bookmark_view(b) for b in bookmarks.list_all()) if v]
+    return jsonify({"bookmarks": out})
+
+
+@app.route("/sessions/<sid>/bookmarks")
+def bookmarks_for(sid):
+    if sid not in _sessions:
+        return jsonify({"error": "no session"}), 404
+    return jsonify({"bookmarks": [v for v in (_bookmark_view(b) for b in bookmarks.list_for(sid)) if v]})
+
+
+@app.route("/sessions/<sid>/bookmarks", methods=["POST"])
+def bookmark_add(sid):
+    """Body: {role: "user"|"mist", seq: int, preview: str}."""
+    if sid not in _sessions:
+        return jsonify({"ok": False, "error": "no session"}), 404
+    d = request.get_json(silent=True) or {}
     try:
-        with open(NOTES_PATH) as f:
-            data = json.load(f)
-    except Exception:
-        return
-    items = data.get("notes") if isinstance(data, dict) else data
-    if not isinstance(items, list):
-        return
-    _notes = [n for n in items if isinstance(n, dict) and n.get("text")]
-    for n in _notes:
-        try:
-            _notes_counter = max(_notes_counter, int(str(n.get("id", "n0")).lstrip("n")))
-        except ValueError:
-            pass
+        b = bookmarks.add(sid, d.get("role"), d.get("seq"), d.get("preview") or "")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "bookmark": _bookmark_view(b)})
 
 
-def _persist_notes():
-    """Atomically write the notes list to disk. Caller must hold _notes_lock."""
-    tmp = NOTES_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump({"notes": _notes}, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, NOTES_PATH)   # atomic on the same filesystem
+@app.route("/sessions/<sid>/bookmarks/<role>/<int:seq>", methods=["DELETE"])
+def bookmark_remove(sid, role, seq):
+    return jsonify({"ok": True, "removed": bookmarks.remove(sid, role, seq)})
 
 
-@app.route("/notes", methods=["GET"])
-def notes_get():
-    with _notes_lock:
-        return jsonify({"notes": list(_notes)})
+@app.route("/sessions/<sid>/checks")
+def checks_for(sid):
+    """Checkbox state the user has toggled in this chat's messages:
+    {checks: {"<role>:<seq>": {"<idx>": bool}}}."""
+    if sid not in _sessions:
+        return jsonify({"error": "no session"}), 404
+    return jsonify({"checks": bookmarks.checks_for(sid)})
 
 
-@app.route("/notes", methods=["POST"])
-def notes_create():
-    global _notes_counter
-    text = ((request.get_json(silent=True) or {}).get("text") or "").strip()
-    if not text:
-        return jsonify({"ok": False, "error": "empty"}), 400
-    with _notes_lock:
-        _notes_counter += 1
-        now = time.time()
-        note = {"id": f"n{_notes_counter}", "text": text, "created": now, "updated": now}
-        _notes.append(note)
-        _persist_notes()
-    return jsonify({"ok": True, "note": note})
-
-
-@app.route("/notes/<nid>", methods=["PUT"])
-def notes_update(nid):
-    text = ((request.get_json(silent=True) or {}).get("text") or "").strip()
-    with _notes_lock:
-        for n in _notes:
-            if n.get("id") == nid:
-                if not text:                  # cleared text = delete the note
-                    _notes.remove(n)
-                    _persist_notes()
-                    return jsonify({"ok": True, "deleted": True})
-                n["text"] = text
-                n["updated"] = time.time()
-                _persist_notes()
-                return jsonify({"ok": True, "note": n})
-    return jsonify({"ok": False, "error": "not found"}), 404
-
-
-@app.route("/notes/<nid>", methods=["DELETE"])
-def notes_delete(nid):
-    with _notes_lock:
-        before = len(_notes)
-        _notes[:] = [n for n in _notes if n.get("id") != nid]
-        if len(_notes) != before:
-            _persist_notes()
-    return jsonify({"ok": True})
-
-
-@app.route("/notes/import", methods=["POST"])
-def notes_import():
-    """One-time migration: absorb legacy per-chat localStorage notes into the
-    store. Idempotency is the caller's job (it only imports once)."""
-    global _notes_counter
-    texts = (request.get_json(silent=True) or {}).get("texts", [])
-    added = []
-    with _notes_lock:
-        for t in texts:
-            t = (t or "").strip()
-            if not t:
-                continue
-            _notes_counter += 1
-            now = time.time()
-            note = {"id": f"n{_notes_counter}", "text": t, "created": now, "updated": now}
-            _notes.append(note)
-            added.append(note)
-        if added:
-            _persist_notes()
-    return jsonify({"ok": True, "notes": added})
+@app.route("/sessions/<sid>/checks", methods=["POST"])
+def check_set(sid):
+    """Body: {role, seq, idx, checked}. idx is the box's position among the
+    checkboxes of that message, in document order."""
+    if sid not in _sessions:
+        return jsonify({"ok": False, "error": "no session"}), 404
+    d = request.get_json(silent=True) or {}
+    try:
+        boxes = bookmarks.set_check(sid, d.get("role"), d.get("seq"), d.get("idx"), d.get("checked"))
+    except (ValueError, TypeError) as e:
+        return jsonify({"ok": False, "error": str(e) or "bad request"}), 400
+    return jsonify({"ok": True, "boxes": boxes})
 
 
 import itertools
@@ -2571,7 +2527,6 @@ _bridge.on_activity = lambda s: _registry_publish({"type": "session_updated",
 _bridge.start_rate_poller(_sessions)   # keep the usage badges' % near-real-time (free read)
 
 _load_meta()
-_load_notes()
 _import_existing()
 quickaccess.load()
 remote.init()   # tunnel supervisor; a no-op until remote access + tunnel are on

@@ -110,6 +110,16 @@ The CLI's auto-compact does run headlessly, and `/compact` typed as input works 
 
 Hover a message (or right-click it) for **edit & resend**, **regenerate**, **branch from here** and **copy**. Edit and regenerate rewind THIS chat in place: the transcript is truncated at that user message and the next spawn resumes the CLI session truncated at the same point (`--resume-session-at <uuid of the last assistant entry before it> --fork-session`, confirmed against claude 2.1.278). The tail is gone for good, so the message shows a confirm strip first. Branch creates a new chat holding the conversation up to that point (through a MIST reply, or up to a user message with its text pre-filled in the composer) and leaves the original untouched; a branch at the end is a plain `--fork-session`. Limits, all reported inline: the CLI only addresses entries after the last compaction (a compaction summary is a valid anchor, so "regenerate the first reply after compacting" works), and the CLI's session file must still hold the anchor.
 
+### Bookmarks
+
+Hover a message (or right-click it) and hit the **bookmark** icon; the message gets a small marker in its header and lands in the **bookmarks** panel (the bookmark button in the composer, count badge included). The panel has two scopes: **this chat**, in transcript order, and **all chats**, newest first and grouped by chat. Clicking a bookmark jumps to the message, switching chats first if it lives elsewhere and waiting for that chat's replay to finish, then flashes it; the × on a row removes it.
+
+A message is addressed by `<role>:<seq>`: a user message's own `user_text` seq, or the seq of the first top-level `assistant` event rendered into a MIST bubble. That is the one address that survives everything a chat goes through (`bookmarks.py` explains why: the condenser keeps `user_text` verbatim and gives each `mist_msg` the seq of the assistant event it came from). A rewind prunes the bookmarks on the discarded tail; deleting a chat drops its bookmarks. Store: `data/bookmarks.json`. Routes: `GET /bookmarks`, `GET|POST /sessions/<id>/bookmarks`, `DELETE /sessions/<id>/bookmarks/<role>/<seq>`.
+
+### Task checkboxes
+
+Markdown task lines (`- [ ] item`, `- [x] done`) render as real checkboxes, and a tick is saved per message (`data/checks.json`, `GET|POST /sessions/<id>/checks`, keyed by the same address and the box's position among that message's checkboxes). Boxes the user never touched keep whatever the markdown said. `bridge.CHECKLIST_PROMPT` tells MIST when a list should be one: things for Alex to do (recommended edits, a to-do list, manual steps, items to review), never her own work, never pre-ticked. A message with no address yet (a reply still streaming) can't save a tick; the box reverts with a notice.
+
 ### Interrupt
 
 Press **Esc** (or click the send button, which becomes **stop** while a turn runs and the composer is empty) to cancel an in-flight turn. This sends an `interrupt` control_request. The process is **not** killed, so context is preserved and the next message just continues (unlike the old kill/restart).

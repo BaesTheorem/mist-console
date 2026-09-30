@@ -426,6 +426,11 @@ function _md(src) {
     .replace(/^### (.*)$/gm, "<h3>$1</h3>")
     .replace(/^## (.*)$/gm, "<h2>$1</h2>")
     .replace(/^# (.*)$/gm, "<h1>$1</h1>")
+    // GitHub task lines become real checkboxes; their state is saved per message
+    // (hydrateTaskBoxes / the change handler). Must run before the bullet rule.
+    .replace(/^\s*[-*] \[( |x|X)\] (.*)$/gm, (_, x, t) =>
+      '<li class="task"><label class="task-l"><input type="checkbox" class="tcb"' +
+      (x.trim() ? " checked" : "") + '><span class="tcb-box msi" aria-hidden="true"></span><span class="tcb-text">' + t + "</span></label></li>")
     .replace(/^\s*[-*] (.*)$/gm, "<li>$1</li>")
     // ordered lists: keep the author's numbering via the value attribute
     .replace(/^\s*(\d+)\. (.*)$/gm, '<li class="oli" value="$1">$2</li>')
@@ -761,6 +766,18 @@ function makeTs(ts) {
 /* ---------- session registry ---------- */
 const sessions = new Map();
 let activeId = null;
+
+/* ---------- bookmarks + task checkboxes ----------
+   A message's on-disk address is "<role>:<seq>": a user message's own user_text
+   seq, or the seq of the first top-level assistant event in a MIST bubble
+   (bookmarks.py explains why that is the one address that survives replay,
+   condensing and rewind). State lives in these registries, mirrored from the
+   server (data/bookmarks.json, data/checks.json), never in the DOM: a streaming
+   message's innerHTML is rebuilt on every delta. */
+const bookmarks = new Map();      // "sid|role:seq" -> bookmark record
+const taskChecks = new Map();     // "sid|role:seq" -> {idx: bool}, boxes the user toggled
+const checksLoaded = new Set();   // sids whose checks have been fetched
+function bmKey(sid, role, seq) { return sid + "|" + role + ":" + seq; }
 let SPINNER_VERBS = ["Thinking it through, properly"];
 let MODELS = [];
 let spinnerIdx = 0;
@@ -826,6 +843,7 @@ class Session {
     // resolve to nothing outstanding, so we skip live repaint/flash until the
     // replay_done sentinel, then reconcile once.
     this._replaying = true;
+    this._afterReplay = [];   // callbacks waiting for the transcript (jump to a bookmark)
     this.lastUsage = "";
     this.spinnerEl = null;
     this.es = null;
@@ -841,6 +859,7 @@ class Session {
   connect() {
     if (this.connected) return;   // idempotent — first view wins
     this.connected = true;
+    loadChecks(this.id);          // saved checkbox state, painted onto the replay as it lands
     if (this.es) this.es.close();
     this.es = new EventSource("/stream/" + this.id);
     this._openCount = 0;
@@ -919,6 +938,7 @@ class Session {
     const whoEl = el("div", "who");
     whoEl.appendChild(el("span", "whoname", esc(who)));
     whoEl.appendChild(makeTs(ts));
+    whoEl.appendChild(el("span", "msi bm-mark", "bookmark"));   // shown while bookmarked (.msg.bm)
     whoEl.appendChild(this.msgActions(wrap, role));
     wrap.appendChild(whoEl);
     const body = el("div", "body");
@@ -1002,8 +1022,8 @@ class Session {
      one alone. All three ride the CLI's truncating resume (see bridge.rewind). */
   msgActions(wrap, role) {
     const box = el("span", "msg-actions");
-    const add = (icon, title, run) => {
-      const b = el("button", null, '<span class="msi">' + icon + "</span>");
+    const add = (icon, title, run, cls) => {
+      const b = el("button", cls || null, '<span class="msi">' + icon + "</span>");
       b.type = "button";
       b.title = title;
       b.setAttribute("aria-label", title);
@@ -1014,8 +1034,76 @@ class Session {
     add("refresh", role === "user" ? "Resend (regenerate the reply)" : "Regenerate this reply",
         () => this.regenerate(wrap));
     add("call_split", "Branch from here (new chat, this one untouched)", () => this.branchAt(wrap));
+    add("bookmark", "Bookmark this message", () => this.toggleBookmark(wrap), "bm-btn");
     add("content_copy", "Copy message", () => copyText(messageSource(wrap)));
     return box;
+  }
+  /* ---- bookmarks (see the registries above Session) ---- */
+  // The on-disk address of a message, or null while a live bubble has not yet
+  // received its first assistant event (there is nothing to point at yet).
+  msgAddr(msg) {
+    const v = parseInt(msg && msg.dataset ? msg.dataset.seq : "", 10);
+    if (!Number.isFinite(v)) return null;
+    return { role: this.isUserMsg(msg) ? "user" : "mist", seq: v };
+  }
+  findMsg(role, seq) {
+    for (const m of this.logEl.querySelectorAll('.msg[data-seq="' + seq + '"]'))
+      if ((role === "user") === this.isUserMsg(m)) return m;
+    return null;
+  }
+  // Attach the address once it is known, then paint everything that hangs off it.
+  setMsgSeq(wrap, seq) {
+    if (seq == null || !wrap || wrap.dataset.seq != null) return;
+    wrap.dataset.seq = seq;
+    this.paintBookmark(wrap);
+    hydrateTaskBoxes(wrap, this);
+  }
+  isBookmarked(msg) {
+    const a = this.msgAddr(msg);
+    return !!(a && bookmarks.has(bmKey(this.id, a.role, a.seq)));
+  }
+  paintBookmark(wrap) {
+    const on = this.isBookmarked(wrap);
+    wrap.classList.toggle("bm", on);
+    const b = wrap.querySelector(".who .bm-btn");
+    if (!b) return;
+    b.querySelector(".msi").textContent = on ? "bookmark_added" : "bookmark";
+    b.title = on ? "Remove bookmark" : "Bookmark this message";
+    b.setAttribute("aria-label", b.title);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  paintAllBookmarks() {
+    this.logEl.querySelectorAll(".msg[data-seq]").forEach((m) => this.paintBookmark(m));
+  }
+  async toggleBookmark(wrap) {
+    const a = this.msgAddr(wrap);
+    if (!a) {
+      this.notice("This message has no position on disk yet, so it can't be bookmarked. Try again once the reply has begun.");
+      return;
+    }
+    const key = bmKey(this.id, a.role, a.seq);
+    try {
+      if (bookmarks.has(key)) {
+        const r = await fetch("/sessions/" + this.id + "/bookmarks/" + a.role + "/" + a.seq, { method: "DELETE" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        bookmarks.delete(key);
+      } else {
+        const preview = messageSource(wrap).replace(/\s+/g, " ").trim().slice(0, 240);
+        const r = await fetch("/sessions/" + this.id + "/bookmarks", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: a.role, seq: a.seq, preview }),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+        bookmarks.set(key, j.bookmark);
+      }
+    } catch (err) {
+      this.notice("Couldn't save the bookmark (" + (err && err.message || err) + ").", true);
+      return;
+    }
+    this.paintBookmark(wrap);
+    updateBookmarksBadge();
+    if (!$("#bmPanel").hidden) renderBookmarks();
   }
   isUserMsg(n) { return !!(n && n.classList && n.classList.contains("msg") && n.classList.contains("user")); }
   userMsgBefore(msg) {
@@ -1903,7 +1991,7 @@ class Session {
   }
 
   /* render a complete (imported) MIST message from normalized blocks */
-  renderHistMsg(blocks, ts) {
+  renderHistMsg(blocks, ts, seq) {
     const body = this.addMsg("mist", "MIST", tsMs(ts), this.takeAnchor());
     blocks.forEach((b) => {
       if (b.kind === "text") {
@@ -1932,6 +2020,7 @@ class Session {
         body.appendChild(card);
       }
     });
+    if (seq != null) this.setMsgSeq(body.parentNode, seq);   // condensed history keeps the assistant seq
     this.scroll();
   }
 
@@ -1944,7 +2033,7 @@ class Session {
         if (o.kind) ubody.parentNode.classList.add("ctl", "ctl-" + o.kind);   // pause / resume chip
         if (o.kind !== "pause") this.paused = false;
         // Position + raw text, for edit / regenerate / branch (see msgActions).
-        if (o.seq != null) ubody.parentNode.dataset.seq = o.seq;
+        if (o.seq != null) this.setMsgSeq(ubody.parentNode, o.seq);
         ubody.parentNode._utext = o.text || "";
         if (o.image) {
           const html = imageThumbHTML(o.image, "pasted image");
@@ -1989,7 +2078,7 @@ class Session {
         break;
       }
       case "mist_msg":
-        this.renderHistMsg(o.blocks || [], o.ts);
+        this.renderHistMsg(o.blocks || [], o.ts, o.seq);
         break;
       case "system":
         if (o.subtype === "init") {
@@ -2022,6 +2111,9 @@ class Session {
         // backend is dormant), so drop it. A genuinely-live task re-appears from
         // its next task_progress tick (handleBgSystem recreates on unknown id).
         this._replaying = false;
+        this.paintAllBookmarks();
+        hydrateTaskBoxes(this.logEl, this);
+        { const q = this._afterReplay; this._afterReplay = []; q.forEach((f) => { try { f(); } catch (_) {} }); }
         this.bgTasks.forEach((t, id) => { if (t.status === "running" || t.status === "killing") this.bgTasks.delete(id); });
         this.markStaleProgress();
         if (this.active) { renderBgMonitor(); applyStatus(this); renderProgDock(); }
@@ -2040,6 +2132,9 @@ class Session {
         break;
       case "assistant":
         if (!this.current) this.beginAssistant(o.ts);
+        // The bubble's address: its first top-level assistant event. Subagent
+        // messages are skipped, the condenser drops those (bookmarks.py).
+        if (o.seq != null && !o.parent_tool_use_id) this.setMsgSeq(this.current.body.parentNode, o.seq);
         this.finalizeToolInputs(o.message || {});
         this.noteServedModel(o);
         break;
@@ -3191,7 +3286,6 @@ async function closeSession(id) {
   await fetch("/sessions/" + id, { method: "DELETE" }).catch(() => {});
   s.destroy();
   sessions.delete(id);
-  // Notes are app-wide and persistent now — closing a chat must NOT touch them.
   if (activeId === id) {
     const next = sortedSessions()[0];
     if (next) switchTo(next.id);
@@ -3201,159 +3295,212 @@ async function closeSession(id) {
   }
 }
 
-/* ---------- notes (app-wide persistent scratchpad) ----------
-   The source of truth is the BACKEND (data/notes.json, written atomically), so
-   notes survive restart, app close, force-quit, and updates. Notes are global,
-   not per-chat. A note is removed ONLY when you send it to a chat or delete it.
-   We keep a local mirror (`notes`) for rendering and never blank it out on a
-   transient fetch error. */
-let notes = [];
-
-function updateNotesBadge() {
-  const n = notes.length;
-  const b = $("#scratchBtn");
-  // scratchBtn is an md-icon-button now — writing textContent would destroy its
-  // md-icon child, so the count rides a data attribute (CSS renders the badge).
-  if (b) { b.dataset.count = String(n); b.classList.toggle("has", n > 0); }
-  setCount("#nNotes", notes);
-}
-async function loadNotes() {
+/* ---------- bookmarks panel + task checkboxes ----------
+   The panel lists bookmarks for the active chat (in transcript order) or for
+   every chat (newest first, grouped by chat). Clicking one jumps to the
+   message, switching chats first if needed and waiting for that chat's replay. */
+let bmScope = "chat";   // "chat" | "all"
+async function loadBookmarks() {
   try {
-    const j = await (await fetch("/notes")).json();
-    if (j && Array.isArray(j.notes)) notes = j.notes;
-  } catch (_) { /* keep the last-known list; a blip must never hide notes */ }
-  renderNotes();
+    const j = await (await fetch("/bookmarks")).json();
+    bookmarks.clear();
+    (j.bookmarks || []).forEach((b) => bookmarks.set(bmKey(b.sid, b.role, b.seq), b));
+  } catch (_) { return; }   // keep the last-known set; a blip must never blank the list
+  sessions.forEach((x) => x.paintAllBookmarks());
+  updateBookmarksBadge();
+  if (!$("#bmPanel").hidden) renderBookmarks();
 }
-function renderNotes() {
-  const list = $("#notesList");
-  // Only rebuild the DOM list when the panel is open (so a badge refresh can't
-  // clobber an in-progress inline edit); the badge always updates.
-  if (list && !$("#notesPanel").hidden) {
-    list.innerHTML = "";
-    if (!notes.length) {
-      list.appendChild(el("div", "scratch-empty",
-        "No notes yet. Jot one below — it's saved to disk until you send or delete it."));
-    } else {
-      notes.forEach((note) => list.appendChild(noteRow(note)));
-    }
+async function loadChecks(sid) {
+  if (checksLoaded.has(sid)) return;
+  checksLoaded.add(sid);
+  try {
+    const j = await (await fetch("/sessions/" + sid + "/checks")).json();
+    Object.entries(j.checks || {}).forEach(([k, v]) => taskChecks.set(sid + "|" + k, v));
+  } catch (_) { checksLoaded.delete(sid); return; }
+  const x = sessions.get(sid);
+  if (x) hydrateTaskBoxes(x.logEl, x);
+}
+// Number the checkboxes of each message in document order and restore the
+// user's saved toggles. Safe to call repeatedly (the ticker does, mid-stream).
+function hydrateTaskBoxes(root, s) {
+  s = s || (activeId && sessions.get(activeId));
+  if (!s || !root) return;
+  const byMsg = new Map();
+  root.querySelectorAll(".tcb").forEach((box) => {
+    const m = box.closest(".msg");
+    if (!m) return;
+    if (!byMsg.has(m)) byMsg.set(m, []);
+    byMsg.get(m).push(box);
+  });
+  byMsg.forEach((boxes, m) => {
+    const a = s.msgAddr(m);
+    const saved = a ? taskChecks.get(bmKey(s.id, a.role, a.seq)) : null;
+    boxes.forEach((box, i) => {
+      box.dataset.ci = i;
+      if (saved && Object.prototype.hasOwnProperty.call(saved, String(i))) box.checked = !!saved[String(i)];
+    });
+  });
+}
+logs.addEventListener("change", (e) => {
+  const box = e.target && e.target.closest ? e.target.closest(".tcb") : null;
+  if (!box) return;
+  const s = activeId && sessions.get(activeId);
+  const msg = box.closest(".msg");
+  const a = s && msg ? s.msgAddr(msg) : null;
+  if (!a) {
+    box.checked = !box.checked;
+    if (s) s.notice("This checklist can't be saved yet: the message has no position on disk. Wait for the reply to finish.");
+    return;
   }
-  updateNotesBadge();
+  const idx = parseInt(box.dataset.ci, 10);
+  if (!Number.isFinite(idx)) return;
+  const key = bmKey(s.id, a.role, a.seq);
+  const saved = taskChecks.get(key) || {};
+  saved[String(idx)] = box.checked;
+  taskChecks.set(key, saved);
+  fetch("/sessions/" + s.id + "/checks", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role: a.role, seq: a.seq, idx, checked: box.checked }),
+  }).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); })
+    .catch((err) => s.notice("Couldn't save that checkbox (" + (err && err.message || err) + ").", true));
+});
+function updateBookmarksBadge() {
+  const b = $("#bookmarksBtn");
+  const n = bookmarks.size;
+  if (b) { b.dataset.count = String(n); b.classList.toggle("has", n > 0); }
+  const c = $("#nBookmarks");
+  if (c) c.textContent = "(" + n + ")";
 }
-function noteRow(note) {
-  const row = el("div", "scratch-item");
-  const txt = el("div", "scratch-text");
-  txt.textContent = note.text;                       // textContent — no HTML injection
-  txt.title = "Double-click to edit";
-  txt.addEventListener("dblclick", () => startNoteEdit(note, row));
-  row.appendChild(txt);
-  const edit = el("button", "scratch-edit-btn", "edit");
-  edit.title = "Edit this note";
-  edit.addEventListener("click", () => startNoteEdit(note, row));
-  const send = el("button", "scratch-send", "send");
-  send.title = "Send this note to the active chat now";
-  send.addEventListener("click", () => sendNote(note));
-  const del = el("button", "scratch-del", '<span class="msi">close</span>');
-  del.title = "Delete this note";
-  del.setAttribute("aria-label", "Delete this note");
-  del.addEventListener("click", () => deleteNote(note));
-  row.appendChild(edit);
-  row.appendChild(send);
-  row.appendChild(del);
+function bmWhen(b) {
+  const d = new Date((b.created || 0) * 1000);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return fmtClock(d.getTime());
+  return d.toLocaleDateString([], d.getFullYear() === now.getFullYear()
+    ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
+}
+function bmRow(b) {
+  const row = el("div", "bm-item");
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  const head = el("div", "bm-head");
+  head.appendChild(el("span", "bm-role", b.role === "user" ? "you" : "mist"));
+  head.appendChild(el("span", "bm-time", esc(bmWhen(b))));
+  const del = el("button", "bm-del", '<span class="msi">close</span>');
+  del.type = "button";
+  del.title = "Remove bookmark";
+  del.setAttribute("aria-label", "Remove bookmark");
+  del.addEventListener("click", (ev) => { ev.stopPropagation(); removeBookmark(b); });
+  head.appendChild(del);
+  row.appendChild(head);
+  row.appendChild(el("div", "bm-text", esc(b.preview || "(no text)")));
+  const go = () => jumpToBookmark(b);
+  row.addEventListener("click", go);
+  row.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); }
+  });
   return row;
 }
-function startNoteEdit(note, row) {
-  const span = row.querySelector(".scratch-text");
-  if (!span || row.querySelector(".scratch-edit")) return;   // already editing
-  const ta = el("textarea", "scratch-edit");
-  ta.value = note.text || "";
-  span.replaceWith(ta);
-  const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 240) + "px"; };
-  ta.focus(); ta.select(); grow();
-  let done = false;
-  const finish = async (save) => {
-    if (done) return;
-    done = true;
-    if (save) {
-      const v = ta.value.trim();
-      if (v && v !== note.text) await updateNote(note, v);
-      else if (!v) await deleteNote(note);   // cleared note = delete
+function renderBookmarks() {
+  const list = $("#bmList");
+  if (!list) return;
+  $("#bmScopeChat").classList.toggle("sel", bmScope === "chat");
+  $("#bmScopeAll").classList.toggle("sel", bmScope === "all");
+  $("#bmScopeChat").setAttribute("aria-selected", bmScope === "chat" ? "true" : "false");
+  $("#bmScopeAll").setAttribute("aria-selected", bmScope === "all" ? "true" : "false");
+  list.innerHTML = "";
+  let items = [...bookmarks.values()];
+  if (bmScope === "chat") {
+    items = items.filter((b) => b.sid === activeId).sort((a, b) => a.seq - b.seq);
+    if (!items.length) {
+      list.appendChild(el("div", "panel-empty",
+        "No bookmarks in this chat yet. Hover a message and click its bookmark icon, or right-click the message."));
+      return;
     }
-    renderNotes();
-  };
-  ta.addEventListener("input", grow);
-  ta.addEventListener("keydown", (e) => {
-    e.stopPropagation();
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finish(true); }
-    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
-  });
-  ta.addEventListener("blur", () => finish(true));
-}
-async function addNote() {
-  const ta = $("#notesInput");
-  const t = ta.value.trim();
-  if (!t) return;
-  ta.value = ""; ta.style.height = "auto";
-  try {
-    const j = await (await fetch("/notes", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: t }),
-    })).json();
-    if (j && j.ok && j.note) notes.push(j.note);
-    else ta.value = t;                       // server rejected — keep the text
-  } catch (_) {
-    ta.value = t;                            // failed to save — never silently drop it
+    items.forEach((b) => list.appendChild(bmRow(b)));
+    return;
   }
-  renderNotes();
-  ta.focus();
+  items.sort((a, b) => (b.created || 0) - (a.created || 0));
+  if (!items.length) {
+    list.appendChild(el("div", "panel-empty",
+      "No bookmarks anywhere yet. Hover a message in any chat and click its bookmark icon."));
+    return;
+  }
+  // Grouped by chat, chats ordered by their newest bookmark.
+  const groups = new Map();
+  items.forEach((b) => {
+    if (!groups.has(b.sid)) groups.set(b.sid, []);
+    groups.get(b.sid).push(b);
+  });
+  groups.forEach((arr, sid) => {
+    const live = sessions.get(sid);
+    const title = (live && live.title) || arr[0].title || "New chat";
+    const h = el("div", "bm-chat" + (sid === activeId ? " cur" : ""),
+      '<span class="msi">forum</span><span class="bm-chat-name">' + esc(title) + "</span>" +
+      '<span class="bm-chat-n">' + arr.length + "</span>");
+    h.title = "Open this chat";
+    h.addEventListener("click", () => { if (sid !== activeId) switchTo(sid); });
+    list.appendChild(h);
+    arr.sort((a, b) => a.seq - b.seq).forEach((b) => list.appendChild(bmRow(b)));
+  });
 }
-async function updateNote(note, text) {
+async function removeBookmark(b) {
   try {
-    const j = await (await fetch("/notes/" + note.id, {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    })).json();
-    if (j && j.ok) note.text = text;
-  } catch (_) { /* leave the note as-is on failure */ }
+    const r = await fetch("/sessions/" + b.sid + "/bookmarks/" + b.role + "/" + b.seq, { method: "DELETE" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+  } catch (err) {
+    const s = activeId && sessions.get(activeId);
+    if (s) s.notice("Couldn't remove the bookmark (" + (err && err.message || err) + ").", true);
+    return;
+  }
+  bookmarks.delete(bmKey(b.sid, b.role, b.seq));
+  const s = sessions.get(b.sid);
+  if (s) { const m = s.findMsg(b.role, b.seq); if (m) s.paintBookmark(m); }
+  updateBookmarksBadge();
+  renderBookmarks();
 }
-async function deleteNote(note) {
-  try { await fetch("/notes/" + note.id, { method: "DELETE" }); } catch (_) {}
-  notes = notes.filter((n) => n.id !== note.id);
-  renderNotes();
+function jumpToBookmark(b) {
+  const s = sessions.get(b.sid);
+  if (!s) {
+    const cur = activeId && sessions.get(activeId);
+    if (cur) cur.notice("That chat no longer exists.");
+    return;
+  }
+  if (activeId !== b.sid) switchTo(b.sid);
+  if (isTouch()) $("#bmPanel").hidden = true;   // on a phone the panel covers the chat
+  const go = () => {
+    const m = s.findMsg(b.role, b.seq);
+    if (!m) {
+      s.notice("That bookmarked message isn't in this chat any more (it was rewound away, or the chat was imported without positions).");
+      return;
+    }
+    s.stick = false;   // stop following the bottom; the reader is going back
+    m.scrollIntoView({ block: "center" });
+    // content-visibility: auto sizes off-screen messages lazily, so a second
+    // pass after layout lands exactly on the message.
+    requestAnimationFrame(() => { m.scrollIntoView({ block: "center" }); updateJumpBtn(); });
+    m.classList.remove("bm-flash");
+    void m.offsetWidth;
+    m.classList.add("bm-flash");
+    setTimeout(() => m.classList.remove("bm-flash"), 1800);
+  };
+  if (s._replaying) s._afterReplay.push(go); else go();
 }
-async function sendNote(note) {
-  // Route the note into the active chat (or a fresh one if none). CRUCIAL: only
-  // remove the note AFTER the send is confirmed delivered, so a failed send can
-  // never lose it.
-  let target = activeId && sessions.get(activeId);
-  if (!target) target = await createSession();
-  if (!target) return;
-  const ok = await target.send(note.text, undefined, false);   // note stays in the panel on failure — don't also copy it into the composer
-  if (ok) await deleteNote(note);
-  else renderNotes();   // delivery failed: the note stays put
-}
-function openNotes() {
+function openBookmarks() {
   $("#capPanel").hidden = true;
   closeAnchoredCards();
-  $("#notesPanel").hidden = false;
-  loadNotes();                               // re-read from disk every time it opens
-  $("#notesInput").focus();
+  $("#bmPanel").hidden = false;
+  renderBookmarks();      // instant, from the registry
+  loadBookmarks();        // then re-read from disk (titles may have changed)
 }
-function toggleNotes() {
-  const p = $("#notesPanel");
-  if (p.hidden) openNotes(); else p.hidden = true;
+function toggleBookmarks() {
+  const p = $("#bmPanel");
+  if (p.hidden) openBookmarks(); else p.hidden = true;
 }
-$("#scratchBtn").addEventListener("click", toggleNotes);
-$("#notesClose").addEventListener("click", () => { $("#notesPanel").hidden = true; });
-$("#notesAdd").addEventListener("click", addNote);
-$("#notesInput").addEventListener("input", () => {
-  const ta = $("#notesInput");
-  ta.style.height = "auto";
-  ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
-});
-$("#notesInput").addEventListener("keydown", (e) => {
-  e.stopPropagation();
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); }
-});
+$("#bookmarksBtn").addEventListener("click", toggleBookmarks);
+$("#bmClose").addEventListener("click", () => { $("#bmPanel").hidden = true; });
+$("#bmScopeChat").addEventListener("click", () => { bmScope = "chat"; renderBookmarks(); });
+$("#bmScopeAll").addEventListener("click", () => { bmScope = "all"; renderBookmarks(); });
+loadBookmarks();
 
 /* ---------- notification history (settings section) ----------
    mist-notify appends every banner it sends to a history JSONL; /notifications
@@ -3383,7 +3530,7 @@ function renderNotifs() {
   const list = $("#notifList");
   $("#nNotifs").textContent = notifs.length ? String(notifs.length) : "";
   if (!notifs.length) {
-    list.innerHTML = '<div class="scratch-empty">Nothing yet. When MIST pings you (briefings, watchers, errors), it lands here too.</div>';
+    list.innerHTML = '<div class="panel-empty">Nothing yet. When MIST pings you (briefings, watchers, errors), it lands here too.</div>';
     return;
   }
   list.innerHTML = notifs.map((n, i) => `
@@ -3422,37 +3569,6 @@ async function refreshNotifsSection() {
 }
 loadNotifs();                                  // paint the unread dot on boot
 setInterval(loadNotifs, 120000);               // keep it honest while open all day
-
-/* One-time migration: pull legacy per-chat localStorage notes into the store. */
-async function migrateLegacyNotes() {
-  if (localStorage.getItem("notesMigrated") === "1") return;
-  const keys = [];
-  const texts = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.indexOf("mist-scratch:") === 0) {
-        keys.push(k);
-        try { (JSON.parse(localStorage.getItem(k)) || []).forEach((t) => { if (t) texts.push(t); }); }
-        catch (_) {}
-      }
-    }
-  } catch (_) { return; }
-  if (texts.length) {
-    try {
-      const r = await fetch("/notes/import", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ texts }),
-      });
-      if (!r.ok) return;                     // retry next boot; don't clear the source
-    } catch (_) { return; }
-  }
-  // Only now is it safe to drop the legacy keys and mark migration done.
-  try {
-    keys.forEach((k) => localStorage.removeItem(k));
-    localStorage.setItem("notesMigrated", "1");
-  } catch (_) {}
-}
 
 /* periodically refresh tab status dots */
 setInterval(renderTabs, 1500);
@@ -3965,7 +4081,7 @@ $("#settingsBtn").addEventListener("click", () => {
   loadMcpPanel();                          // MCP servers: live status + reconnect/toggle/auth
   loadWatchers();                          // watchers section (launchd watch jobs)
   loadRemote();                            // phone section: remote access + pairing
-  $("#notesPanel").hidden = true;
+  $("#bmPanel").hidden = true;
   refreshNotifsSection();                  // notifications live as a settings section
   closeAnchoredCards();
   $("#capPanel").hidden = false;
@@ -4680,7 +4796,7 @@ function closeTopOverlay() {
   if (closeRailDrawer()) return true;   // phone: the chat drawer sits over everything
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
-  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#shareCard", "#capPanel", "#notesPanel"]) {
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#shareCard", "#capPanel", "#bmPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }
@@ -4963,6 +5079,10 @@ setInterval(() => {
   });
   if (anyDone) timerChime();
   if (document.querySelector("[data-rt], .rc-ing")) { paintTimers(); paintChecks(); }
+  // A streaming message is rebuilt from source on every delta; put the user's
+  // toggles back on its checkboxes within a second.
+  const act = activeId && sessions.get(activeId);
+  if (act && act.current && act.logEl.querySelector(".tcb")) hydrateTaskBoxes(act.logEl, act);
 }, 1000);
 function handleRecipeClick(e) {
   const reset = e.target.closest(".rt-reset");
@@ -5229,6 +5349,10 @@ logs.addEventListener("contextmenu", (e) => {
                  run: () => sess.regenerate(msg) });
     items.push({ icon: "call_split", label: "Branch from here", run: () => sess.branchAt(msg) });
     items.push("-");
+    const bm = sess.isBookmarked(msg);
+    items.push({ icon: bm ? "bookmark_remove" : "bookmark_add", label: bm ? "Remove bookmark" : "Bookmark message",
+                 run: () => sess.toggleBookmark(msg) });
+    items.push("-");
   }
   items.push({
     icon: "select_all", label: "Select message",
@@ -5326,7 +5450,7 @@ logs.addEventListener("scroll", hideCtxMenu, true);
     // button hidden between mousedown and mouseup never receives the click.
     // That killed every Copy button for the hour after the guard shipped.
     if (!selectable(e.target)) return;
-    if (e.target.closest("button, a, input, textarea, select, summary, [contenteditable]")) return;
+    if (e.target.closest("button, a, input, label, textarea, select, summary, [contenteditable]")) return;
     drag = { log, x: e.clientX, y: e.clientY };
     document.body.classList.add("log-drag");   // floating chrome steps out of the pointer's way (style.css)
   });
@@ -5365,8 +5489,6 @@ async function boot() {
     await createSession();
   }
   bootGreeting();
-  await migrateLegacyNotes();   // absorb any legacy per-chat notes, once
-  await loadNotes();            // hydrate the global notes + badge from disk
   if (!isTouch()) input.focus();   // a phone would open with the keyboard up
 }
 boot();

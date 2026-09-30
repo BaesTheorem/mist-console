@@ -203,14 +203,14 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
   </div>
 </aside>
 
-<aside id="notesPanel" hidden>
-  <div class="capHead">notes <span class="count" id="nNotes"></span><button id="notesClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
-  <div class="notes-hint">A persistent scratchpad, saved to disk. Notes stay here until you send or delete them. They survive a restart, closing the app, a force-quit, or an update.</div>
-  <div class="capBody" id="notesList"></div>
-  <div class="notes-foot">
-    <textarea id="notesInput" rows="1" placeholder="Jot something down…  (Enter to save · Shift+Enter for newline)"></textarea>
-    <button id="notesAdd">add</button>
+<aside id="bmPanel" hidden>
+  <div class="capHead">bookmarks <span class="count" id="nBookmarks"></span><button id="bmClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
+  <div class="bm-scope" role="tablist">
+    <button id="bmScopeChat" class="bm-tab sel" role="tab" aria-selected="true">this chat</button>
+    <button id="bmScopeAll" class="bm-tab" role="tab" aria-selected="false">all chats</button>
   </div>
+  <div class="notes-hint">Saved messages. Hover a message and click its bookmark icon, or right-click it. Click a bookmark to jump to the message.</div>
+  <div class="capBody" id="bmList"></div>
 </aside>
 
 <aside id="bgMonitor" hidden></aside>
@@ -223,7 +223,7 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
   <div id="slashMenu" hidden></div>
   <div id="attachPreview" hidden></div>
   <md-icon-button id="shareBtn" touch-target="none" title="Share this chat · publish a read-only snapshot at a private link" aria-label="Share this chat"><md-icon>share</md-icon></md-icon-button>
-  <md-icon-button id="scratchBtn" touch-target="none" title="Notes · a persistent scratchpad saved to disk" aria-label="Notes"><md-icon>edit_note</md-icon></md-icon-button>
+  <md-icon-button id="bookmarksBtn" touch-target="none" title="Bookmarks · saved messages, this chat and all chats" aria-label="Bookmarks"><md-icon>bookmarks</md-icon></md-icon-button>
   <md-icon-button id="fileBtn" touch-target="none" title="Attach a file (inserts its path)" aria-label="Attach a file"><md-icon>attach_file</md-icon></md-icon-button>
   <textarea id="input" rows="1" placeholder="Talk to MIST…  (Enter to send · Shift+Enter for newline)"></textarea>
   <md-icon-button id="pauseBtn" touch-target="none" data-mode="off" title="Pause gracefully  (Shift+Esc)" aria-label="Pause gracefully" hidden><md-icon id="pauseIcon">pause</md-icon></md-icon-button>

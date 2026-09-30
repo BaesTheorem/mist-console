@@ -483,6 +483,19 @@ RECIPE_PROMPT = (
     "the recipe. Use the block for any real recipe, not for one-line food tips."
 )
 
+# Markdown task lines (`- [ ] item`) render as real checkboxes whose state is
+# saved per message (static/app.js hydrateTaskBoxes, bookmarks.py). This prompt
+# tells the model when a list should be one.
+CHECKLIST_PROMPT = (
+    "This Console renders GitHub-style task lines (`- [ ] item`) as interactive "
+    "checkboxes whose ticked state is saved per message. Use them, judiciously, "
+    "whenever you hand Alex things for HIM to do: recommended edits to something, "
+    "a to-do list, steps he has to carry out by hand, items to review or decide. "
+    "Plain bullets stay plain for findings, options, explanations, or anything "
+    "that is not an action of his. Never use task lines for work you are doing "
+    "yourself, and never pre-tick a box (`- [x]`) unless the item is already done."
+)
+
 # The Console renders a real, in-place progress element (see /progress + the
 # `progress` event), so a long download/upload/install never looks like a hang.
 # Every session gets the `mist-progress` CLI on PATH plus the env vars it needs
@@ -721,7 +734,8 @@ class ClaudeSession:
         # (news-briefing podcast, note narration, the mist-terminal greeting)
         # are untouched, and we don't edit CLAUDE.md.
         cmd += ["--append-system-prompt",
-                NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT + "\n\n" + RECIPE_PROMPT]
+                NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT + "\n\n" + RECIPE_PROMPT
+                + "\n\n" + CHECKLIST_PROMPT]
         return cmd
 
     def ensure_started(self):

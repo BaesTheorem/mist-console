@@ -889,108 +889,6 @@ def usage():
                     "age_seconds": age})
 
 
-# ---- notes (app-wide persistent scratchpad) ---------------------------------
-NOTES_PATH = os.path.join(DATA_DIR, "notes.json")
-_notes = []
-_notes_counter = 0
-_notes_lock = threading.Lock()
-
-
-def _load_notes():
-    global _notes, _notes_counter
-    try:
-        with open(NOTES_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return
-    items = data.get("notes") if isinstance(data, dict) else data
-    if not isinstance(items, list):
-        return
-    _notes = [n for n in items if isinstance(n, dict) and n.get("text")]
-    for n in _notes:
-        try:
-            _notes_counter = max(_notes_counter, int(str(n.get("id", "n0")).lstrip("n")))
-        except ValueError:
-            pass
-
-
-def _persist_notes():
-    tmp = NOTES_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"notes": _notes}, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, NOTES_PATH)
-
-
-@app.route("/notes", methods=["GET"])
-def notes_get():
-    with _notes_lock:
-        return jsonify({"notes": list(_notes)})
-
-
-@app.route("/notes", methods=["POST"])
-def notes_create():
-    global _notes_counter
-    text = ((request.get_json(silent=True) or {}).get("text") or "").strip()
-    if not text:
-        return jsonify({"ok": False, "error": "empty"}), 400
-    with _notes_lock:
-        _notes_counter += 1
-        now = time.time()
-        note = {"id": f"n{_notes_counter}", "text": text, "created": now, "updated": now}
-        _notes.append(note)
-        _persist_notes()
-    return jsonify({"ok": True, "note": note})
-
-
-@app.route("/notes/<nid>", methods=["PUT"])
-def notes_update(nid):
-    text = ((request.get_json(silent=True) or {}).get("text") or "").strip()
-    with _notes_lock:
-        for n in _notes:
-            if n.get("id") == nid:
-                if not text:
-                    _notes.remove(n)
-                    _persist_notes()
-                    return jsonify({"ok": True, "deleted": True})
-                n["text"] = text
-                n["updated"] = time.time()
-                _persist_notes()
-                return jsonify({"ok": True, "note": n})
-    return jsonify({"ok": False, "error": "not found"}), 404
-
-
-@app.route("/notes/<nid>", methods=["DELETE"])
-def notes_delete(nid):
-    with _notes_lock:
-        before = len(_notes)
-        _notes[:] = [n for n in _notes if n.get("id") != nid]
-        if len(_notes) != before:
-            _persist_notes()
-    return jsonify({"ok": True})
-
-
-@app.route("/notes/import", methods=["POST"])
-def notes_import():
-    global _notes_counter
-    texts = (request.get_json(silent=True) or {}).get("texts", [])
-    added = []
-    with _notes_lock:
-        for t in texts:
-            t = (t or "").strip()
-            if not t:
-                continue
-            _notes_counter += 1
-            now = time.time()
-            note = {"id": f"n{_notes_counter}", "text": t, "created": now, "updated": now}
-            _notes.append(note)
-            added.append(note)
-        if added:
-            _persist_notes()
-    return jsonify({"ok": True, "notes": added})
-
-
 # ---- first-run setup wizard ---------------------------------------------------
 _setup_log = []          # streamed installer/login output, polled by the wizard
 _setup_log_lock = threading.Lock()
@@ -1290,7 +1188,6 @@ import bridge_win as _bridge
 _bridge.on_meta_dirty = _save_meta
 
 _load_meta()
-_load_notes()
 _import_existing()
 threading.Thread(target=_periodic_save, daemon=True).start()
 threading.Thread(target=_reaper, daemon=True).start()

@@ -690,64 +690,80 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   font-size: 11px; color: var(--dim); pointer-events: none; z-index: 5;
 }
 
-/* ---- notes panel (app-wide persistent scratchpad) ---- */
-#scratchBtn.has {
-  --md-icon-button-icon-color: var(--md-sys-color-primary);
-  --md-icon-button-hover-icon-color: var(--md-sys-color-primary);
+/* ---- bookmarks panel (saved messages, this chat / all chats) ---- */
+#bookmarksBtn.has {
+  --md-icon-button-icon-color: var(--teal);
 }
-#notesPanel {
+#bmPanel {
   position: fixed; top: var(--topbar-h, 0px); right: 0; width: 340px; height: calc(100% - var(--topbar-h, 0px));
   background: var(--md-sys-color-surface-container-low); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; z-index: 20;
 }
-#notesPanel[hidden] { display: none; }   /* id selector beats UA [hidden] */
-#notifList { max-height: 320px; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-.notif-row {
-  border: 1px solid var(--line-soft); padding: 7px 9px; cursor: pointer;
-  background: var(--md-sys-color-surface-container-lowest);
-}
-.notif-row:hover { border-color: var(--teal); }
-.notif-head { display: flex; gap: 8px; align-items: baseline; }
-.notif-title { font-size: 12px; font-weight: 600; flex: 1 1 auto;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.notif-time { color: var(--dim); font-size: 10px; flex: 0 0 auto; }
-.notif-body { color: var(--text); font-size: 11px; line-height: 1.45; margin-top: 2px;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.notif-sub { color: var(--dim); font-size: 10px; margin-top: 2px; }
-#settingsBtn.has-new {
-  --md-icon-button-icon-color: var(--md-sys-color-primary);
-  --md-icon-button-hover-icon-color: var(--md-sys-color-primary);
-}
+#bmPanel[hidden] { display: none; }   /* id selector beats UA [hidden] */
+#bmPanel .capHead .count { margin-left: 5px; color: var(--teal); font-weight: 400; }
 .notes-hint {
   color: var(--dim); font-size: 11px; line-height: 1.5;
   padding: 8px 12px; border-bottom: 1px solid var(--line-soft);
 }
-#notesList { flex: 1 1 auto; min-height: 0; overflow-y: auto;
-  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
-.notes-foot { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); }
-#notesInput {
-  flex: 1; resize: none; max-height: 160px; outline: none;
-  background: var(--md-sys-color-surface-container-lowest); color: var(--text); border: 1px solid var(--line);
-  font-family: var(--mono); font-size: 12px; padding: 7px 9px;
+#bmList { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 0 12px; }
+.panel-empty { color: var(--dim); font-size: 11px; padding: 8px 12px; line-height: 1.5; }
+.bm-scope { display: flex; border-bottom: 1px solid var(--line); }
+.bm-tab {
+  flex: 1; padding: 7px 0; border: 0; border-bottom: 2px solid transparent; background: none;
+  color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; cursor: pointer;
 }
-#notesInput:focus { border-color: var(--teal); }
-#notesAdd { color: var(--teal); padding: 0 16px; }
-.scratch-empty { color: var(--dim); font-size: 11px; padding: 2px 0; line-height: 1.5; }
-.scratch-item {
-  display: flex; align-items: flex-start; gap: 8px;
-  border: 1px solid var(--line); background: var(--md-sys-color-surface-container-lowest); padding: 6px 8px;
+.bm-tab:hover { color: var(--text); }
+.bm-tab.sel { color: var(--teal); border-bottom-color: var(--teal); }
+.bm-chat {
+  display: flex; align-items: center; gap: 6px; padding: 9px 12px 4px; margin-top: 6px;
+  color: var(--text); font-size: 12px; cursor: pointer;
 }
-.scratch-text { flex: 1; color: var(--text); font-size: 12px; line-height: 1.45;
-  white-space: pre-wrap; word-break: break-word; }
-.scratch-send { flex: 0 0 auto; color: var(--teal); padding: 3px 10px; font-size: 11px; }
-.scratch-edit-btn { flex: 0 0 auto; color: var(--dim); padding: 3px 8px; font-size: 11px; }
-.scratch-edit-btn:hover { color: var(--teal); }
-.scratch-edit { flex: 1; min-width: 0; resize: none; outline: none;
-  background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--teal); color: var(--text);
-  font-family: var(--mono); font-size: 12px; padding: 4px 6px; line-height: 1.45; }
-.scratch-del { flex: 0 0 auto; border: 0; background: none; color: var(--dim); font-size: 14px; padding: 0 2px; }
-.scratch-del:hover { color: var(--err); border-color: transparent; }
+.bm-chat:hover .bm-chat-name { color: var(--teal); }
+.bm-chat.cur .bm-chat-name { color: var(--teal); }
+.bm-chat .msi { font-size: 14px; color: var(--dim); }
+.bm-chat-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bm-chat-n { color: var(--dim); font-size: 10px; font-family: var(--mono); }
+.bm-item {
+  padding: 7px 12px; border-bottom: 1px solid var(--line-soft);
+  border-left: 2px solid transparent; cursor: pointer; user-select: none;
+  transition: background .12s ease, border-left-color .12s ease;
+}
+.bm-item:hover, .bm-item:focus-visible {
+  background: var(--md-sys-color-surface-container-high);
+  border-left-color: var(--teal); outline: none;
+}
+.bm-head { display: flex; align-items: baseline; gap: 8px; }
+.bm-role { color: var(--dim); font-size: 9px; letter-spacing: .5px; text-transform: uppercase; }
+.bm-time { color: var(--dim); font-size: 10px; flex: 1; }
+.bm-del { flex: 0 0 auto; border: 0; background: none; color: var(--dim); font-size: 14px; padding: 0 2px; }
+.bm-del:hover { color: var(--err); border-color: transparent; }
+.bm-del .msi { font-size: 13px; vertical-align: -2px; }
+.bm-text {
+  margin-top: 3px; font-size: 11px; color: var(--md-sys-color-on-surface-variant); line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* a bookmarked message carries a small marker in its header; the jump target flashes once */
+.msg .who .bm-mark { display: none; font-size: 13px; color: var(--teal); }
+.msg.bm .who .bm-mark { display: inline; }
+.msg.bm-flash { outline: 2px solid var(--teal); outline-offset: 6px; }
+.msg { transition: outline-color .9s ease .9s; }
+.msg:not(.bm-flash) { outline: 2px solid transparent; outline-offset: 6px; }
+@media (prefers-reduced-motion: reduce) { .msg { transition: none; } }
+/* ---- task checkboxes (markdown `- [ ]` lines, state saved per message) ----
+   The real <input> is kept for semantics, keyboard and the change event but
+   drawn at zero size: WebKit paints nothing for an appearance:none checkbox
+   here, so the visible box is a Material Symbols glyph that flips on :checked
+   (the same look as the recipe card's ingredient list). */
+.md li.task { list-style: none; margin-left: -1.15em; }
+.md .task-l { display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; }
+.md .tcb { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; pointer-events: none; }
+.md .tcb-box { font-size: 17px; line-height: 1; color: var(--dim); position: relative; top: 3px; flex: none; }
+.md .tcb-box::before { content: "check_box_outline_blank"; }
+.md .task-l:hover .tcb-box { color: var(--teal); }
+.md .tcb:checked + .tcb-box { color: var(--teal); }
+.md .tcb:checked + .tcb-box::before { content: "check_box"; }
+.md .tcb:focus-visible + .tcb-box { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
+.md li.task:has(.tcb:checked) .tcb-text { color: var(--dim); text-decoration: line-through; }
 
 /* scrollbars */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
@@ -1066,7 +1082,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
    no shadow — same language as the tool cards and badges. */
 #bgMonitor {
   /* anchored to the composer's real height; z below the side panels (20) so an
-     open settings/notes panel isn't floated over */
+     open settings/bookmarks panel isn't floated over */
   position: fixed; right: 16px; bottom: calc(var(--composer-h, 52px) + 30px); z-index: 15;
   width: min(400px, 42vw); max-height: 44vh; overflow-y: auto;
   background: var(--bg); border: 1px solid var(--teal);
@@ -1294,7 +1310,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 }
 /* composer: icons pin to the bottom as the textarea grows */
 #composer { align-items: flex-end; }
-#shareBtn, #scratchBtn, #fileBtn {
+#shareBtn, #bookmarksBtn, #fileBtn {
   --md-icon-button-state-layer-width: 38px;
   --md-icon-button-state-layer-height: 38px;
   --md-icon-button-icon-size: 20px;
@@ -1307,9 +1323,9 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   --md-filled-icon-button-container-height: 38px;
   --md-filled-icon-button-icon-size: 20px;
 }
-/* notes count rides the composer note icon as a tiny MD badge */
-#scratchBtn { position: relative; }
-#scratchBtn::after {
+/* bookmark count rides the composer bookmark icon as a tiny MD badge */
+#bookmarksBtn { position: relative; }
+#bookmarksBtn::after {
   content: attr(data-count);
   position: absolute; top: -2px; right: -4px;
   min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box;
@@ -1319,7 +1335,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   border-radius: var(--md-sys-shape-corner-full);
   pointer-events: none;
 }
-#scratchBtn:not([data-count])::after, #scratchBtn[data-count="0"]::after { display: none; }
+#bookmarksBtn:not([data-count])::after, #bookmarksBtn[data-count="0"]::after { display: none; }
 /* icon spans inside legacy buttons/labels */
 button .msi { font-size: 14px; vertical-align: -3px; }
 #newTab .msi, #jumpBtn .msi { font-size: 14px; vertical-align: -3px; margin-right: 2px; }
@@ -1327,7 +1343,6 @@ button .msi { font-size: 14px; vertical-align: -3px; }
 .capHead .xclose { padding: 2px 4px; }
 .capHead .xclose .msi { font-size: 16px; vertical-align: -3px; }
 .tab .tclose .msi { font-size: 13px; vertical-align: -2px; }
-.scratch-del .msi { font-size: 13px; vertical-align: -2px; }
 .attach-x .msi { font-size: 13px; vertical-align: -2px; }
 .perm-icon.msi { font-size: 15px; vertical-align: -3px; margin-right: 4px; }
 .todo .tg { width: 16px; flex: 0 0 16px; }
@@ -1506,7 +1521,7 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
   #shareBtn { display: none; }
   #input { font-size: 16px; padding: 8px 10px; }   /* under 16px iOS zooms the page into the field */
   #usage { display: none; }
-  #capPanel, #notesPanel { width: 100%; border-left: 0; }
+  #capPanel, #bmPanel { width: 100%; border-left: 0; }
   #modelCard, #permCard, #thinkCard, #ctxCard {
     left: 8px !important; right: 8px !important; width: auto !important;
     max-height: calc(70vh / var(--zoom, 1)); overflow-y: auto;
