@@ -195,6 +195,419 @@ function imageThumbHTML(path, alt) {
              'title="Save to Downloads" aria-label="Save to Downloads">' + DL + '</button>' +
          '</span>';
 }
+/* ---------- gapless loop player ----------
+   `![title](/path/song.mp3#loop)` loops the whole decoded file.
+   `![title](/path/song.mp3#loop=START,END)` loops the window [START, END) in
+   seconds and starts at START. The window form is for MP3: the decoder adds
+   encoder delay and padding at the file edges, so the author puts periodic
+   pre-roll and post-roll around an exact period and the window picks an
+   interior period, where the decoder offset does not matter.
+   Playback is Web Audio, not <audio loop>: the element restarts with a gap and
+   is not gapless for MP3. An AudioBufferSourceNode with loop=true wraps inside
+   the audio thread, sample for sample. The file is decoded at its own sample
+   rate (read from the WAV/FLAC/MP3 header), so no resampler touches the file
+   edges and the loop points land on real samples.
+   State lives in loopPlayers, keyed by src + window, never in the DOM: the
+   streaming renderer rebuilds a bubble every 150 ms and history replays render
+   it again, so md() draws each player from its registry state, and the paint
+   loop keeps fresh elements current while one plays. Every transport action
+   (start, resume, seek, pause, stop) ramps a per-segment GainNode over
+   LOOP_RAMP so it cannot click; the wrap is never ramped, it is the seamless
+   part. */
+const LOOP_FRAG_RE = /#loop(?:=\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\s*)?\s*$/i;
+const LOOP_RAMP = 0.03;                       // s, linear, on every transport action
+const LOOP_MAX_BYTES = 64 * 1024 * 1024;      // bigger files use the plain player (the embeds.py snapshot cap)
+const LOOP_CACHE_MAX = 4;                     // decoded files kept for instant replays
+const LOOP_DL_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+  '<path fill="currentColor" d="M11 3h2v8.2l3.1-3.1 1.4 1.4L12 15 6.5 9.5l1.4-1.4L11 11.2V3zM5 18h14v2H5z"/></svg>';
+const loopPlayers = new Map();   // id -> player state
+const loopIds = new Map();       // "src|window" -> id; the DOM carries only the id
+// One AudioContext for every player, one output gain, and decoded buffers by src.
+const loopAudio = { ctx: null, out: null, bufs: new Map() };
+let loopRaf = 0, loopPaintAt = 0, loopPressAt = 0;
+
+// {path, start, end} when the embed path ends in a loop fragment, else null.
+// end is null for the whole-file form.
+function loopFragment(path) {
+  const m = String(path).match(LOOP_FRAG_RE);
+  if (!m) return null;
+  return { path: String(path).slice(0, m.index),
+           start: m[1] == null ? 0 : parseFloat(m[1]),
+           end: m[2] == null ? null : parseFloat(m[2]) };
+}
+function loopState(src, lp, alt) {
+  const key = src + "|" + (lp.end == null ? "all" : lp.start + "," + lp.end);
+  let id = loopIds.get(key);
+  if (id == null) {
+    id = loopIds.size + 1;
+    loopIds.set(key, id);
+    const bad = lp.end != null && !(lp.end > lp.start);
+    loopPlayers.set(id, {
+      id, src, a: lp.start, b: lp.end,
+      len: lp.end != null && !bad ? lp.end - lp.start : 0,   // loop length in s; 0 until decoded
+      name: String(alt || "").replace(/<[^>]*>/g, "").trim(), // md() already escaped it
+      status: bad ? "error" : "idle",   // idle | loading | playing | paused | error | fallback
+      msg: bad ? "END must be greater than START" : "",
+      pos: 0, wraps: 0,                 // position inside the window, completed wraps
+      seg: null,                        // the sounding {src, g, t0, pos0, wraps0}
+      want: false, tok: 0,              // play intent; tok voids a stale async start
+      scrub: null, seekFrac: null, missing: 0,
+    });
+  }
+  return loopPlayers.get(id);
+}
+function loopPlayingCount() {
+  let n = 0;
+  loopPlayers.forEach((st) => { if (st.status === "playing") n++; });
+  return n;
+}
+function loopNotify() { document.dispatchEvent(new Event("mist-loop")); }   // the crystal recounts
+// Context time of the sample that is audible now.
+function loopClock() {
+  const c = loopAudio.ctx;
+  return c ? c.currentTime - (c.outputLatency || 0) : 0;
+}
+function loopWhere(st) {
+  if (!st.seg || !st.len) return { pos: st.pos, wraps: st.wraps };
+  const t = st.seg.pos0 + Math.max(0, loopClock() - st.seg.t0);
+  return { pos: t % st.len, wraps: st.seg.wraps0 + Math.floor(t / st.len) };
+}
+function loopFmt(sec, tenths) {
+  const t = Math.floor(Math.max(0, sec) * 10);
+  const m = Math.floor(t / 600), s = Math.floor((t % 600) / 10);
+  return m + ":" + String(s).padStart(2, "0") + (tenths ? "." + (t % 10) : "");
+}
+function loopView(st) {
+  const w = loopWhere(st), known = st.len > 0, tenths = !known || st.len < 60;
+  const frac = st.scrub != null ? st.scrub : known ? w.pos / st.len : (st.seekFrac || 0);
+  const v = { cls: "", icon: "play_arrow", label: "Play loop", pct: Math.min(100, Math.max(0, frac * 100)),
+              time: loopFmt(known ? frac * st.len : 0, tenths) + " / " + (known ? loopFmt(st.len, tenths) : "-:--"),
+              pass: "pass " + (w.wraps + 1) };
+  if (st.status === "playing") { v.cls = " is-playing"; v.icon = "pause"; v.label = "Pause loop"; }
+  else if (st.status === "loading") { v.cls = " is-loading"; v.icon = "hourglass_empty"; v.label = "Loading the loop, click to cancel"; v.time = st.msg; }
+  else if (st.status === "error") { v.cls = " is-error"; v.icon = "error"; v.label = st.msg + ". Click to try again"; v.time = st.msg; }
+  return v;
+}
+function loopHTML(st) {
+  const src = esc(st.src);
+  const dl = '<button class="genimg-dl genaudio-dl" type="button" data-dl="' + src + '" ' +
+               'title="Save to Downloads" aria-label="Save to Downloads">' + LOOP_DL_SVG + '</button>';
+  if (st.status === "fallback") {
+    return '<span class="genaudio-wrap genloop-wrap is-fallback" data-loop="' + st.id + '">' +
+             '<span class="msi genloop-warn" title="' + esc(st.msg) + '">sync_problem</span>' +
+             '<audio class="genaudio" controls loop preload="metadata" src="' + src + '"></audio>' + dl +
+           '</span>';
+  }
+  const v = loopView(st), p = v.pct.toFixed(2);
+  return '<span class="genaudio-wrap genloop-wrap' + v.cls + '" data-loop="' + st.id + '">' +
+           '<span class="genloop" role="group" aria-label="' + (st.name ? st.name + ", " : "") + 'gapless loop">' +
+             '<button class="genloop-btn" type="button" title="' + esc(v.label) + '" aria-label="' + esc(v.label) + '">' +
+               '<span class="msi">' + v.icon + '</span></button>' +
+             '<span class="msi genloop-glyph" aria-hidden="true">repeat</span>' +
+             '<input class="genloop-seek" type="range" min="0" max="100" step="any" value="' + p + '" style="--p:' + p + '%" ' +
+               'aria-label="Position in the loop"' + (st.status === "error" ? " disabled" : "") + '>' +
+             '<span class="genloop-time">' + esc(v.time) + '</span>' +
+             '<span class="genloop-pass" title="Times through the loop. It goes up by one at each wrap.">' + v.pass + '</span>' +
+           '</span>' + dl +
+         '</span>';
+}
+// Bring every rendered player in the document up to date with its state.
+// Returns the set of states that have an element (the tick's orphan check).
+function loopPaint() {
+  const seen = new Set();
+  document.querySelectorAll(".genloop-wrap[data-loop]").forEach((w) => {
+    const st = loopPlayers.get(+w.dataset.loop);
+    if (!st) return;
+    seen.add(st);
+    const fb = st.status === "fallback";
+    if (fb !== w.classList.contains("is-fallback")) { w.outerHTML = loopHTML(st); return; }
+    if (fb) return;
+    const v = loopView(st), p = v.pct.toFixed(2);
+    const cls = "genaudio-wrap genloop-wrap" + v.cls;
+    if (w.className !== cls) w.className = cls;
+    const btn = w.querySelector(".genloop-btn");
+    if (btn) {
+      if (btn.firstElementChild && btn.firstElementChild.textContent !== v.icon) btn.firstElementChild.textContent = v.icon;
+      if (btn.title !== v.label) { btn.title = v.label; btn.setAttribute("aria-label", v.label); }
+    }
+    const seek = w.querySelector(".genloop-seek");
+    if (seek) {
+      if (st.scrub == null && seek.value !== p) seek.value = p;
+      seek.style.setProperty("--p", p + "%");
+      seek.disabled = st.status === "error";
+    }
+    const tm = w.querySelector(".genloop-time");
+    if (tm && tm.textContent !== v.time) tm.textContent = v.time;
+    const ps = w.querySelector(".genloop-pass");
+    if (ps && ps.textContent !== v.pass) ps.textContent = v.pass;
+  });
+  return seen;
+}
+function loopTick(ts) {
+  loopRaf = 0;
+  // Reduced motion: the playhead steps four times a second instead of gliding.
+  const calm = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!calm || ts - loopPaintAt >= 250) {
+    loopPaintAt = ts;
+    const seen = loopPaint();
+    // A playing loop always has a control on screen, or it stops: a rewind or a
+    // closed chat would otherwise leave sound running with nothing to click.
+    loopPlayers.forEach((st) => {
+      if (st.status !== "playing") return;
+      if (seen.has(st)) st.missing = 0;
+      else if (!st.missing) st.missing = ts;
+      else if (ts - st.missing > 2000) loopPause(st);
+    });
+  }
+  loopKick();
+}
+function loopKick() {
+  if (loopRaf) return;
+  for (const st of loopPlayers.values()) {
+    if (st.status === "playing" || st.status === "loading") { loopRaf = requestAnimationFrame(loopTick); return; }
+  }
+}
+// The one AudioContext, made or resumed synchronously inside the click: WebKit
+// only lets a user gesture start audio. Everything after the first await is
+// allowed to run late because the context is already running by then.
+function loopContext() {
+  if (!loopAudio.ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    let ctx = null;
+    try { ctx = new AC({ latencyHint: "playback" }); }
+    catch (_) { try { ctx = new AC(); } catch (_) { return null; } }
+    loopAudio.ctx = ctx;
+    loopAudio.out = ctx.createGain();
+    loopAudio.out.connect(ctx.destination);
+  }
+  const ctx = loopAudio.ctx;
+  if (ctx.state !== "running") {
+    try { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } catch (_) {}
+  }
+  return ctx;
+}
+// Sample rate from the file header (WAV, FLAC, MP3), 0 when unknown.
+function loopNativeRate(buf) {
+  const b = new Uint8Array(buf);
+  const str = (o, n) => String.fromCharCode.apply(null, b.subarray(o, o + n));
+  const u32 = (o) => (b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24) >>> 0;
+  const ok = (r) => (r >= 8000 && r <= 384000 ? r : 0);
+  if (b.length < 16) return 0;
+  if ((str(0, 4) === "RIFF" || str(0, 4) === "RF64") && str(8, 4) === "WAVE") {
+    for (let o = 12; o + 16 <= b.length; ) {
+      const size = u32(o + 4);
+      if (str(o, 4) === "fmt ") return ok(u32(o + 12));
+      o += 8 + size + (size & 1);
+    }
+    return 0;
+  }
+  if (str(0, 4) === "fLaC" && b.length > 21) return ok(b[18] << 12 | b[19] << 4 | b[20] >> 4);   // STREAMINFO
+  let o = 0;
+  if (str(0, 3) === "ID3") {
+    o = 10 + ((b[6] & 127) << 21 | (b[7] & 127) << 14 | (b[8] & 127) << 7 | (b[9] & 127)) + (b[5] & 16 ? 10 : 0);
+  }
+  const RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+  for (const end = Math.min(b.length - 4, o + 65536); o < end; o++) {
+    if (b[o] !== 0xff || (b[o + 1] & 0xe0) !== 0xe0) continue;
+    const ver = (b[o + 1] >> 3) & 3, layer = (b[o + 1] >> 1) & 3, br = b[o + 2] >> 4, sr = (b[o + 2] >> 2) & 3;
+    if (ver === 1 || layer === 0 || br === 0 || br === 15 || sr === 3) continue;
+    return RATES[ver][sr];
+  }
+  return 0;
+}
+// Decoded AudioBuffer for a src, shared by every window on that file. A failed
+// load leaves the cache, so a later click tries again.
+function loopBuffer(src) {
+  const bufs = loopAudio.bufs;
+  let p = bufs.get(src);
+  if (p) { bufs.delete(src); bufs.set(src, p); return p; }   // most recently used goes last
+  p = (async () => {
+    let r;
+    try { r = await fetch(src); } catch (_) { throw { retry: true, msg: "could not load the file" }; }
+    if (!r.ok) throw { retry: true, msg: r.status === 404 ? "file not found" : "HTTP " + r.status };
+    const data = await r.arrayBuffer();
+    if (data.byteLength > LOOP_MAX_BYTES) throw { msg: "the file is over 64 MB, too large to decode in memory" };
+    loopPlayers.forEach((o) => { if (o.src === src && o.status === "loading") o.msg = "decoding"; });
+    loopPaint();
+    // Decode at the file's own rate: an OfflineAudioContext at that rate stops
+    // the decoder from resampling (a resampler rings at the file edges, which a
+    // whole-file loop hears at every wrap). The buffer then plays in the shared
+    // context; if the device runs at another rate, the source node converts on
+    // the fly and still wraps on the exact frame.
+    const rate = loopNativeRate(data);
+    let dec = loopAudio.ctx;
+    if (rate && rate !== dec.sampleRate && window.OfflineAudioContext) {
+      try { dec = new OfflineAudioContext(1, 1, rate); } catch (_) { dec = loopAudio.ctx; }
+    }
+    return await new Promise((res, rej) => {
+      const fail = () => rej({ msg: "this file did not decode" });
+      try {
+        const q = dec.decodeAudioData(data, res, fail);
+        if (q && q.catch) q.catch(fail);
+      } catch (_) { fail(); }
+    });
+  })();
+  bufs.set(src, p);
+  p.catch(() => { if (bufs.get(src) === p) bufs.delete(src); });
+  for (const k of bufs.keys()) {
+    if (bufs.size <= LOOP_CACHE_MAX) break;
+    let busy = false;
+    loopPlayers.forEach((o) => { if (o.src === k && (o.seg || o.status === "loading")) busy = true; });
+    if (!busy) bufs.delete(k);
+  }
+  return p;
+}
+function loopStartSeg(st, buf) {
+  const ctx = loopAudio.ctx, t = ctx.currentTime;
+  const src = ctx.createBufferSource(), g = ctx.createGain();
+  src.buffer = buf;
+  src.loop = true;
+  src.loopStart = st.a;
+  src.loopEnd = st.a + st.len;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(1, t + LOOP_RAMP);
+  src.connect(g);
+  g.connect(loopAudio.out);
+  src.start(t, st.a + st.pos);
+  const seg = { src, g, t0: t, pos0: st.pos, wraps0: st.wraps };
+  src.onended = () => {
+    try { src.disconnect(); g.disconnect(); } catch (_) {}
+    if (st.seg !== seg) return;   // a planned stop; the caller already moved on
+    st.seg = null; st.want = false; st.status = "paused";
+    loopNotify(); loopPaint();
+  };
+  st.seg = seg;
+}
+// Ramp a segment to silence, then stop it when the ramp ends.
+function loopFadeOut(seg) {
+  const t = loopAudio.ctx.currentTime, g = seg.g.gain;
+  try {
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(0, t + LOOP_RAMP);
+    seg.src.stop(t + LOOP_RAMP);
+  } catch (_) {}
+}
+function loopError(st, msg) {
+  st.status = "error"; st.msg = msg; st.want = false;
+  loopNotify(); loopPaint();
+}
+function loopFallback(st, why) {
+  const want = st.want;
+  st.status = "fallback"; st.want = false; st.seg = null;
+  st.msg = "Gapless loop unavailable: " + why + ". This plain player restarts the whole file with a short gap.";
+  loopNotify(); loopPaint();
+  if (!want) return;
+  const a = document.querySelector('.genloop-wrap[data-loop="' + st.id + '"] audio');
+  if (a) { const r = a.play(); if (r && r.catch) r.catch(() => {}); }
+}
+async function loopPlay(st) {
+  const ctx = loopContext();   // first, while the gesture is still live
+  // One loop at a time: starting this one stops any other.
+  loopPlayers.forEach((o) => { if (o !== st && (o.status === "playing" || o.want)) loopPause(o); });
+  if (!ctx) { st.want = true; return loopFallback(st, "Web Audio is not available"); }
+  if (st.b != null && !(st.b > st.a)) return loopError(st, "END must be greater than START");
+  const tok = ++st.tok;
+  st.want = true;
+  st.status = "loading"; st.msg = "loading";
+  loopPaint(); loopKick();
+  let buf;
+  try { buf = await loopBuffer(st.src); }
+  catch (err) {
+    if (tok !== st.tok) return;
+    const msg = (err && err.msg) || "could not load the file";
+    return err && err.retry ? loopError(st, msg) : loopFallback(st, msg);
+  }
+  if (tok !== st.tok) return;   // paused, cancelled or clicked again while it loaded
+  const end = st.b == null ? buf.duration : st.b;
+  if (st.a * buf.sampleRate >= buf.length || end * buf.sampleRate > buf.length + 0.5) {
+    return loopError(st, "loop ends past the file (" + buf.duration.toFixed(3) + " s)");
+  }
+  st.len = end - st.a;
+  if (st.seekFrac != null) { st.pos = st.seekFrac * st.len; st.seekFrac = null; }
+  if (!(st.pos < st.len)) st.pos = 0;
+  try { loopStartSeg(st, buf); }
+  catch (_) { return loopFallback(st, "the audio engine refused this file"); }
+  st.status = "playing"; st.msg = ""; st.missing = 0;
+  loopNotify(); loopPaint(); loopKick();
+}
+function loopPause(st) {
+  st.want = false;
+  st.tok++;   // voids a start still waiting on its buffer
+  if (st.seg) {
+    const w = loopWhere(st), seg = st.seg;
+    st.pos = w.pos; st.wraps = w.wraps; st.seg = null;
+    loopFadeOut(seg);
+  }
+  if (st.status === "playing" || st.status === "loading") st.status = st.len ? "paused" : "idle";
+  loopNotify(); loopPaint();
+}
+function loopSeek(st, frac) {
+  frac = Math.min(Math.max(frac, 0), 0.99999);
+  if (!st.len) { st.seekFrac = frac; loopPaint(); return; }
+  const pos = frac * st.len;
+  if (st.seg) {
+    // Crossfade: the old segment ramps out while the new one ramps in.
+    const w = loopWhere(st), old = st.seg, buf = old.src.buffer;
+    st.wraps = w.wraps; st.pos = pos; st.seg = null;
+    loopFadeOut(old);
+    loopStartSeg(st, buf);
+  } else st.pos = pos;
+  loopPaint();
+}
+function loopToggle(st) {
+  if (!st || st.status === "fallback") return;
+  if (st.status === "playing" || st.status === "loading") loopPause(st);
+  else loopPlay(st);
+}
+function loopOf(n) {
+  const w = n && n.closest ? n.closest(".genloop-wrap[data-loop]") : null;
+  return w ? loopPlayers.get(+w.dataset.loop) : null;
+}
+// The button acts on the mouse press, not the click: while a reply streams its
+// bubble is rebuilt every 150 ms, and a press and a release that straddle a
+// rebuild land on two different buttons, so no click ever fires. Keyboard and
+// touch still come through as a click.
+logs.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || !e.target.closest) return;
+  const btn = e.target.closest(".genloop-btn");
+  if (btn) {
+    if (e.pointerType === "mouse") { loopPressAt = performance.now(); loopToggle(loopOf(btn)); }
+    return;
+  }
+  const seek = e.target.closest(".genloop-seek");
+  const st = seek && loopOf(seek);
+  if (st && !seek.disabled) st.scrub = +seek.value / 100;
+});
+logs.addEventListener("click", (e) => {
+  const btn = e.target.closest && e.target.closest(".genloop-btn");
+  if (!btn) return;
+  if (e.detail > 0 && performance.now() - loopPressAt < 1000) return;   // the press already toggled it
+  loopToggle(loopOf(btn));
+});
+// Dragging the bar previews; the seek itself happens on change (release, or a key).
+logs.addEventListener("input", (e) => {
+  const seek = e.target.closest && e.target.closest(".genloop-seek");
+  const st = seek && loopOf(seek);
+  if (!st) return;
+  st.scrub = +seek.value / 100;
+  loopPaint();
+});
+logs.addEventListener("change", (e) => {
+  const seek = e.target.closest && e.target.closest(".genloop-seek");
+  const st = seek && loopOf(seek);
+  if (!st) return;
+  st.scrub = null;
+  loopSeek(st, +seek.value / 100);
+});
+// A rebuild in the middle of a drag swallows the change event; let the bar
+// follow playback again instead of freezing at the last preview.
+window.addEventListener("pointerup", () => setTimeout(() => {
+  let any = false;
+  loopPlayers.forEach((st) => { if (st.scrub != null) { st.scrub = null; any = true; } });
+  if (any) loopPaint();
+}, 0), true);
 /* ---------- recipe cards ----------
    A ```recipe fence (JSON per bridge.RECIPE_PROMPT) renders as an interactive
    card: ingredient checklist, steps with inline clickable timers, and a
@@ -438,6 +851,11 @@ function _md(src) {
     // Local paths route through /file; click opens a lightbox (see click handler).
     // [^)]+ (not [^)\s]+) so paths with spaces work, e.g. ".../Exobrain harness/...".
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, path) => {
+      // `#loop` / `#loop=START,END` asks for the gapless loop player. Split it
+      // off first: imgSrc() would percent-encode it into the path, and the
+      // extension tests below anchor on the end of the path.
+      const lp = loopFragment(path);
+      if (lp) path = lp.path;
       const src = imgSrc(path);
       if (!src) return m;
       // Corner download button saves the file directly (no lightbox needed).
@@ -447,6 +865,7 @@ function _md(src) {
       // Reuses the .genimg-dl / data-dl contract so the delegated click handler
       // saves it to Downloads with no extra JS. No lightbox: audio has its own controls.
       if (/\.(mp3|wav|m4a|ogg|flac|aac)(\?|$)/i.test(path)) {
+        if (lp) return loopHTML(loopState(src, lp, alt));
         return '<span class="genaudio-wrap">' +
                  '<audio class="genaudio" controls preload="metadata" src="' + src + '"></audio>' +
                  '<button class="genimg-dl genaudio-dl" type="button" data-dl="' + src + '" ' +
@@ -4253,9 +4672,10 @@ function renderCrystalList() {
   const recount = () => {
     let n = 0;
     document.querySelectorAll("#logs audio").forEach((a) => { if (!a.paused && !a.ended) n++; });
-    crystal.audioPlaying = n; crystalRefresh();
+    crystal.audioPlaying = n + loopPlayingCount(); crystalRefresh();   // Web Audio loop players count too
   };
   for (const evn of ["play", "playing", "pause", "ended", "emptied"]) document.addEventListener(evn, (e) => { if (e.target && e.target.tagName === "AUDIO") recount(); }, true);
+  document.addEventListener("mist-loop", recount);   // a loop player started or stopped (loopNotify)
 })();
 
 /* ---------- font switcher ----------
@@ -5848,6 +6268,14 @@ async function buildShareSnapshot(s) {
   clone.querySelectorAll(".spinner, .perm-actions, .copy-btn, .rc-cook-btn, .genimg-dl, "
     + ".msg-actions, .msg-edit, .msg-confirm, .notice-actions")
     .forEach((e) => e.remove());
+  // A loop player is a live Web Audio control (its fallback holds an <audio>):
+  // the shared page gets the same stub as other media.
+  clone.querySelectorAll(".genloop-wrap").forEach((w) => {
+    const d = document.createElement("div");
+    d.className = "share-omitted";
+    d.textContent = "looping audio · not included in the shared copy";
+    w.replaceWith(d);
+  });
   // Remaining buttons (recipe timer chips, etc.) keep their look, lose their life.
   clone.querySelectorAll("button").forEach((b) => {
     const sp = document.createElement("span");

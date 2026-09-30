@@ -824,6 +824,51 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 }
 .genaudio { height: 36px; max-width: min(340px, 100%); }
 .genaudio-dl { position: static; opacity: 1; flex: none; }
+/* Gapless loop player (`#loop` embeds, app.js loopHTML): a Web Audio transport
+   in the same 36 px row as the <audio> player. Tonal surface, hairline border,
+   square corners, no motion: no transitions or animations at all, and the
+   playhead steps instead of gliding under reduced motion (loopTick). */
+.genloop {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 36px; width: min(380px, 100%); padding-right: 10px;
+  border: 1px solid var(--line); background: var(--surface);
+  font-size: 11px; color: var(--md-sys-color-on-surface-variant);
+}
+#logs .genloop { -webkit-user-select: none; user-select: none; }
+.genloop-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; margin: 0; padding: 0;
+  border: 0; border-right: 1px solid var(--line); border-radius: 0;
+  background: transparent; color: var(--teal); cursor: pointer;
+}
+.genloop-btn .msi { font-size: 20px; }
+.genloop-btn:hover { background: var(--hover); }
+.genloop-btn:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
+.genloop-glyph.msi { flex: none; font-size: 15px; color: var(--teal); }
+.genloop-seek {
+  -webkit-appearance: none; appearance: none;
+  flex: 1 1 auto; min-width: 40px; height: 20px; margin: 0; padding: 0;
+  background: transparent; cursor: pointer;
+}
+.genloop-seek:disabled { cursor: default; }
+.genloop-seek::-webkit-slider-runnable-track {
+  height: 3px; border: 0; border-radius: 0;
+  background: linear-gradient(to right, var(--teal) var(--p, 0%), var(--line) var(--p, 0%));
+}
+.genloop-seek::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 2px; height: 13px; margin-top: -5px; border: 0; border-radius: 0;
+  background: var(--text);
+}
+.genloop-seek:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.genloop-time, .genloop-pass { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.genloop-pass { min-width: 6ch; text-align: right; color: var(--dim); }
+.genloop-wrap.is-playing .genloop-pass { color: var(--teal); }
+.genloop-wrap.is-loading .genloop-btn { color: var(--dim); cursor: progress; }
+.genloop-wrap.is-loading .genloop-time { color: var(--dim); }
+.genloop-wrap.is-error .genloop-btn, .genloop-wrap.is-error .genloop-time { color: var(--err); }
+.genloop-wrap.is-error .genloop-time { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.genloop-warn.msi { flex: none; font-size: 18px; color: var(--warn); cursor: help; }
 /* Generated video: inline player, same corner download chrome as images. */
 .genvideo-wrap { position: relative; display: inline-block; line-height: 0; margin: 6px 0; max-width: 100%; }
 .genvideo {
