@@ -3270,9 +3270,19 @@ async function togglePin(id) {
   renderTabs();
   try { await fetch("/sessions/" + id + "/pin", { method: "POST" }); } catch (_) {}
 }
+// Where to land after the chat on screen is archived or closed: the newest
+// unpinned chat (rail order, so an unsent "New chat" wins and condensed chats
+// come last). The pins are the chats Alex lives in, and being dropped into one
+// after finishing a scratch chat reads as the wrong chat opening. Only when no
+// unpinned chat is left does it fall back to a pin, then to nothing (the caller
+// creates a fresh chat).
+function nextChatAfterLeaving() {
+  const live = sortedSessions().filter((x) => !x.archived);
+  return live.find((x) => !x.pinned) || live[0] || null;
+}
 // Archive: hide a finished chat at the bottom of the rail (collapsed "archived"
 // section), keeping its transcript, search hits and resume link. Archiving the
-// chat on screen moves you to the top of the rail, the same as closing it
+// chat on screen moves you to the newest unpinned chat, the same as closing it
 // would, since "done with it" is the whole gesture. Unarchive puts it back in
 // its date bucket. Mirrors POST /sessions/<id>/archive.
 async function toggleArchive(id) {
@@ -3281,7 +3291,7 @@ async function toggleArchive(id) {
   s.archived = !s.archived;
   if (s.archived) s.pinned = false;
   if (s.archived && activeId === id) {
-    const next = sortedSessions().find((x) => !x.archived);
+    const next = nextChatAfterLeaving();
     if (next) switchTo(next.id);
     else { activeId = null; createSession(); }
   } else {
@@ -3343,7 +3353,7 @@ async function closeSession(id) {
   s.destroy();
   sessions.delete(id);
   if (activeId === id) {
-    const next = sortedSessions()[0];
+    const next = nextChatAfterLeaving();
     if (next) switchTo(next.id);
     else { activeId = null; createSession(); }
   } else {
