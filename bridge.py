@@ -603,7 +603,14 @@ class ClaudeSession:
                 # open; cold start never touches it.
                 loaded = fold_history(_iter_jsonl(self._jsonl))
                 # Anything recorded while we were reading the file is NEWER than
-                # every line in it — it belongs after the loaded tail.
+                # every line in it — it belongs after the loaded tail. Except
+                # events this process recorded BEFORE the first open (a chat
+                # seeded from a notification tap, a quick-entry send): those are
+                # in memory and on disk both, so the file's copy is dropped by
+                # seq, or the seed showed twice (2026-09-30).
+                have = {o.get("seq") for o in self.history if isinstance(o.get("seq"), int)}
+                if have:
+                    loaded = [o for o in loaded if o.get("seq") not in have]
                 self.history = loaded + self.history
                 # keep the event stamp monotonic across dormancy (stream() dedup
                 # compares live queue stamps against replayed history stamps)

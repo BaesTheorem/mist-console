@@ -93,3 +93,16 @@ def test_condense_events_matches_condenser():
     assert msgs[0]["blocks"][1] == {"kind": "tool", "name": "Bash", "input": {"command": "ls"},
                                     "result": "listing"}
     assert out[-1]["type"] == "context" and out[-1]["seq"] == ev[-1]["seq"]
+
+
+def test_first_open_does_not_duplicate_events_recorded_before_it(tmp_path):
+    """A chat seeded before its first open (a notification tap, a quick-entry
+    send) holds the seed in memory and on disk; the lazy load must not add the
+    file's copy in front of the one already in memory."""
+    s = bridge.ClaudeSession(id="t1", autostart=False)
+    s._jsonl = str(tmp_path / "t1.jsonl")
+    s._broadcast({"type": "user_text", "text": "seed"})
+    assert len(s.history) == 1
+    hist = s.snapshot_history()
+    assert [o["text"] for o in hist if o.get("type") == "user_text"] == ["seed"]
+    assert len(hist) == 1
