@@ -830,7 +830,9 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
    playhead steps instead of gliding under reduced motion (loopTick). */
 .genloop {
   display: inline-flex; align-items: center; gap: 8px;
-  height: 36px; width: min(380px, 100%); padding-right: 10px;
+  /* a definite width: a percentage here is cyclic inside the shrink-to-fit
+     wrap and collapses every player to its own content width */
+  height: 36px; width: 380px; max-width: 100%; padding-right: 10px;
   border: 1px solid var(--line); background: var(--surface);
   font-size: 11px; color: var(--md-sys-color-on-surface-variant);
 }
@@ -842,7 +844,9 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   background: transparent; color: var(--teal); cursor: pointer;
 }
 .genloop-btn .msi { font-size: 20px; }
-.genloop-btn:hover { background: var(--hover); }
+/* the global button:hover tints the border teal; here that border is only the
+   divider, so hover shows as a tonal fill instead */
+.genloop-btn:hover { background: var(--hover); border-right-color: var(--line); }
 .genloop-btn:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
 .genloop-glyph.msi { flex: none; font-size: 15px; color: var(--teal); }
 .genloop-seek {

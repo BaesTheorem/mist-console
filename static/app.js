@@ -302,7 +302,7 @@ function loopHTML(st) {
   return '<span class="genaudio-wrap genloop-wrap' + v.cls + '" data-loop="' + st.id + '">' +
            '<span class="genloop" role="group" aria-label="' + (st.name ? st.name + ", " : "") + 'gapless loop">' +
              '<button class="genloop-btn" type="button" title="' + esc(v.label) + '" aria-label="' + esc(v.label) + '">' +
-               '<span class="msi">' + v.icon + '</span></button>' +
+               '<span class="msi fill">' + v.icon + '</span></button>' +
              '<span class="msi genloop-glyph" aria-hidden="true">repeat</span>' +
              '<input class="genloop-seek" type="range" min="0" max="100" step="any" value="' + p + '" style="--p:' + p + '%" ' +
                'aria-label="Position in the loop"' + (st.status === "error" ? " disabled" : "") + '>' +
@@ -343,11 +343,11 @@ function loopPaint() {
   });
   return seen;
 }
+// Reduced motion: the playhead steps four times a second instead of gliding.
+const LOOP_CALM = window.matchMedia ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 function loopTick(ts) {
   loopRaf = 0;
-  // Reduced motion: the playhead steps four times a second instead of gliding.
-  const calm = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (!calm || ts - loopPaintAt >= 250) {
+  if (!(LOOP_CALM && LOOP_CALM.matches) || ts - loopPaintAt >= 250) {
     loopPaintAt = ts;
     const seen = loopPaint();
     // A playing loop always has a control on screen, or it stops: a rewind or a
@@ -424,7 +424,9 @@ function loopBuffer(src) {
   if (p) { bufs.delete(src); bufs.set(src, p); return p; }   // most recently used goes last
   p = (async () => {
     let r;
-    try { r = await fetch(src); } catch (_) { throw { retry: true, msg: "could not load the file" }; }
+    // A rejected fetch (a CORS-blocked http URL, say) cannot be decoded here, but
+    // the plain <audio> element can still play it: fall back, do not retry.
+    try { r = await fetch(src); } catch (_) { throw { msg: "the file could not be fetched for decoding" }; }
     if (!r.ok) throw { retry: true, msg: r.status === 404 ? "file not found" : "HTTP " + r.status };
     const data = await r.arrayBuffer();
     if (data.byteLength > LOOP_MAX_BYTES) throw { msg: "the file is over 64 MB, too large to decode in memory" };

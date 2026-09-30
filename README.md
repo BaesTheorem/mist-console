@@ -254,6 +254,25 @@ serve the first snapshot taken at or after it, which is the one made for that
 message, and fall back to the live file when there is none (chats older than
 this, files over 64 MB).
 
+### Gapless loops (`#loop`)
+
+An audio embed plays as a seamless loop when its path ends in a loop fragment:
+
+- `![Title](/abs/path/song.mp3#loop)` loops the full decoded file.
+- `![Title](/abs/path/song.mp3#loop=START,END)` loops the window from START to END, in seconds (decimals are permitted). Playback starts at START. The loop does not include the sample at END.
+
+The `#loop=START,END` embed is for MP3. An MP3 decoder adds samples at the start and the end of the file (encoder delay and padding). Thus the file edges are not part of the period. The author puts periodic pre-roll and post-roll around one complete period and sets the window on a period in the middle. Then the decoder offset has no effect on the loop.
+
+The player uses the Web Audio API, not `<audio loop>`. The `<audio>` element does not loop MP3 continuously: each time it starts the file again, the sound stops for a short time. The first click on play downloads the file through `/file`, decodes it into an `AudioBuffer` and plays it through an `AudioBufferSourceNode` with `loop = true`. The wrap is where the loop goes from END back to START. At the wrap, the audio engine plays the first sample of the window directly after the last sample. The decode uses the sample rate in the file header (WAV, FLAC, MP3), thus no resampler changes the file edges. A resampled whole-file loop makes a click at each wrap.
+
+When playback starts, the `GainNode` value goes from 0 to 1 in 30 ms. Before playback stops, the value goes from 1 to 0 in 30 ms. This occurs at each start, pause and stop, and at each change of position, thus these controls do not make a click. The wrap has no ramp.
+
+The row shows play and pause, a loop glyph and a bar that shows and sets the position in the window. It also shows the time and a "pass" counter. "pass 1" is the first time through the loop, and the counter increases by one at each wrap. When a loop starts, the loop that plays stops. A loop that plays counts as audio for the crystal, which then shows its "speaking" animation.
+
+The player keeps its data in a registry (`loopPlayers` in `app.js`) and not in the DOM. The registry identifies each player by its file and its window. Thus a player continues through the stream re-renders and the history replays. The embed changes to a plain `<audio controls loop>` in three conditions: Web Audio is not available, the file does not decode, or the file is larger than 64 MB. A share snapshot replaces the player with a stub.
+
+`embeds.py` does not make a snapshot of a `#loop` embed, because its extension test sees the fragment. Thus a loop embed always plays the live file.
+
 ## Share links (public read-only snapshots)
 
 The **share** button in the top bar emulates claude.ai's "share chat": it
