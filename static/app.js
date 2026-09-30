@@ -3550,6 +3550,25 @@ function renderNotifs() {
 async function openNotifTarget(n) {
   const link = (n && n.link) || "";
   if (!link || link === "console") return;
+  if (link.indexOf("console:notif.") === 0) {
+    // A headless sender's banner: the backend opens (or reuses) a chat seeded
+    // with the notification, exactly as a tap on the banner itself does.
+    try {
+      const r = await fetch("/notifications/chat", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nid: link.slice("console:notif.".length) }),
+      });
+      const j = await r.json();
+      if (!j.sid) return;
+      if (!sessions.has(j.sid)) {
+        const list = await (await fetch("/sessions")).json();
+        const info = list.find((x) => x.id === j.sid) || {};
+        sessions.set(j.sid, new Session(j.sid, info.title, info));
+      }
+      switchTo(j.sid);
+    } catch (_) {}
+    return;
+  }
   if (link.indexOf("console:") === 0) {
     const sid = link.slice(8);
     if (sessions.has(sid)) switchTo(sid);

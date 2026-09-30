@@ -27,6 +27,7 @@ from flask import Flask, Response, abort, jsonify, redirect, request, send_file,
 
 import archive
 import bookmarks
+import notifchat
 import embeds
 import quickaccess
 import remote
@@ -906,8 +907,12 @@ def set_focus():
     # Notification-click handoff: remember which chat to surface. Only honor a
     # sid we actually have, so a stale/headless sid just no-ops (app still raises
     # to the current chat). No sid -> clear any pending request.
+    # "notif.<nid>" is a banner from a headless sender (a watcher, a routine):
+    # there is no chat yet, so open one seeded with the notification now.
     global _pending_focus
     sid = request.args.get("sid") or ""
+    if sid.startswith("notif."):
+        sid = _open_notification_chat(sid[len("notif."):]) or ""
     _pending_focus = sid if sid in _sessions else None
     return jsonify({"ok": True, "pending": _pending_focus or ""})
 
@@ -939,6 +944,13 @@ def notify_reply():
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
     sid = body.get("sid")
+    if sid and sid.startswith("notif."):
+        # Reply typed on a headless banner: the chat it opens carries the
+        # notification AND the reply as its first message, so nothing is lost.
+        sid = _open_notification_chat(sid[len("notif."):], reply=text)
+        if sid:
+            _save_meta()
+            return jsonify({"ok": True, "sid": sid})
     if not sid or sid not in _sessions:
         sid = (_active_chat or {}).get("sid")
     if not sid or sid not in _sessions:
@@ -975,6 +987,42 @@ def notifications_history():
         pass
     items.reverse()
     return jsonify(items)
+
+
+_notif_chats = {}   # nid -> sid, so a second tap on the same banner reuses its chat
+
+
+def _open_notification_chat(nid, reply=None):
+    """Open (or reuse) the chat for a headless notification and send its seed.
+    Returns the sid, or None when the notification is not in the history."""
+    sid = _notif_chats.get(nid)
+    if sid and sid in _sessions:
+        if reply:
+            _sessions[sid].send(reply)
+        return sid
+    n = notifchat.by_nid(_NOTIF_HISTORY, nid)
+    if not n:
+        return None
+    sid = _new_session(warm=False)
+    s = _sessions[sid]
+    # Title before the send: send() derives one from the first message only
+    # while the chat is untitled, and this one names the alert, not its prose.
+    s.title = notifchat.title_for(n)
+    _touch(s)
+    _notif_chats[nid] = sid
+    s.send(notifchat.seed(n, reply=reply))
+    _save_meta()
+    return sid
+
+
+@app.route("/notifications/chat", methods=["POST"])
+def notifications_chat():
+    """The bell panel's tap on a headless banner: open its chat, hand back the sid."""
+    nid = ((request.get_json(silent=True) or {}).get("nid") or "").strip()
+    sid = _open_notification_chat(nid)
+    if not sid:
+        return jsonify({"ok": False, "error": "notification not found"}), 404
+    return jsonify({"ok": True, "sid": sid})
 
 
 @app.route("/notifications/open", methods=["POST"])

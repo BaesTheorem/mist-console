@@ -160,6 +160,14 @@ NOTIFY="$HOME/Documents/Exobrain harness/mist-voice/bin/mist-notify"
 TIMEOUT_SEC="${ROUTINE_TIMEOUT_SEC:-2700}"
 DEADLINE=$(( $(date +%s) + TIMEOUT_SEC ))
 TIMED_OUT=0
+# Every banner a routine sends lands, when tapped, in a Console chat seeded
+# with the notification plus this context (mist-notify reads the two
+# variables), so the chat knows which routine spoke and where its full
+# transcript is. The session id is chosen here, before the run, for that
+# reason: it names the CLI transcript the seeded chat can go and read.
+CLI_PROJECT_DIR="$HOME/.claude/projects/$(printf '%s' "$HARNESS" | sed 's#[/ ]#-#g')"
+export MIST_NOTIFY_SOURCE="routine $DIR"
+SESSION_ID=""
 run_claude() {
 	local tmp pid wd remaining
 	remaining=$(( DEADLINE - $(date +%s) ))
@@ -167,8 +175,11 @@ run_claude() {
 		OUT="routine budget of ${TIMEOUT_SEC}s spent before this attempt"; RC=124; TIMED_OUT=1
 		return
 	fi
+	# A fresh id per attempt: the CLI refuses to reuse one that already exists.
+	SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+	export MIST_NOTIFY_CONTEXT="Scheduled routine '$DIR' on ${MODEL:-the default model}, started $(date '+%Y-%m-%d %H:%M'), attempt $attempt. Its full transcript is Claude Code session $SESSION_ID (file $CLI_PROJECT_DIR/$SESSION_ID.jsonl); read that for everything the routine did and saw. Routine log: $HOME/Library/Logs/mist-routines.log."
 	tmp="$(mktemp -t routine-out)"
-	"$CLAUDE" -p --dangerously-skip-permissions --permission-prompts none ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$PROMPT" >"$tmp" 2>&1 &
+	"$CLAUDE" -p --dangerously-skip-permissions --permission-prompts none --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$PROMPT" >"$tmp" 2>&1 &
 	pid=$!
 	( sleep "$remaining"; kill -TERM "$pid" 2>/dev/null && { sleep 10; kill -KILL "$pid" 2>/dev/null; } ) &
 	wd=$!

@@ -206,9 +206,23 @@ The Console is the receiving end of the full-featured notification pipeline
 (`mist-notifier/` in the harness repo builds `/Applications/MIST Notifier.app`,
 which posts native banners for `mist-notify`):
 
+- **A tap lands in a chat, always.** A banner sent from inside a chat links
+  `console:<sid>` and `/focus?sid=` stashes that chat for the window to claim.
+  A banner from a headless sender (a launchd watcher, a scheduled routine)
+  links `console:notif.<nid>`: `/focus` then opens a NEW chat (or reuses the
+  one a previous tap opened) whose first message is the whole notification,
+  the sender's `context`, and "Alex wants to chat about this" (`notifchat.py`
+  builds it from the history line; `_open_notification_chat` in app.py owns
+  the session). Nothing is created until the tap, so an ignored banner costs
+  nothing. The source link the sender passed rides along as an "Open link"
+  button and in the seed.
 - **`POST /notify-reply`** `{sid?, text}`: inline reply typed into a macOS
   banner. Lands in the target chat like a composer send (sid → active chat →
-  newest chat). No context gate: there's no composer to restore held text into.
+  newest chat). A `notif.<nid>` sid opens the notification's chat with the
+  reply as the seed's last line. No context gate: there's no composer to
+  restore held text into.
+- **`POST /notifications/chat`** `{nid}`: the bell panel's version of the tap
+  on a `console:notif.<nid>` entry; answers `{sid}` and the page switches there.
 - **`GET /notifications`**: tail of `~/Library/Logs/exobrain/notifications-history.jsonl`
   (mist-notify appends every banner it sends, whichever route delivered it).
 - **`POST /notifications/open`** `{link}`: re-fires a click target from the
