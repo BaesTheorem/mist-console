@@ -490,7 +490,8 @@ function _md(src) {
     '$1<a href="$2">$2</a>'
   );
   src = src.replace(/(<li class="oli"[\s\S]*?<\/li>)/g, "<ol>$1</ol>").replace(/<\/ol>\s*<ol>/g, "");
-  src = src.replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>").replace(/<\/ul>\s*<ul>/g, "");
+  // Plain bullets and task lines share one <ul>, so a mixed list keeps its indent.
+  src = src.replace(/(<li(?: class="task")?>[\s\S]*?<\/li>)/g, "<ul>$1</ul>").replace(/<\/ul>\s*<ul>/g, "");
   // fold adjacent blockquote lines into one <blockquote>; a blank `>` line lands
   // as an empty block between two, collapsing to a <br><br> paragraph gap
   src = src.replace(/<\/blockquote>\s*<blockquote>/g, "<br>");
