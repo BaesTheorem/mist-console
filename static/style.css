@@ -280,6 +280,12 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab .tclose { color: var(--dim); padding: 0 2px; opacity: 0; }
 .tab:hover .tclose { opacity: 1; }
 .tab .tclose:hover { color: var(--err); }
+.tab .tarch { color: var(--dim); padding: 0 2px; opacity: 0; }
+.tab:hover .tarch { opacity: 1; }
+.tab .tarch:hover { color: var(--teal); }
+.tab .tarch .msi { font-size: 13px; vertical-align: -2px; }
+.tab.archived .ttitle { color: var(--dim); }
+.tab.archived .tarch { opacity: 1; }
 
 /* section headers in the rail — pinned first, then date buckets (today, yesterday, …).
    They are dividers, not rows: a tonal band one step above the rail with a
@@ -1490,6 +1496,7 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
 @media (hover: none) {
   .msg .msg-actions { opacity: .7; }
   .tab .tpin { opacity: 1; }
+  .tab .tarch { opacity: 1; }   /* reversible, so a finger may have it */
   /* closing deletes the chat and there is no hover to reveal it on intent, so
      a finger never gets the x at all; close chats from the Mac */
   .tab .tclose { display: none; }

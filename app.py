@@ -121,7 +121,9 @@ def _session_meta(sid, s):
             "model": s.model or "",
             "permission_mode": s.permission_mode or "",
             "effort": s.effort or "",
-            "archived": bool(s.archived)}
+            "condensed": bool(s.condensed),
+            "archived": bool(s.archived),
+            "archived_at": s.archived_at}
 
 
 def _touch(s, created=False):
@@ -255,7 +257,9 @@ def _save_meta_now():
                          "effort": s.effort,
                          "claude_session_id": s.claude_session_id,
                          "import_path": s.import_path, "cwd": s.cwd,
-                         "archived": bool(s.archived)})
+                         "condensed": bool(s.condensed),
+                         "archived": bool(s.archived),
+                         "archived_at": s.archived_at})
     # Atomic write (temp + fsync + os.replace): open(...,"w") truncates the
     # file to zero before writing, so a concurrent reader — another desktop.py
     # process, or _load_meta() on a restart — could catch it empty/half-written,
@@ -364,7 +368,14 @@ def _load_meta():
             effort=m.get("effort") or None,
             import_path=m.get("import_path"), cwd=m.get("cwd") or HARNESS,
             last_activity=m.get("last_activity"), autostart=False)  # dormant
-        _sessions[sid].archived = bool(m.get("archived"))
+        # "archived" used to mean condensed (archive.py). A row written before
+        # the split has no "condensed" key, so its "archived" is the old flag.
+        if "condensed" in m:
+            _sessions[sid].condensed = bool(m.get("condensed"))
+            _sessions[sid].archived = bool(m.get("archived"))
+            _sessions[sid].archived_at = m.get("archived_at")
+        else:
+            _sessions[sid].condensed = bool(m.get("archived"))
         _order.append(sid)
         try:
             n = int(sid.lstrip("s"))
@@ -1515,6 +1526,7 @@ def pin_session(sid):
     if "pinned" in body:
         s.pinned = bool(body["pinned"])
         if s.pinned:
+            s.archived, s.archived_at = False, None
             idx = body.get("index")
             idx = len(others) if not isinstance(idx, int) else max(0, min(len(others), idx))
             others.insert(idx, s)
@@ -1527,6 +1539,7 @@ def pin_session(sid):
         s.pinned = not s.pinned
         if s.pinned:   # newly pinned -> drop to the end of the pinned list
             s.pin_order = max((x.pin_order for x in others), default=-1) + 1
+            s.archived, s.archived_at = False, None
     _touch(s)
     _save_meta()
     return jsonify({"ok": True, "pinned": s.pinned, "pin_order": s.pin_order})
@@ -1543,6 +1556,29 @@ def set_pin_order():
             _touch(s)
     _save_meta()
     return jsonify({"ok": True})
+
+
+@app.route("/sessions/<sid>/archive", methods=["POST"])
+def archive_session(sid):
+    """Hide a finished chat from the rail (or bring it back). No body toggles;
+    {"archived": bool} sets. The chat keeps its transcript, stays searchable
+    and resumable, and sits in the collapsed "archived" section at the bottom
+    of the rail. Archiving unpins: a pinned chat lives on the rail by
+    definition, and pinning an archived chat brings it back."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False}), 404
+    body = request.get_json(silent=True) or {}
+    want = bool(body["archived"]) if "archived" in body else not s.archived
+    if want != bool(s.archived):
+        s.archived = want
+        s.archived_at = time.time() if want else None
+        if want:
+            s.pinned = False
+        _touch(s)
+        _save_meta()
+    return jsonify({"ok": True, "archived": s.archived, "archived_at": s.archived_at,
+                    "pinned": s.pinned})
 
 
 @app.route("/send/<sid>", methods=["POST"])
@@ -2537,14 +2573,14 @@ def _archiver():
                 except Exception as e:
                     logging.getLogger("mist.archive").warning("condense %s failed: %s", s.id, e)
                     continue
-                s.archived = True
+                s.condensed = True
                 with s._hist_lock:
                     s.history = []
                     s._history_loaded = False
                 done += 1
                 if res:
                     logging.getLogger("mist.archive").info(
-                        "archived %s: %d -> %d events", s.id, res[0], res[1])
+                        "condensed %s: %d -> %d events", s.id, res[0], res[1])
             if done:
                 _save_meta()
         except Exception:

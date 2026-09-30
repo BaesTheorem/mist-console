@@ -571,7 +571,9 @@ class ClaudeSession:
         # message uuid (--resume-session-at + --fork-session). See rewind()/branch().
         self._resume_at = None
         self._fork_next = False      # next spawn adds --fork-session (whole-chat branch)
-        self.archived = False        # condensed transcript (see archive.py); rail folds it
+        self.condensed = False       # condensed transcript (see archive.py); rail folds it
+        self.archived = False        # hidden from the rail by Alex; see /sessions/<id>/archive
+        self.archived_at = None
 
         # History loads lazily on first open (snapshot_history), NOT here. At
         # startup app.py constructs a ClaudeSession for every saved chat; eagerly

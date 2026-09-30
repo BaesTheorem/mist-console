@@ -795,7 +795,8 @@ class Session {
     this.model = info.model || "";
     this.permMode = info.permission_mode || "";
     this.effort = info.effort || "";
-    this.archived = !!info.archived;   // condensed transcript; the rail folds it
+    this.condensed = !!info.condensed;   // condensed transcript; the rail folds it
+    this.archived = !!info.archived;     // hidden by Alex; bottom of the rail, collapsed
     this.lastActivity = info.last_activity ? info.last_activity * 1000 : Date.now();
     this.logEl = el("div", "session-log");
     this.logEl.hidden = true;
@@ -2800,6 +2801,8 @@ function usageText(r) {
 /* ---------- tab rail ---------- */
 function sortedSessions() {
   return [...sessions.values()].sort((a, b) => {
+    if (a.archived !== b.archived) return a.archived ? 1 : -1;    // archived last, always
+    if (a.archived) return b.lastActivity - a.lastActivity;       //   newest first inside it
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;          // pinned first
     if (a.pinned) return (a.pinOrder - b.pinOrder)               // pinned: manual order
       || (b.lastActivity - a.lastActivity);                      //   tie-break newest
@@ -2811,7 +2814,7 @@ function sortedSessions() {
     // It rejoins normal newest-first order the moment its first message titles it.
     const an = a.title === "New chat", bn = b.title === "New chat";
     if (an !== bn) return an ? -1 : 1;
-    if (a.archived !== b.archived) return a.archived ? 1 : -1;   // condensed old chats last
+    if (a.condensed !== b.condensed) return a.condensed ? 1 : -1;   // condensed old chats last
     return b.lastActivity - a.lastActivity;                       // unpinned: newest first
   });
 }
@@ -2837,8 +2840,9 @@ function todayKey() {
 // asked for it three times per chat per rebuild (signature, counts, rows): over
 // a thousand chats that was ~30ms of date formatting on every switch.
 function railKey(s, today) {
+  if (s.archived) return "archived";
   if (s.pinned) return "pinned";
-  if (s.archived) return "archive";
+  if (s.condensed) return "long ago";
   if (s._bucketTs !== s.lastActivity || s._bucketDay !== today) {
     s._bucketTs = s.lastActivity;
     s._bucketDay = today;
@@ -2856,9 +2860,13 @@ const RAIL_PAGE = 200;
 let _railLimit = RAIL_PAGE;
 let _tabsActive = null;   // the active id the rail was last rendered for
 const COLLAPSED_LS = "mist.railCollapsed";
-// The archive section (condensed chats 90+ days old, see archive.py) starts
-// collapsed; everything else starts open.
-let collapsedSections = new Set(JSON.parse(localStorage.getItem(COLLAPSED_LS) || '["archive"]'));
+// The "long ago" section (condensed chats 90+ days old, see archive.py) starts
+// collapsed; everything else starts open. The "archived" section (chats Alex
+// hid himself) is collapsed on every launch: hidden is its whole point, and
+// expanding it is a per-sitting choice, not a setting.
+let collapsedSections = new Set(JSON.parse(localStorage.getItem(COLLAPSED_LS) || '["long ago"]'));
+if (collapsedSections.delete("archive")) collapsedSections.add("long ago");   // the section's old name
+collapsedSections.add("archived");
 function toggleSection(label) {
   if (!collapsedSections.delete(label)) collapsedSections.add(label);
   localStorage.setItem(COLLAPSED_LS, JSON.stringify([...collapsedSections]));
@@ -2908,35 +2916,27 @@ function renderTabs() {
   let section = null;   // which header we've emitted so far
   let shown = 0;        // unpinned rows rendered so far (the page limit counts these)
   let folded = 0;       // unpinned chats past the limit, summed into the "older" row
-  list.forEach((s) => {
-    const want = railKey(s, today);
-    const isActive = s.id === activeId;
-    const closed = collapsedSections.has(want);
-    const past = !s.pinned && shown >= _railLimit;
-    if (past && !isActive) { folded++; return; }
-    if (want !== section && !past) {
-      const h = el("div", "tabsection collapsible" + (s.pinned ? " pinned" : "") + (closed ? " collapsed" : ""),
-        '<span class="msi sec-chev">expand_more</span>'
-        + (s.pinned ? (PIN_ICON + " pinned") : esc(want))
-        + (closed ? '<span class="sec-count">' + counts[want] + "</span>" : ""));
-      h.tabIndex = 0;
-      h.setAttribute("role", "button");
-      h.setAttribute("aria-expanded", closed ? "false" : "true");
-      h.setAttribute("aria-label", (closed ? "Expand " : "Collapse ") + want + " section");
-      h.addEventListener("click", () => toggleSection(want));
-      h.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleSection(want); }
-      });
-      frag.appendChild(h);
-      section = want;
-    }
-    // A collapsed section hides its chats, except the one you're looking at:
-    // the active tab stays visible so the rail never loses your place.
-    if (closed && !isActive) return;
-    if (!s.pinned && !past) shown++;
-    const t = el("div", "tab" + (isActive ? " active" : "") + (s.pinned ? " pinned" : ""));
+  const header = (want, closed) => {
+    const pinnedSec = want === "pinned";
+    const h = el("div", "tabsection collapsible" + (pinnedSec ? " pinned" : "") + (closed ? " collapsed" : ""),
+      '<span class="msi sec-chev">expand_more</span>'
+      + (pinnedSec ? (PIN_ICON + " pinned") : esc(want))
+      + (closed ? '<span class="sec-count">' + counts[want] + "</span>" : ""));
+    h.tabIndex = 0;
+    h.setAttribute("role", "button");
+    h.setAttribute("aria-expanded", closed ? "false" : "true");
+    h.setAttribute("aria-label", (closed ? "Expand " : "Collapse ") + want + " section");
+    h.addEventListener("click", () => toggleSection(want));
+    h.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleSection(want); }
+    });
+    frag.appendChild(h);
+    section = want;
+  };
+  const row = (s, isActive, onlyActive) => {
+    const t = el("div", "tab" + (isActive ? " active" : "") + (s.pinned ? " pinned" : "") + (s.archived ? " archived" : ""));
     t.dataset.sid = s.id;
-    if (isActive && (past || closed)) t.dataset.onlyActive = "1";   // see the fast path above
+    if (onlyActive) t.dataset.onlyActive = "1";   // see the fast path above
     // keyboard access: tabs are focusable and Enter/Space switches to them
     t.tabIndex = 0;
     t.setAttribute("role", "tab");
@@ -2951,11 +2951,18 @@ function renderTabs() {
     if (bg > 0) dot.title = bg + " running in background";
     t.appendChild(dot);
     t.appendChild(el("span", "ttitle", esc(s.title)));
-    const pin = el("span", "tpin" + (s.pinned ? " on" : ""), PIN_ICON);
-    pin.title = s.pinned ? "Unpin" : "Pin";
-    pin.setAttribute("aria-label", s.pinned ? "Unpin chat" : "Pin chat");
-    pin.addEventListener("click", (ev) => { ev.stopPropagation(); togglePin(s.id); });
-    t.appendChild(pin);
+    if (!s.archived) {
+      const pin = el("span", "tpin" + (s.pinned ? " on" : ""), PIN_ICON);
+      pin.title = s.pinned ? "Unpin" : "Pin";
+      pin.setAttribute("aria-label", s.pinned ? "Unpin chat" : "Pin chat");
+      pin.addEventListener("click", (ev) => { ev.stopPropagation(); togglePin(s.id); });
+      t.appendChild(pin);
+    }
+    const arch = el("span", "tarch", '<span class="msi">' + (s.archived ? "unarchive" : "archive") + "</span>");
+    arch.title = s.archived ? "Unarchive" : "Archive";
+    arch.setAttribute("aria-label", s.archived ? "Unarchive chat" : "Archive chat");
+    arch.addEventListener("click", (ev) => { ev.stopPropagation(); toggleArchive(s.id); });
+    t.appendChild(arch);
     const x = el("span", "tclose", '<span class="msi">close</span>');
     x.title = "Close";
     x.setAttribute("aria-label", "Close chat");
@@ -2967,8 +2974,27 @@ function renderTabs() {
     });
     t.addEventListener("contextmenu", (ev) => { ev.preventDefault(); startRename(s, t); });
     t.addEventListener("dblclick", (ev) => { ev.preventDefault(); startRename(s, t); });
-    wireTabDrag(t, s);   // pinned: drag to reorder; unpinned: drag into the pinned section to pin
+    if (!s.archived) wireTabDrag(t, s);   // pinned: drag to reorder; unpinned: drag into the pinned section to pin
     frag.appendChild(t);
+  };
+  // Archived chats sort last, so the main loop stops at the first one. They
+  // render after the "older chats" fold, outside the page limit, so their
+  // section is always reachable at the bottom whatever the rail's length.
+  const cut = list.findIndex((s) => s.archived);
+  const main = cut < 0 ? list : list.slice(0, cut);
+  const archived = cut < 0 ? [] : list.slice(cut);
+  main.forEach((s) => {
+    const want = railKey(s, today);
+    const isActive = s.id === activeId;
+    const closed = collapsedSections.has(want);
+    const past = !s.pinned && shown >= _railLimit;
+    if (past && !isActive) { folded++; return; }
+    if (want !== section && !past) header(want, closed);
+    // A collapsed section hides its chats, except the one you're looking at:
+    // the active tab stays visible so the rail never loses your place.
+    if (closed && !isActive) return;
+    if (!s.pinned && !past) shown++;
+    row(s, isActive, isActive && (past || closed));
   });
   if (folded) {
     const more = el("div", "tab tabmore",
@@ -2983,6 +3009,15 @@ function renderTabs() {
       if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); page(); }
     });
     frag.appendChild(more);
+  }
+  if (archived.length) {
+    const closed = collapsedSections.has("archived");
+    header("archived", closed);
+    archived.forEach((s) => {
+      const isActive = s.id === activeId;
+      if (closed && !isActive) return;
+      row(s, isActive, isActive && closed);
+    });
   }
   tabsEl.innerHTML = "";
   tabsEl.appendChild(frag);
@@ -3230,9 +3265,29 @@ async function togglePin(id) {
   s.pinned = !s.pinned;
   if (s.pinned) {   // newly pinned -> bottom of the pinned list (matches backend)
     s.pinOrder = Math.max(-1, ...[...sessions.values()].filter((x) => x.pinned && x !== s).map((x) => x.pinOrder)) + 1;
+    s.archived = false;
   }
   renderTabs();
   try { await fetch("/sessions/" + id + "/pin", { method: "POST" }); } catch (_) {}
+}
+// Archive: hide a finished chat at the bottom of the rail (collapsed "archived"
+// section), keeping its transcript, search hits and resume link. Archiving the
+// chat on screen moves you to the top of the rail, the same as closing it
+// would, since "done with it" is the whole gesture. Unarchive puts it back in
+// its date bucket. Mirrors POST /sessions/<id>/archive.
+async function toggleArchive(id) {
+  const s = sessions.get(id);
+  if (!s) return;
+  s.archived = !s.archived;
+  if (s.archived) s.pinned = false;
+  if (s.archived && activeId === id) {
+    const next = sortedSessions().find((x) => !x.archived);
+    if (next) switchTo(next.id);
+    else { activeId = null; createSession(); }
+  } else {
+    renderTabs();
+  }
+  try { await fetch("/sessions/" + id + "/archive", { method: "POST" }); } catch (_) {}
 }
 function switchTo(id) {
   crystal.emotion = null; crystal.lastActivity = Date.now();
@@ -3917,6 +3972,7 @@ input.addEventListener("paste", (e) => {
    uses the chat on screen, then recency, then the dedicated photos chat. */
 const LOCAL_COMMANDS = [
   { name: "new", desc: "Start a new chat" },
+  { name: "archive", desc: "Archive this chat (hide it at the bottom of the list; /archive again to bring it back)" },
   { name: "here", desc: "Route AirDropped photos to this chat (/here off to cancel)" },
   { name: "photos", desc: "Route AirDropped photos to the 📷 iPhone Photos chat" },
 ];
@@ -3941,6 +3997,12 @@ function handleLocalCommand(text) {
     if (a) a.draft = "";
     hideSlash();
     createSession().then((s) => { if (seed && s) s.send(seed); });
+    return true;
+  }
+  if (/^\/archive$/i.test(text)) {
+    const a = activeId && sessions.get(activeId);
+    input.value = ""; growInput(); hideSlash();
+    if (a) { a.draft = ""; toggleArchive(a.id); }
     return true;
   }
   const mHere = /^\/here(?:\s+(off|stop))?$/i.exec(text);
@@ -5491,7 +5553,8 @@ function bootChat() {
   if (pins.length) {
     return pins.reduce((best, s) => (s.lastActivity > best.lastActivity ? s : best));
   }
-  return sortedSessions()[0];
+  const list = sortedSessions();
+  return list.find((s) => !s.archived) || list[0];
 }
 async function boot() {
   try {
@@ -5531,6 +5594,7 @@ function applySessionMeta(meta) {
   if (meta.title && s.title !== meta.title) { s.title = meta.title; changed = true; }
   if (s.pinned !== !!meta.pinned) { s.pinned = !!meta.pinned; changed = true; }
   if ((s.pinOrder || 0) !== (meta.pin_order || 0)) { s.pinOrder = meta.pin_order || 0; changed = true; }
+  if (s.condensed !== !!meta.condensed) { s.condensed = !!meta.condensed; changed = true; }
   if (s.archived !== !!meta.archived) { s.archived = !!meta.archived; changed = true; }
   const la = (meta.last_activity || 0) * 1000;
   if (la > (s.lastActivity || 0)) { s.lastActivity = la; changed = true; }

@@ -149,7 +149,7 @@ def condense(path):
 def due(session, now=None):
     """Is this chat old and idle enough to condense?"""
     now = now or time.time()
-    if session.pinned or session.archived or session.alive:
+    if session.pinned or session.condensed or session.alive:
         return False
     if getattr(session, "_subscribers", None):
         return False

@@ -237,7 +237,8 @@ if(_fs)_d.style.setProperty("--q-font",_fs);}catch(e){}</script>
     try {
       const list = await (await fetch("/sessions")).json();
       sessionsCache = list.sort((a, b) =>
-        (a.pinned !== b.pinned) ? (a.pinned ? -1 : 1) : (b.last_activity - a.last_activity));
+        (!!a.archived !== !!b.archived) ? (a.archived ? 1 : -1)   // archived chats last
+        : (a.pinned !== b.pinned) ? (a.pinned ? -1 : 1) : (b.last_activity - a.last_activity));
     } catch (_) { sessionsCache = []; }
     renderPickList("");
     pickSearch.focus();
