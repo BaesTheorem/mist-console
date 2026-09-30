@@ -59,6 +59,9 @@ AT_SLACK = 2.0
 
 log = logging.getLogger(__name__)
 _EMBED_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+# `#loop` / `#loop=START,END` after an audio path asks app.js for the gapless loop
+# player (LOOP_FRAG_RE there). It is not part of the file name.
+_LOOP_FRAG_RE = re.compile(r"#loop(?:=\s*\d*\.?\d+\s*,\s*\d*\.?\d+\s*)?\s*$", re.I)
 _lock = threading.Lock()
 _index = None   # realpath -> [(ts, snap_name), ...] in append order
 
@@ -116,7 +119,7 @@ def embedded_paths(text):
     """Local media paths referenced by `![..](path)` in `text`, in order."""
     out = []
     for m in _EMBED_RE.finditer(text or ""):
-        p = _unescape_md(m.group(1)).removeprefix("file://")
+        p = _LOOP_FRAG_RE.sub("", _unescape_md(m.group(1))).removeprefix("file://")
         if not p.startswith(("/", "~")):
             continue
         if os.path.splitext(p)[1].lower() in MEDIA_EXTS:
