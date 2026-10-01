@@ -790,6 +790,44 @@ def _setup():
     appmod.surface_main = _raise_main
 
 
+def _enable_video_fullscreen():
+    """Put the fullscreen button back on inline <video> players.
+
+    WKWebView ships with element fullscreen OFF, and WebKit's native media
+    controls drop their fullscreen button whenever it is off (the element
+    reports webkitSupportsFullscreen=false). pywebview builds the
+    WKWebViewConfiguration itself with no hook into its preferences, and the
+    flag is read when the WKWebView is created (set later it needs a page
+    reload to take), so hand pywebview a configuration subclass that turns it
+    on in init. Everything else on the WebKit module passes through untouched.
+    Verified on macOS 26.3: default -> webkitSupportsFullscreen false, with the
+    preference -> true, same mp4."""
+    try:
+        import objc
+        import WebKit
+        import webview.platforms.cocoa as cocoa
+    except Exception:
+        return
+
+    class _FullscreenConfig(WebKit.WKWebViewConfiguration):
+        def init(self):
+            self = objc.super(_FullscreenConfig, self).init()
+            if self is not None:
+                try:
+                    self.preferences().setElementFullscreenEnabled_(True)
+                except Exception:
+                    pass
+            return self
+
+    class _WebKitShim:
+        WKWebViewConfiguration = _FullscreenConfig
+
+        def __getattr__(self, name):
+            return getattr(WebKit, name)
+
+    cocoa.WebKit = _WebKitShim()
+
+
 def _on_start():
     # Schedule main-thread setup (we're on a worker thread here).
     try:
@@ -909,6 +947,7 @@ def main():
     # False and then injects `body {-webkit-user-select: none; cursor: default}`
     # into the page (webview/js/customize.js), which kills selection app-wide and
     # leaves the right-click menu with nothing to copy.
+    _enable_video_fullscreen()
     _main_window = webview.create_window(
         "MIST Console", f"http://127.0.0.1:{PORT}",
         js_api=Api(), width=1120, height=800, min_size=(720, 520),
