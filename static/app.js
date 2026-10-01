@@ -3725,6 +3725,7 @@ function switchTo(id) {
   const s = sessions.get(id);
   if (!s) return;
   activeId = id;
+  pauseVideos(s.logEl);   // a video keeps playing in a hidden log otherwise
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
   syncPhoneTitle();
   s.connect();   // lazy: open the stream + replay this transcript on first view
@@ -4679,6 +4680,36 @@ function renderCrystalList() {
   for (const evn of ["play", "playing", "pause", "ended", "emptied"]) document.addEventListener(evn, (e) => { if (e.target && e.target.tagName === "AUDIO") recount(); }, true);
   document.addEventListener("mist-loop", recount);   // a loop player started or stopped (loopNotify)
 })();
+
+/* ---------- video pause on chat switch / app switch ----------
+   A hidden session log only stops drawing a playing video; it keeps playing.
+   And the page cannot see the app losing the foreground on its own: WKWebView's
+   page focus follows the first responder, not the key window, so window blur
+   and document.hasFocus() never change when another app comes to the front.
+   So: pause on tab switch (switchTo), when the document is hidden, and when the
+   desktop shell says the app resigned active, polled only while a video plays
+   and only inside the desktop shell (a phone or browser has no such flag). */
+function pauseVideos(except) {
+  document.querySelectorAll("#logs video").forEach((v) => {
+    if (!v.paused && !(except && except.contains(v))) v.pause();
+  });
+}
+let videoWatch = null;
+async function videoWatchTick() {
+  const playing = [...document.querySelectorAll("#logs video")].some((v) => !v.paused && !v.ended);
+  if (!playing) { clearInterval(videoWatch); videoWatch = null; return; }
+  if (document.hidden) { pauseVideos(); return; }
+  if (!window.pywebview) return;
+  try {
+    const j = await (await fetch("/app-active")).json();
+    if (j && j.active === false) pauseVideos();
+  } catch (_) {}
+}
+document.addEventListener("play", (e) => {
+  if (!e.target || e.target.tagName !== "VIDEO") return;
+  if (!videoWatch) videoWatch = setInterval(videoWatchTick, 500);
+}, true);
+document.addEventListener("visibilitychange", () => { if (document.hidden) pauseVideos(); });
 
 /* ---------- font switcher ----------
    One font for ALL text everywhere. Every rule in the sheet reads var(--mono)

@@ -759,6 +759,34 @@ def _install_edit_menu():
         print("edit menu setup skipped:", e)
 
 
+_app_active_tokens = None
+
+
+def _install_app_active_observer():
+    """Mirror NSApp's active state into appmod.app_active (read by /app-active)."""
+    global _app_active_tokens
+    try:
+        from AppKit import NSApp
+        from Foundation import NSNotificationCenter
+        nc = NSNotificationCenter.defaultCenter()
+
+        def _became(note):
+            appmod.app_active = True
+
+        def _resigned(note):
+            appmod.app_active = False
+
+        _app_active_tokens = [
+            nc.addObserverForName_object_queue_usingBlock_(
+                "NSApplicationDidBecomeActiveNotification", NSApp(), None, _became),
+            nc.addObserverForName_object_queue_usingBlock_(
+                "NSApplicationDidResignActiveNotification", NSApp(), None, _resigned),
+        ]
+        appmod.app_active = bool(NSApp().isActive())
+    except Exception as e:
+        print("app-active observer skipped:", e, flush=True)
+
+
 def _setup():
     _install_edit_menu()
     # Baseline policy: Accessory when launched quietly as the overlay (so it floats
@@ -788,6 +816,13 @@ def _setup():
     # A second launch of the .app posts /raise so this instance surfaces instead
     # of a duplicate process starting (see the single-instance guard in main()).
     appmod.surface_main = _raise_main
+    # Tell the page when the Console stops being the active app, so a playing
+    # video pauses. The page cannot see this itself: WKWebView's page focus
+    # follows the first responder, not the key window, so window blur /
+    # document.hasFocus() never change when another app comes to the front.
+    # The page polls /app-active (only while a video plays) instead of us
+    # calling evaluate_js from here, which deadlocks on the main thread.
+    _install_app_active_observer()
 
 
 def _enable_video_fullscreen():

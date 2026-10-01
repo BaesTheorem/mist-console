@@ -567,6 +567,9 @@ _theme = _load_theme()
 # the app. We stash the request here; the front-end claims it on its next window
 # focus and switches to that chat. One-shot: peeking clears it.
 _pending_focus = None
+# Whether the desktop shell is the frontmost app; desktop.py flips it from
+# NSApplication's active notifications. The page polls it while a video plays.
+app_active = True
 
 
 # ---- routes ------------------------------------------------------------------
@@ -926,6 +929,11 @@ def set_focus():
         sid = _open_notification_chat(sid[len("notif."):]) or ""
     _pending_focus = sid if sid in _sessions else None
     return jsonify({"ok": True, "pending": _pending_focus or ""})
+
+
+@app.route("/app-active")
+def app_active_state():
+    return jsonify({"active": bool(app_active)})
 
 
 @app.route("/focus/peek")
