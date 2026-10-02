@@ -5539,15 +5539,54 @@ async function saveToDownloads(src, btn) {
     setTimeout(() => btn.classList.remove("saved", "save-err"), 1500);
   }
 }
+// Copy a transcript image to the clipboard as an image. The desktop app does it
+// natively (pasteboard gets TIFF + PNG, any source format). Elsewhere (browser
+// dev mode, Windows WebView2, remote) fall back to the Async Clipboard API,
+// which takes PNG only, so re-encode through a canvas; ClipboardItem accepts
+// the pending promise so the user gesture isn't lost across the fetch.
+async function copyImage(src, btn) {
+  if (!src) return false;
+  const qs = new URLSearchParams(src.slice(src.indexOf("?") + 1));
+  const path = qs.get("path");
+  const at = Number(qs.get("at")) || undefined;
+  let ok = false;
+  try {
+    if (path && window.pywebview && window.pywebview.api && window.pywebview.api.copy_image)
+      ok = !!(await window.pywebview.api.copy_image(path, at));
+  } catch (_) { ok = false; }
+  if (!ok && navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+    const png = (async () => {
+      const blob = await (await fetch(src)).blob();
+      if (blob.type === "image/png") return blob;
+      const bmp = await createImageBitmap(blob);
+      const c = document.createElement("canvas");
+      c.width = bmp.width; c.height = bmp.height;
+      c.getContext("2d").drawImage(bmp, 0, 0);
+      return new Promise((res) => c.toBlob(res, "image/png"));
+    })();
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      ok = true;
+    } catch (_) { ok = false; }
+  }
+  if (btn && btn.classList.contains("lightbox-btn")) {
+    const orig = btn.textContent;
+    btn.textContent = ok ? "Copied ✓" : "Failed";
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  }
+  return ok;
+}
 // Full-size preview overlay for generated images. Click image -> open here;
 // Download copies the file into ~/Downloads (same as the corner button).
 function openLightbox(src) {
   if (!src) return;
   const ov = el("div", "lightbox");
   const bar = el("div", "lightbox-bar");
+  const cpBtn = el("button", "lightbox-btn", "Copy");
   const dlBtn = el("button", "lightbox-btn", "Download");
   const closeBtn = el("button", "lightbox-btn", "Close");
-  bar.appendChild(dlBtn); bar.appendChild(closeBtn);
+  bar.appendChild(cpBtn); bar.appendChild(dlBtn); bar.appendChild(closeBtn);
+  cpBtn.addEventListener("click", (ev) => { ev.stopPropagation(); copyImage(src, cpBtn); });
   const img = el("img", "lightbox-img");
   img.src = src;
   ov.appendChild(bar); ov.appendChild(img);
@@ -5935,6 +5974,8 @@ logs.addEventListener("contextmenu", (e) => {
     const src = dl.getAttribute("data-dl");
     const path = new URLSearchParams(src.slice(src.indexOf("?") + 1)).get("path");
     items.push("-");
+    if (dlHost.matches(".genimg-wrap") || dlHost.closest(".genimg-wrap"))
+      items.push({ icon: "image", label: "Copy image", run: () => copyImage(src) });
     items.push({ icon: "download", label: "Save to Downloads", run: () => saveToDownloads(src, dl) });
     if (path) items.push({ icon: "content_paste", label: "Copy file path", run: () => copyText(path) });
   }

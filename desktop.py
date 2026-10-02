@@ -715,6 +715,28 @@ class Api:
             pass
         return True
 
+    def copy_image(self, path, at=None):
+        """Put a transcript image on the system pasteboard as an image (TIFF +
+        PNG flavors), so it pastes into Docs, Slack, Preview and the like.
+        `at` picks the per-message snapshot the bubble shows, like /file does.
+        Goes through the /file allowlist; anything else is refused."""
+        try:
+            resolved, _name = appmod._versioned_path(  # noqa: SLF001  the /file allowlist, same as the server routes
+                path if isinstance(path, str) else "",
+                float(at) if isinstance(at, (int, float)) else None)
+            if not resolved:
+                return False
+            from AppKit import NSImage, NSPasteboard
+            img = NSImage.alloc().initWithContentsOfFile_(resolved)
+            if img is None:
+                return False
+            pb = NSPasteboard.generalPasteboard()
+            pb.clearContents()
+            return bool(pb.writeObjects_([img]))
+        except Exception as e:
+            print("copy_image failed:", e)
+            return False
+
 
 def _install_edit_menu():
     """Build a standard Edit menu wired to the first-responder selectors, so the
