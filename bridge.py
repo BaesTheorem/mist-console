@@ -562,6 +562,11 @@ class ClaudeSession:
         self._ctx_override = False    # one-shot hard-cap override (next send passes)
         self._ctl_seq = 0            # control_request id counter (stop_task)
         self._pending_stops = {}     # control request_id -> task_id awaiting ack
+        # Background tasks (Agent subagents, backgrounded shells) the LIVE backend
+        # owns: task_id -> description. They die with the process, so whatever is
+        # still here when it exits gets a synthesized terminal event (see
+        # _close_open_tasks); otherwise the monitor shows them "running" forever.
+        self._open_tasks = {}
         self._pending_perms = {}     # can_use_tool request_id -> {input, suggestions}
         self._init_sent = False      # control-protocol initialize handshake sent?
         self._progress = {}          # progress bar id -> {last: ts, done: bool}
@@ -752,6 +757,11 @@ class ClaudeSession:
         with self._lock:
             if self.alive:
                 return
+            # A new backend inherits no tasks. Normally the old process's _watch
+            # closed them, but a replace-in-place (model switch, mode switch)
+            # can spawn before the old watcher wakes, and that watcher then
+            # stands down (`self.proc is not proc`) without closing anything.
+            orphans = self._take_open_tasks()
             env = dict(os.environ)
             env["PATH"] = (CLAUDE_BIN_DIR
                            + ":" + os.path.expanduser("~/.npm-global/bin")
@@ -792,6 +802,7 @@ class ClaudeSession:
                 threading.Thread(target=self._read_stdout, args=(proc,), daemon=True).start()
                 threading.Thread(target=self._read_stderr, args=(proc,), daemon=True).start()
                 threading.Thread(target=self._watch, args=(proc,), daemon=True).start()
+        self._close_tasks(orphans)
         if spawn_err is not None:
             self._broadcast({"type": "process_exit", "code": -1, "error": spawn_err})
             return
@@ -833,6 +844,40 @@ class ClaudeSession:
             self.alive = False
             return False
 
+    # ---- background-task ledger --------------------------------------------
+    TASK_TERMINAL = ("completed", "failed", "killed", "stopped")
+
+    def _note_task_event(self, obj):
+        """Track the CLI's task_* lifecycle so _close_open_tasks knows what a
+        dying backend leaves behind. started/progress open an id (progress
+        too: after a reconnect the start can predate what we saw); a
+        notification/update with a terminal status closes it."""
+        sub = obj.get("subtype")
+        tid = obj.get("task_id")
+        if not tid:
+            return
+        if sub in ("task_started", "task_progress"):
+            self._open_tasks.setdefault(tid, obj.get("description") or "background task")
+        elif sub in ("task_notification", "task_updated"):
+            status = obj.get("status") or (obj.get("patch") or {}).get("status")
+            if status in self.TASK_TERMINAL:
+                self._open_tasks.pop(tid, None)
+
+    def _take_open_tasks(self):
+        """Atomically hand over the open-task ledger (caller may hold _lock)."""
+        tasks, self._open_tasks = self._open_tasks, {}
+        return tasks
+
+    def _close_tasks(self, tasks):
+        """Broadcast a synthesized terminal event for each orphaned task. Same
+        shape as the stop_task ack, so the monitor (and the replay, since it
+        is recorded) resolves them. Never call under _lock: _broadcast takes it."""
+        for tid, desc in tasks.items():
+            self._broadcast({"type": "system", "subtype": "task_updated",
+                             "task_id": tid, "status": "killed",
+                             "summary": "The Claude process that owned this task exited "
+                                        "before it finished: " + str(desc)})
+
     def _watch(self, proc):
         code = proc.wait()
         with self._lock:
@@ -840,6 +885,11 @@ class ClaudeSession:
                 return   # an old backend finally died; the live one is not ours to touch
             self.alive = False
             self._turn_active = False
+        # Whatever this process was running in the background died with it,
+        # crash or not: a reap, a model switch and a window close all kill the
+        # subagents too. Close them in the stream so the monitor and the replay
+        # agree, instead of three spinners that outlive their process.
+        self._close_tasks(self._take_open_tasks())
         if self._intentional_stop:           # close or model switch — not a crash
             self._intentional_stop = False
             return
@@ -1006,6 +1056,8 @@ class ClaudeSession:
                     self._ctx_override = False
                     self._broadcast({"type": "context", "pct": self.context_pct,
                                      "used": int(post), "window": self._ctx_window})
+            elif obj.get("type") == "system" and str(obj.get("subtype", "")).startswith("task_"):
+                self._note_task_event(obj)
             elif obj.get("type") == "result":
                 self.last_activity = time.time()
                 self._turn_active = False   # turn done; reaper may reclaim once idle
@@ -1039,6 +1091,7 @@ class ClaudeSession:
                 task_id = self._pending_stops.pop(resp.get("request_id"), None)
                 if task_id:
                     if resp.get("subtype") == "success":
+                        self._open_tasks.pop(task_id, None)
                         self._broadcast({"type": "system", "subtype": "task_updated",
                                          "task_id": task_id, "status": "killed"})
                     else:

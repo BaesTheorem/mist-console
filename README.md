@@ -127,6 +127,12 @@ Press **Esc** (or click the send button, which becomes **stop** while a turn run
 
 **Pause** (the ⏸ button left of send while a turn runs, **Shift+Esc**, or `/pause`) is the graceful cousin of stop. Nothing is interrupted: the bridge sends a mid-turn user message (`bridge.PAUSE_PROMPT`) asking MIST to finish the tool call in flight, write a short checkpoint (done / in progress / next step) and end the turn, so it lands at the model's next step rather than instantly. The echo shows as a small control chip (a `user_text` event with `kind: "pause"`), the status reads *pausing…*, and when the result arrives the bridge broadcasts `paused`: the status turns amber, the same button becomes **▶ resume** (`/resume` too), which sends `RESUME_PROMPT`. Any other message also clears the pause. If a minute passes without the turn ending, a notice points at stop, which is still one Esc away. Routes: `POST /sessions/<id>/pause` (`state`: `ok` / `idle`), `POST /sessions/<id>/resume`.
 
+### Background tasks (the "running in background" panel)
+
+The CLI reports subagents and backgrounded shells as `system` events (`task_started`, `task_progress`, `task_notification`). The panel lists them and the rail dot goes amber while any run. A task's **✕** sends a `stop_task` control request; the bridge turns the ack into a synthesized `task_updated(status=killed)`, so the row resolves even when the CLI never emits its own terminal event.
+
+The bridge also keeps a ledger of every open task id per backend (`_open_tasks`). When the process exits, for any reason (crash, idle reap, model or mode switch, window close), it broadcasts the same synthesized `killed` event for each one still open, and records it, so a replay agrees. Without this, three agents killed by a session restart sat in the panel as "running" for an hour: no process was alive, but nothing had ever said so. The frontend does the same prune on `process_exit` as a fallback, and `replay_done` still drops any task with no terminal event in the log. `tests/test_bg_task_ledger.py` covers the ledger.
+
 ## Look: theme, font, text size
 
 Settings carries three appearance controls, all persisted **twice** — localStorage

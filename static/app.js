@@ -2653,6 +2653,13 @@ class Session {
       case "process_exit":
         this.setStatus("error", "exited");
         this.clearPermCards();
+        // The bridge closes orphaned tasks itself (a synthesized task_updated
+        // per open id, recorded for replay); this is the belt to that brace
+        // for an event stream that dropped them. Nothing survives its process.
+        this.bgTasks.forEach((t, id) => {
+          if (t.status === "running" || t.status === "killing")
+            this.handleBgSystem({ subtype: "task_updated", task_id: id, status: "killed" });
+        });
         this.notice("Claude process exited (code " + o.code + ").", true);
         break;
     }
