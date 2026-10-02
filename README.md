@@ -407,6 +407,14 @@ What changed on the server for it (`remote.py`, the `/remote/*` routes):
 
 `data/` reached 2.9 GB across 1374 chats (14 files over 20 MB). Chats that are unpinned, dormant, unwatched and untouched for `archive.ARCHIVE_AFTER_DAYS` (90) are **condensed** by a daily server thread (`archive.py`): stream deltas, tool-result sidecars, task and progress ticks go; every assistant API message becomes one `mist_msg` event (text / thinking / tool blocks, the same shape imported chats use), `user_text` and the last `context` event stay, `seq`/`ts` stamps and the CLI `uuid` are preserved so ordering, timestamps, search and rewind anchors still work. Measured: a 41 MB chat condenses to 2.5 MB in about a second. Condensed chats fold into a collapsed **long ago** section near the bottom of the rail (above Alex's own **archived** section) and stay fully searchable and resumable. Their flag is `condensed` in `sessions.json`. Pinned chats are never touched. `compact_boundary` dividers are kept too. The same `Condenser` bounds the in-memory replay window of every chat (see Persistent above). `MIST_CONSOLE_DATA_DIR` points a test instance at its own data dir.
 
+## Expired CLI transcripts (replay) and pinned chats
+
+Claude Code deletes a session transcript (`~/.claude/projects/<slug>/<id>.jsonl`) when its mtime is older than `cleanupPeriodDays` (default 30, set to 60 on this machine in `~/.claude/settings.json`). The Console keeps its own log of each chat, so the text survives, but a `--resume` of a deleted id fails with "No conversation found with session ID". Before 2026-10-02 the Console then started an empty session, and the window continued to show the full chat.
+
+Replay (`replay.py`). Before a spawn, `ClaudeSession._transcript_gone()` looks for the CLI file in all project folders. If it is gone, the backend starts a new session and the next send carries the earlier conversation as one text block in front of the message: Alex's messages and MIST's replies, a one-line marker for each tool call, no tool output or thinking. Above 160k characters, the first message and the newest turns stay. A notice in the chat says that the context came from the Console log. If the CLI reports a missing session after this check (a race with its own sweep), `_watch` reseeds and sends the message again. The replay is in the new CLI transcript, so all subsequent `--resume` starts keep it.
+
+Pinned chats (`retention.py`). A pinned chat's countdown is suspended. At 10-minute intervals the server moves the mtime of each file of the chat's CLI session (the transcript, its sidecars, the `<id>/` folder) forward by the time since the last tick. A file written since then keeps its actual time. After an unpin the countdown continues from where it stopped. The server keeps the clocks in `data/retention.json`.
+
 ## Dependencies
 
 - `claude` CLI (provides the stream-json protocol). The path is resolved at

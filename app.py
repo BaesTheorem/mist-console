@@ -31,6 +31,7 @@ import notifchat
 import embeds
 import quickaccess
 import remote
+import retention
 import search as chat_search
 import share
 import transcript
@@ -135,6 +136,7 @@ def _touch(s, created=False):
 _counter = 0
 _meta_lock = threading.Lock()
 SESSIONS_META = os.path.join(DATA_DIR, "sessions.json")
+RETENTION_STATE = os.path.join(DATA_DIR, "retention.json")   # pinned-chat clocks
 _pending_open = None   # session id the main window should jump to (set by quick entry)
 
 # The repo/dir MIST runs in is PER-CHAT, and every new chat starts in the harness
@@ -1550,6 +1552,7 @@ def pin_session(sid):
             s.archived, s.archived_at = False, None
     _touch(s)
     _save_meta()
+    _retention_tick_soon()
     return jsonify({"ok": True, "pinned": s.pinned, "pin_order": s.pin_order})
 
 
@@ -1585,6 +1588,7 @@ def archive_session(sid):
             s.pinned = False
         _touch(s)
         _save_meta()
+        _retention_tick_soon()
     return jsonify({"ok": True, "archived": s.archived, "archived_at": s.archived_at,
                     "pinned": s.pinned})
 
@@ -2596,6 +2600,29 @@ def _archiver():
         time.sleep(24 * 3600)
 
 
+def _retention_tick():
+    try:
+        retention.tick(list(_sessions.values()), ClaudeSession._cli_transcript_path,
+                       RETENTION_STATE)
+    except Exception as e:  # noqa: BLE001 -- the next tick tries again
+        logging.getLogger("mist.retention").warning("retention tick failed: %s", e)
+
+
+def _retention_tick_soon():
+    """Run a tick off the request thread: it walks each pinned chat's files."""
+    threading.Thread(target=_retention_tick, daemon=True).start()
+
+
+def _retention_keeper():
+    """Hold the CLI transcript clock still for pinned chats, so Claude Code's
+    retention sweep never deletes them while they stay pinned (retention.py).
+    Sleeps first: the clocks persist, so a late first tick loses nothing, and
+    boot (or a test importing app) does not walk session folders."""
+    while True:
+        time.sleep(retention.TICK_SEC)
+        _retention_tick()
+
+
 def _reaper():
     """Put idle chat backends dormant so they stop pinning RAM/CPU once a
     conversation has gone quiet (see bridge.IDLE_REAP_SEC). Dormant chats keep
@@ -2642,6 +2669,7 @@ threading.Thread(target=_serve_tunnel_origin, daemon=True, name="tunnel-origin")
 threading.Thread(target=_periodic_save, daemon=True).start()
 threading.Thread(target=_reaper, daemon=True).start()
 threading.Thread(target=_archiver, daemon=True).start()
+threading.Thread(target=_retention_keeper, daemon=True, name="retention").start()
 
 
 if __name__ == "__main__":
