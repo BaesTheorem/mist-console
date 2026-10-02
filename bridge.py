@@ -20,6 +20,7 @@ import urllib.request
 
 import archive
 import embeds
+import replay
 import v4first
 
 HARNESS = "/Users/alexhedtke/Documents/Exobrain harness"
@@ -80,6 +81,9 @@ HISTORY_CAP = 8000   # max events kept in memory for replay (jsonl keeps all)
 # (see ensure_started + the /progress route).
 CONSOLE_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
 CONSOLE_URL = os.environ.get("MIST_CONSOLE_URL", "http://127.0.0.1:5014")
+# Where the CLI keeps its session transcripts (CLAUDE_CONFIG_DIR moves ~/.claude).
+CLI_PROJECTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR")
+                            or os.path.expanduser("~/.claude"), "projects")
 # Banners for blocking permission asks (see _notify_permission).
 NOTIFY_BIN = os.path.join(HARNESS, "mist-voice", "bin", "mist-notify")
 
@@ -576,6 +580,15 @@ class ClaudeSession:
         # message uuid (--resume-session-at + --fork-session). See rewind()/branch().
         self._resume_at = None
         self._fork_next = False      # next spawn adds --fork-session (whole-chat branch)
+        # Expired transcript (see replay.py). _seed_pending: this chat's CLI
+        # session file is gone, so the next spawn starts fresh and the next
+        # send carries the conversation rebuilt from data/<id>.jsonl. It clears
+        # on the init that follows a seeded send (_seed_inflight), so a seeded
+        # spawn that dies first gets the replay again on the retry.
+        self._seed_pending = False
+        self._seed_inflight = False
+        self._resume_missing = False  # stderr said "No conversation found" (see _watch)
+        self._inflight = None         # (content, seq) of the send awaiting its turn
         self.condensed = False       # condensed transcript (see archive.py); rail folds it
         self.archived = False        # hidden from the rail by Alex; see /sessions/<id>/archive
         self.archived_at = None
@@ -711,7 +724,7 @@ class ClaudeSession:
         # (Gmail/Calendar/Drive/MyChart). No --strict-mcp-config, so claude uses
         # its normal full resolution. The @latest/uvx servers resolve over the
         # network, so they connect a beat slower than the local ones.
-        if self.claude_session_id and not self._resume_tried:
+        if self.claude_session_id and not self._resume_tried and not self._seed_pending:
             cmd += ["--resume", self.claude_session_id]  # restore model context
             if self._resume_at:
                 # Truncating resume: keep the CLI transcript up to and including
@@ -772,6 +785,11 @@ class ClaudeSession:
             # and its bar renders inline in the conversation that started it.
             env["MIST_CONSOLE_SESSION"] = self.id or ""
             env["MIST_CONSOLE_URL"] = CONSOLE_URL
+            if self._transcript_gone():
+                # Claude Code's retention sweep deleted this chat's CLI session
+                # file, so --resume could only fail. Start fresh instead; the
+                # next send carries the conversation rebuilt from the Console log.
+                self._seed_pending = True
             try:
                 self.proc = subprocess.Popen(
                     self._build_cmd(), cwd=self.cwd, env=env,
@@ -787,6 +805,7 @@ class ClaudeSession:
                 self.alive = True
                 self._started_at = time.time()
                 self._saw_init = False
+                self._resume_missing = False
                 self._init_sent = False
                 self._pending_perms = {}
                 # A fresh backend starts un-flagged. If the OLD process's watcher
@@ -810,6 +829,13 @@ class ClaudeSession:
         # decisions to us as can_use_tool control_requests. Only needed when a
         # prompt tool is in play (non-bypass modes); bypassPermissions never asks.
         self._maybe_init_control()
+
+    def _transcript_gone(self):
+        """True when this chat points at a CLI session whose file exists in no
+        project folder, which means Claude Code's retention sweep deleted it."""
+        if not self.claude_session_id or self._seed_pending or self._resume_tried:
+            return False
+        return not os.path.exists(self._cli_transcript_path(self.cwd, self.claude_session_id))
 
     def _maybe_init_control(self):
         """Send the SDK `initialize` handshake. Needed for permission routing in
@@ -905,12 +931,29 @@ class ClaudeSession:
                                      "send again to continue from the end."})
             self._broadcast({"type": "process_exit", "code": code})
             return
+        if self._resume_missing and not self._saw_init:
+            # The CLI found no session file although the pre-spawn check did
+            # (deleted in between, or kept under another project folder). Same
+            # cure as _transcript_gone: a fresh session seeded from the Console
+            # log, and the message that was in flight goes again, so Alex does
+            # not have to resend it.
+            self._resume_missing = False
+            self._seed_pending = True
+            inflight, self._inflight = self._inflight, None
+            self.ensure_started()
+            if inflight and self.alive:
+                with self._lock:
+                    self._turn_active = True
+                self._write_user(*inflight)
+            return
         # If a --resume start died almost immediately without initializing, the
-        # resumed session was probably invalid: retry once fresh.
+        # resumed session was probably invalid: retry once fresh, and seed the
+        # next send from the Console log so the fresh session is not blank.
         if (self.claude_session_id and not self._resume_tried and not self._saw_init
                 and time.time() - self._started_at < 5):
             self._resume_tried = True
             self.claude_session_id = None
+            self._seed_pending = True
             self.ensure_started()
             return
         self._broadcast({"type": "process_exit", "code": code})
@@ -1030,6 +1073,11 @@ class ClaudeSession:
                 _changed = new_csid and new_csid != self.claude_session_id
                 self.claude_session_id = new_csid
                 self.last_init = obj
+                if self._seed_inflight:
+                    # The seeded message reached a live session, so the replay is
+                    # now in the new CLI transcript and later resumes carry it.
+                    self._seed_inflight = False
+                    self._seed_pending = False
                 if _changed and on_meta_dirty:
                     try:
                         on_meta_dirty()
@@ -1061,6 +1109,10 @@ class ClaudeSession:
             elif obj.get("type") == "result":
                 self.last_activity = time.time()
                 self._turn_active = False   # turn done; reaper may reclaim once idle
+                if self._saw_init:
+                    # A refused --resume also ends in an (error) result, but it
+                    # never inits; _watch still needs its message to resend.
+                    self._inflight = None
                 self._emit_context(obj)
                 if self._pause_pending:
                     # The turn ended after a pause request: this chat is paused
@@ -1289,6 +1341,8 @@ class ClaudeSession:
         for line in proc.stderr:
             if self.proc is not proc:
                 return
+            if "No conversation found with session ID" in line:
+                self._resume_missing = True   # _watch reseeds and resends
             if line.strip():
                 self._broadcast({"type": "stderr", "text": line.rstrip()})
 
@@ -1471,6 +1525,12 @@ class ClaudeSession:
         self.ensure_started()
         if not self.alive or not self.proc or self.proc.stdin is None:
             return False
+        # Load the log before stamping this send. A chat that gets a message
+        # before anyone opens it (a notification reply, quick entry) still has
+        # _ev_seq at 0, so its user_text took seq 1 and collided with the
+        # log's own early events; the expired-transcript replay cuts at this
+        # seq and came out empty (caught live 2026-10-02). One read per chat.
+        self._load_history()
         full = text
         display = display if display is not None else text
         if url:
@@ -1512,6 +1572,32 @@ class ClaudeSession:
         if img_for_display:
             ev["image"] = img_for_display
         self._broadcast(ev)
+        return self._write_user(content, ev.get("seq"))
+
+    def _write_user(self, content, seq):
+        """Write one user message to the CLI. If this chat's transcript expired,
+        the conversation before event `seq` goes in front of it as one text
+        block (replay.build), and a notice in the chat says so."""
+        self._inflight = (content, seq)
+        if self._seed_pending:
+            built = None
+            try:
+                if self._jsonl and os.path.exists(self._jsonl):
+                    built = replay.build(_iter_jsonl(self._jsonl), stop_seq=seq)
+            except Exception as e:  # noqa: BLE001 -- a broken log must not block the send
+                logging.getLogger("mist.replay").warning("replay of %s failed: %s", self.id, e)
+            if built:
+                text, n_msgs, omitted = built
+                content = [{"type": "text", "text": text}, *content]
+                self._seed_inflight = True
+                note = ("This chat's CLI transcript expired, so this reply comes from a "
+                        f"new session. It got the earlier conversation as text from the "
+                        f"Console log: {n_msgs} messages, without tool output.")
+                if omitted:
+                    note += f" {omitted} messages from the middle were left out to fit."
+                self._broadcast({"type": "notice", "text": note})
+            else:
+                self._seed_pending = False   # nothing to replay: a plain fresh start
         msg = {"type": "user", "message": {"role": "user", "content": content}}
         try:
             # _stdin_lock, not self._lock: an image payload is megabytes and this
@@ -1521,7 +1607,7 @@ class ClaudeSession:
                 self.proc.stdin.write(json.dumps(msg) + "\n")
                 self.proc.stdin.flush()
             return True
-        except (BrokenPipeError, ValueError, OSError):
+        except (BrokenPipeError, ValueError, OSError, AttributeError):
             self.alive = False
             self._turn_active = False
             return False
@@ -1718,7 +1804,7 @@ class ClaudeSession:
         the slug being the REAL path of the cwd (/tmp is /private/tmp to the
         CLI) with every '/' and space turned into '-'. Falls back to a search
         across all project dirs, since the file's name is the session id."""
-        root = os.path.expanduser("~/.claude/projects")
+        root = CLI_PROJECTS
         try:
             real = os.path.realpath(cwd or "")
         except Exception:
