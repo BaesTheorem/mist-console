@@ -30,6 +30,12 @@ import app as appmod
 
 PORT = 5014
 QUIET_MARKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".quiet-launch")
+# Dropped when Alex quits on purpose (red button or Cmd+Q). bin/console-watch
+# reopens the Console whenever :5014 stops answering, which turned a deliberate
+# quit into a one-minute nap; while this file exists the watcher stays out. Any
+# launch of this process (manual open, hotkey agent, restart-server) removes it,
+# and the watcher ignores one older than the last boot, so login recovery stays.
+QUIT_MARKER = "/tmp/mist-console-quit.last"
 # The overlay box is 600px wide and sits at the bottom of the panel. The panel is
 # deliberately much larger than the box: its extra transparent margin is what the
 # box's soft glow fades into (box-shadow is clipped at the panel's bounds, so a
@@ -951,6 +957,12 @@ def _evict_port(port):
 
 def main():
     global _main_window, _quiet_launch
+    # Opening the app is consent to the watchdog again: clear the quit marker
+    # before anything else so even a deferred (already-running) launch resets it.
+    try:
+        os.remove(QUIT_MARKER)
+    except OSError:
+        pass
     # Single instance: if a console is already up, surface it and exit instead of
     # starting a second process that can't bind the port and leaves two windows
     # fighting over /show-quick and /pending-open. A quiet (overlay) launch only
@@ -1020,7 +1032,18 @@ def main():
             time.sleep(0.4)   # let terminate() reach the claude children (they clean up their MCP subprocesses)
             os._exit(0)
         threading.Thread(target=_bye, daemon=True).start()
+    # `closing` fires for the red button AND for Cmd+Q (pywebview's
+    # applicationShouldTerminate_ runs should_close on every window); `closed`
+    # only fires for the former. The marker goes in the earliest hook so a quit
+    # that never reaches _on_closed (Cmd+Q tearing the app down) still records
+    # intent. Returning None never cancels the close.
+    def _on_closing():
+        try:
+            open(QUIT_MARKER, "w").close()
+        except OSError:
+            pass
     try:
+        _main_window.events.closing += _on_closing
         _main_window.events.closed += _on_closed
     except Exception:
         pass

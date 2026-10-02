@@ -45,6 +45,8 @@ uv run --with flask python app.py   # http://127.0.0.1:5014
 
 Port: **5014**.
 
+**Watchdog.** `launchd/com.exobrain.mist-console-watch.plist` runs `bin/console-watch` every minute and at login: if nothing answers on :5014 it runs `open -a "MIST Console"`, so a crash or a reboot never leaves the phone without a Mac to reach. A deliberate quit (red button or Cmd+Q) sticks: `desktop.py` drops `/tmp/mist-console-quit.last` from pywebview's `closing` event, the watcher stays out while that file exists, and every launch of the app removes it. A marker older than the last boot is treated as stale, so login recovery is unaffected.
+
 ## Install on Windows (no build needed)
 
 A self-contained Windows build lives at [`releases/MIST Console.exe`](releases/)

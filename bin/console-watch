@@ -1,12 +1,29 @@
 #!/bin/bash
 # Keep the MIST Console up: if nothing answers on its port, open the app.
 # Run by launchd every minute (launchd/com.exobrain.mist-console-watch.plist),
-# so the Console comes back after a crash, a quit, or a login, and the phone
-# can reach the Mac whenever the Mac is on. `open -a` goes through
-# LaunchServices, so the app keeps its own TCC grants (a direct spawn from
-# launchd would not).
+# so the Console comes back after a crash or a login, and the phone can reach
+# the Mac whenever the Mac is on. `open -a` goes through LaunchServices, so the
+# app keeps its own TCC grants (a direct spawn from launchd would not).
+#
+# A deliberate quit sticks. desktop.py drops $quit_marker when the window is
+# closed or the app gets Cmd+Q, and removes it on every launch, so the Console
+# stays down until Alex opens it again. A marker older than the last boot is
+# stale (nothing survives a reboot on purpose) and is removed, so login
+# recovery still works. Crashes never write the marker, so they still recover.
 if curl -s -m 3 -o /dev/null "http://127.0.0.1:5014/remote/ping"; then
   exit 0
+fi
+quit_marker=/tmp/mist-console-quit.last
+if [ -f "$quit_marker" ]; then
+  # First number in "{ sec = N, usec = M } ...". A greedy ".*sec = " would
+  # land on "usec" and return the microseconds instead.
+  boot=$(sysctl -n kern.boottime | sed -E 's/^[^0-9]*([0-9]+).*/\1/')
+  marked=$(stat -f %m "$quit_marker" 2>/dev/null || echo 0)
+  if [ -n "$boot" ] && [ "$marked" -lt "$boot" ]; then
+    rm -f "$quit_marker"   # quit before the last reboot: stale, recover as usual
+  else
+    exit 0                 # quit on purpose this uptime: stay out
+  fi
 fi
 # The restart script owns the window for a few seconds after it fires; give it room.
 guard=/tmp/mist-console-restart.last
