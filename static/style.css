@@ -1675,3 +1675,172 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
 @media (max-width: 760px) and (prefers-reduced-motion: reduce) {
   #phoneStatus .ps-dot { animation: none !important; }
 }
+
+/* ====================================================================
+   Claude Mods: trees a plugin draws (mods.js), panes, the band above the
+   prompt, status lines, toasts, hook lines, dialogs. Flat and sharp like
+   the rest: hairlines, no radius, no shadows. One terminal cell is 1ch
+   wide and --mod-row tall, so a tree laid out in cells keeps its shape.
+   ==================================================================== */
+:root { --mod-row: 1.45em; }
+
+/* --- status strip ($.ui.status): one chip per plugin, above the composer --- */
+#modStatus {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px;
+  border-top: 1px solid var(--line); background: var(--md-sys-color-surface-container-low);
+  font-size: 11px; color: var(--md-sys-color-on-surface-variant);
+}
+#modStatus[hidden] { display: none; }
+#modStatus .ms-chip { border: 1px solid var(--line); padding: 1px 7px; white-space: pre-wrap; }
+#modStatus .ms-chip b { color: var(--teal); font-weight: 400; margin-right: 5px; }
+
+/* --- band above the prompt (AbovePrompt) --- */
+#aboveBand {
+  border-top: 1px solid var(--line); background: var(--md-sys-color-surface-container-low);
+  padding: 6px 14px; max-height: 40vh; overflow: auto; font-size: 12px;
+}
+#aboveBand[hidden] { display: none; }
+
+/* --- toasts ($.ui.toast): stacked top-right, under the top bar --- */
+#toasts {
+  position: fixed; top: calc(var(--topbar-h, 44px) + 8px); right: 14px; z-index: 60;
+  display: flex; flex-direction: column; gap: 6px; pointer-events: none; max-width: 380px;
+}
+#toasts .toast {
+  pointer-events: auto; border: 1px solid var(--teal); background: var(--md-sys-color-surface-container-high);
+  color: var(--text); padding: 7px 11px; font-size: 12px; white-space: pre-wrap;
+  animation: toast-in .18s ease-out;
+}
+#toasts .toast b { color: var(--teal); font-weight: 400; margin-right: 6px; }
+#toasts .toast.leaving { opacity: 0; transition: opacity .25s; }
+@keyframes toast-in { from { transform: translateY(-4px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #toasts .toast { animation: none; } }
+
+/* --- transcript lines a mod logs ($.ui.log), dim like a system notice --- */
+.mod-log { color: var(--dim); font-size: 11px; margin: 4px 0; padding-left: 2px; white-space: pre-wrap; }
+.mod-log b { color: var(--teal); font-weight: 400; margin-right: 6px; }
+
+/* --- hook events (--include-hook-events): one collapsed card per turn --- */
+details.hooks { border: 1px solid var(--line-soft); margin: 6px 0; font-size: 11px; width: fit-content; min-width: 220px; max-width: 100%; }
+details.hooks > summary { cursor: pointer; list-style: none; padding: 3px 8px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+details.hooks > summary::-webkit-details-marker { display: none; }
+details.hooks.has-err > summary { color: var(--warn); }
+.hook-row { display: flex; gap: 8px; padding: 2px 8px; border-top: 1px dashed var(--line-soft); color: var(--md-sys-color-on-surface-variant); }
+.hook-row .hk-ev { color: var(--teal); min-width: 110px; }
+.hook-row .hk-out { margin-left: auto; color: var(--dim); }
+.hook-row.err .hk-out { color: var(--err); }
+.hook-row pre { margin: 2px 0 0; white-space: pre-wrap; color: var(--dim); font-size: 10px; max-height: 120px; overflow: auto; flex-basis: 100%; }
+.hook-row { flex-wrap: wrap; }
+
+/* --- subagent text (--forward-subagent-text) under its Agent card --- */
+details.subagent { margin: 4px 8px 8px; border-left: 2px solid var(--violet); }
+details.subagent > summary { cursor: pointer; list-style: none; font-size: 11px; color: var(--violet); padding: 2px 8px; text-transform: uppercase; letter-spacing: 1px; }
+details.subagent > summary::-webkit-details-marker { display: none; }
+details.subagent .sub-body { padding: 4px 10px; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
+details.subagent .sub-body .md + .md { margin-top: 6px; }
+
+/* --- prompt suggestion: a Tab hint while the composer is empty --- */
+#composer.has-suggest #input::placeholder { color: var(--teal); opacity: .8; }
+
+/* --- a mod's tree --- */
+.mod-tree { font-size: 12px; line-height: var(--mod-row); }
+.mod-tree .mb { display: flex; flex-direction: column; min-width: 0; box-sizing: border-box; }
+.mod-tree .mb.bordered { border: 1px solid var(--line); }
+.mod-tree .mt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mod-tree .mt.dim { color: var(--dim); }
+.mod-tree .mt.inverse { background: var(--text); color: var(--bg); }
+.mod-tree .mt.trunc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.mod-tree .mod-btn {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .5px;
+  background: var(--md-sys-color-surface-container-lowest); color: var(--text); border: 1px solid var(--line);
+  padding: 2px 9px; cursor: pointer; align-self: flex-start; white-space: nowrap;
+}
+.mod-tree .mod-btn:hover { border-color: var(--teal); color: var(--teal); }
+.mod-tree .mod-btn.primary { color: var(--teal); border-color: var(--teal); }
+.mod-tree .mod-btn.plain { border: 0; background: none; padding: 0 2px; }
+.mod-tree .mod-btn.dim { color: var(--dim); }
+.mod-tree .mod-btn .hk { color: var(--dim); margin-right: 4px; }
+.mod-tree .mod-btn:disabled { opacity: .5; cursor: progress; }
+.mod-tree .mod-field { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.mod-tree .mod-field label { color: var(--dim); white-space: nowrap; }
+.mod-tree .mod-field input, .mod-tree .mod-field select {
+  font-family: var(--mono); font-size: 12px; color: var(--text);
+  background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--line); padding: 2px 6px; min-width: 0; flex: 1;
+}
+.mod-tree .mod-field input:focus, .mod-tree .mod-field select:focus { outline: 1px solid var(--teal); outline-offset: -1px; }
+.mod-tree .mod-field .sub { color: var(--dim); font-size: 10px; white-space: nowrap; }
+.mod-tree a.mod-link { color: var(--teal); text-decoration: underline; }
+.mod-tree pre.mod-code { margin: 0; border: 1px solid var(--line-soft); padding: 4px 8px; font-size: 11px; overflow: auto; white-space: pre; background: var(--md-sys-color-surface-container-lowest); }
+.mod-tree pre.mod-code.wrap { white-space: pre-wrap; }
+.mod-tree pre.mod-code .ln { color: var(--dim); display: inline-block; width: 4ch; text-align: right; margin-right: 1ch; user-select: none; }
+.mod-tree pre.mod-code .dl { padding: 0; }
+.mod-tree .mod-md.dim { color: var(--dim); }
+.mod-tree img.mod-svg { display: block; max-width: 100%; }
+.mod-tree iframe.mod-svg { border: 0; display: block; max-width: 100%; }
+.mod-tree .mod-client { border: 1px dashed var(--line); color: var(--dim); font-size: 11px; padding: 6px 8px; }
+.mod-tree .mod-engine { display: contents; }
+.mod-site { margin: 4px 0; }
+.mod-site.hides-engine + .engine-hidden { display: none; }
+
+/* --- pane dock: a mod's panes beside the transcript --- */
+#paneDock {
+  width: var(--pane-w, 380px); flex: 0 0 var(--pane-w, 380px); min-width: 0;
+  border-left: 1px solid var(--line); background: var(--md-sys-color-surface-container-low);
+  display: flex; flex-direction: column;
+}
+#paneDock[hidden] { display: none; }
+#paneResize { width: 5px; flex: 0 0 5px; cursor: col-resize; background: transparent; margin-left: -5px; z-index: 2; }
+#paneResize:hover, #paneResize.dragging { background: var(--teal); }
+#paneDock[hidden] + #paneResize { display: none; }
+#paneTabs { display: flex; border-bottom: 1px solid var(--line); overflow-x: auto; }
+#paneTabs .pane-tab {
+  display: flex; align-items: center; gap: 6px; padding: 7px 10px; font-size: 11px; cursor: pointer;
+  color: var(--dim); border-right: 1px solid var(--line); white-space: nowrap; text-transform: uppercase; letter-spacing: 1px;
+}
+#paneTabs .pane-tab.sel { color: var(--teal); background: var(--md-sys-color-surface-container); }
+#paneTabs .pane-tab .pt-x { border: 0; background: none; color: var(--dim); cursor: pointer; padding: 0; font-size: 13px; line-height: 1; }
+#paneTabs .pane-tab .pt-x:hover { color: var(--err); }
+#paneBody { flex: 1; overflow: auto; padding: 8px 10px; }
+#paneBody.focused { outline: 1px solid var(--teal); outline-offset: -1px; }
+#paneBody .pane-empty { color: var(--dim); font-size: 11px; }
+/* the usage footer sits bottom-right; step it left of an open pane dock */
+body.pane-open #usage { right: calc(var(--pane-w, 380px) + 20px); }
+@media (max-width: 760px) { #paneDock, #paneResize { display: none !important; } }
+
+/* --- settings: mods + flags --- */
+.mod-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--line-soft); font-size: 12px; flex-wrap: wrap; }
+.mod-row .mod-name { color: var(--text); }
+.mod-row .mod-src { color: var(--dim); font-size: 10px; }
+.mod-row .mod-stat { flex-basis: 100%; color: var(--md-sys-color-on-surface-variant); font-size: 11px; white-space: pre-wrap; }
+.mod-row.builtin .mod-name { color: var(--dim); }
+.mod-err { color: var(--warn); font-size: 11px; margin: 4px 0; white-space: pre-wrap; }
+.flag-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--line-soft); font-size: 12px; }
+.flag-row label { flex: 1; color: var(--text); }
+.flag-row .flag-code { color: var(--dim); font-size: 10px; display: block; }
+.flag-row input[type="text"] {
+  font-family: var(--mono); font-size: 12px; color: var(--text); width: 120px;
+  background: var(--md-sys-color-surface-container-lowest); border: 1px solid var(--line); padding: 3px 6px;
+}
+
+/* --- usage card --- */
+#usageCard { position: fixed; top: 44px; right: 14px; width: 340px; z-index: 30;
+  background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line); }
+#usageCard .u-head { color: var(--teal); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin: 8px 0 2px; }
+
+/* --- diff card (workspace diff) --- */
+#diffCard {
+  position: fixed; top: var(--topbar-h, 0px); right: 0; width: min(760px, 70vw); height: calc(100% - var(--topbar-h, 0px));
+  background: var(--md-sys-color-surface-container-low); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; z-index: 21;
+}
+#diffCard[hidden], #usageCard[hidden] { display: none; }
+#diffCard .df-file { margin: 0 0 12px; border: 1px solid var(--line); }
+#diffCard .df-head { display: flex; gap: 10px; padding: 5px 9px; background: var(--md-sys-color-surface-container); font-size: 12px; color: var(--teal); }
+#diffCard .df-head .df-plus { color: var(--ok); } #diffCard .df-head .df-minus { color: var(--err); }
+#diffCard .df-note { color: var(--dim); font-size: 11px; padding: 4px 9px; }
+#diffCard .diff { font-size: 11px; max-height: 60vh; overflow: auto; }
+
+/* --- dialog card (request_user_dialog) --- */
+.perm-card.dialog { border-color: var(--warn); }
+.perm-card.dialog .perm-head { color: var(--warn); }
+.perm-card.dialog .perm-body { padding: 8px 11px; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }

@@ -133,9 +133,16 @@ function updateJumpBtn() {
 (function () {
   const c = $("#composer"), root = document.documentElement;
   if (!c) return;
-  const sync = () => root.style.setProperty("--composer-h", c.offsetHeight + "px");
+  // The mods' band (#aboveBand) and status strip (#modStatus) sit above the
+  // composer and belong to the same measurement (mods.js).
+  const extras = () => ["#aboveBand", "#modStatus"].reduce((n, id) => { const e = $(id); return n + (e && !e.hidden ? e.offsetHeight : 0); }, 0);
+  const sync = () => root.style.setProperty("--composer-h", (c.offsetHeight + extras()) + "px");
   sync();
-  if (window.ResizeObserver) new ResizeObserver(sync).observe(c);
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(sync);
+    ro.observe(c);
+    ["#aboveBand", "#modStatus"].forEach((id) => { const e = $(id); if (e) ro.observe(e); });
+  }
   window.addEventListener("resize", sync);
 })();
 
@@ -1457,6 +1464,14 @@ class Session {
     add("refresh", role === "user" ? "Resend (regenerate the reply)" : "Regenerate this reply",
         () => this.regenerate(wrap));
     add("call_split", "Branch from here (new chat, this one untouched)", () => this.branchAt(wrap));
+    if (role === "user") add("history", "Restore files to how they were before this message", () => window.MODS && MODS.rewindFiles(this, wrap));
+    if (role !== "user") {
+      // Thumbs up / down ride the CLI's own message_rated channel.
+      const up = box.lastChild; void up;
+      add("thumb_up", "Good reply", () => window.MODS && MODS.rate(this, wrap, "positive"), "rate");
+      add("thumb_down", "Bad reply", () => window.MODS && MODS.rate(this, wrap, "negative"), "rate");
+      box.querySelectorAll(".rate").forEach((b, i) => { b.dataset.sent = i === 0 ? "positive" : "negative"; });
+    }
     add("bookmark", "Bookmark this message", () => this.toggleBookmark(wrap), "bm-btn");
     add("content_copy", "Copy message", () => copyText(messageSource(wrap)));
     return box;
@@ -2330,6 +2345,8 @@ class Session {
       }
       if (b.summary) b.summary.textContent = toolSummary(c.name, c.input);
       b.id = c.id;
+      b._input = c.input;
+      b.el.dataset.toolId = c.id;
     });
   }
   applyToolResults(message) {
@@ -2344,6 +2361,7 @@ class Session {
           let txt = c.content;
           if (Array.isArray(txt)) txt = txt.map((p) => p.text || "").join("");
           b.el.appendChild(el("pre", "tool-result", esc(String(txt || "").slice(0, 6000))));
+          if (window.MODS) MODS.siteTool(this, b, c);   // a mod may draw this row (ToolUse)
         }
       }
     });
@@ -2402,6 +2420,7 @@ class Session {
         if (b._mdTimer) { clearTimeout(b._mdTimer); b._mdTimer = null; }
         b.el.innerHTML = md(b.text || "", b.ts); b.el._mdsrc = b.text || "";
         if (!this._replaying) { const em = crystalEmotionFrom(b.text); if (em) this.emotion = em; }
+        if (window.MODS && b.text) MODS.siteAssistant(this, b.el, b.text, e.index === 0);
       } else if (b && b.type === "thinking" && !b.el.textContent.trim()) {
         // Thinking arrived with empty text (display "omitted" — the model
         // default before we opted into "summarized", still replayed from old
@@ -2448,7 +2467,25 @@ class Session {
   }
 
   onEvent(o) {
+    // --forward-subagent-text: a subagent's own messages carry its parent
+    // tool id. They are not this conversation's blocks (the stream indexes
+    // would collide), so they go under the Agent card instead (mods.js).
+    if (o.parent_tool_use_id && (o.type === "assistant" || o.type === "user" || o.type === "stream_event")) {
+      if (window.MODS) MODS.subagent(this, o);
+      return;
+    }
     switch (o.type) {
+      case "prompt_suggestion":
+        if (window.MODS) MODS.suggestion(this, o);
+        break;
+      case "dialog_request":
+        // request_user_dialog (a kind the bridge declared): a decision card.
+        if (window.MODS) MODS.dialog(this, o);
+        break;
+      case "ui_ask":
+        // The hooks engine asks this page for its clipboard or composer.
+        if (window.MODS) MODS.ask(this, o);
+        break;
       case "user_text": {
         // Always render immediately so a message can never get swallowed.
         const ubody = this.addMsg("user", "Alex", tsMs(o.ts));
@@ -2458,6 +2495,7 @@ class Session {
         // Position + raw text, for edit / regenerate / branch (see msgActions).
         if (o.seq != null) this.setMsgSeq(ubody.parentNode, o.seq);
         ubody.parentNode._utext = o.text || "";
+        if (window.MODS && !o.kind) MODS.siteUser(this, ubody.parentNode, o);
         if (o.image) {
           const html = imageThumbHTML(o.image, "pasted image");
           if (html) {
@@ -2526,6 +2564,7 @@ class Session {
         else if (o.subtype === "status" && o.status === "requesting") this.setStatus("thinking", "thinking");
         else if (o.subtype === "status" && o.status === "compacting") this.setStatus("thinking", "compacting…");
         else if (o.subtype === "compact_boundary") this.renderCompactBoundary(o);
+        else if (window.MODS && MODS.system(this, o)) { /* ui_status / ui_toast / ui_log / ui_panes / hook_* (mods.js) */ }
         else this.handleBgSystem(o);   // task_started / task_progress / task_notification / task_updated
         break;
       case "replay_done":
@@ -2558,6 +2597,8 @@ class Session {
         // The bubble's address: its first top-level assistant event. Subagent
         // messages are skipped, the condenser drops those (bookmarks.py).
         if (o.seq != null && !o.parent_tool_use_id) this.setMsgSeq(this.current.body.parentNode, o.seq);
+        // The CLI's own id of this reply, for message_rated (thumbs up / down).
+        if (o.uuid && !this.current.body.parentNode._cliUuid) this.current.body.parentNode._cliUuid = o.uuid;
         this.finalizeToolInputs(o.message || {});
         this.noteServedModel(o);
         break;
@@ -2623,6 +2664,7 @@ class Session {
         crystal.lastActivity = Date.now();
         this.splitPending = false;   // turn over; any unanswered interjection gets its own turn
         this.clearPermCards();       // any unanswered permission cards are moot now
+        if (window.MODS) MODS.turnEnded(this);
         clearTimeout(this._pauseNudge);
         this.lastUsage = usageText(o);
         if (this.active) $("#usage").textContent = this.lastUsage;
@@ -2653,6 +2695,7 @@ class Session {
       case "process_exit":
         this.setStatus("error", "exited");
         this.clearPermCards();
+        if (window.MODS) MODS.exited(this);
         // The bridge closes orphaned tasks itself (a synthesized task_updated
         // per open id, recorded for replay); this is the belt to that brace
         // for an event stream that dropped them. Nothing survives its process.
@@ -2691,6 +2734,7 @@ class Session {
     this.setStatus("thinking", "thinking");
     this.lastActivity = Date.now();
     renderTabs();
+    if (window.MODS) MODS.turnStarted(this);
     try {
       const r = await fetch("/send/" + this.id, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -3046,12 +3090,29 @@ setInterval(() => {
 }, 5000);
 
 /* ---------- model switcher card ---------- */
+// The backend's own catalog (list_models over the control channel) when a
+// chat is live: display names, descriptions and the effort levels each model
+// supports. The binary-grep list (MODELS) stays as the dormant fallback.
+const liveModels = new Map();   // session id -> [{id, label, desc, efforts}]
+async function fetchLiveModels(sid) {
+  try {
+    const j = await (await fetch("/sessions/" + sid + "/models")).json();
+    if (!j.ok || !Array.isArray(j.models) || !j.models.length) return null;
+    const rows = j.models.map((m) => ({ id: m.value, label: m.displayName || m.value, desc: m.description || "",
+                                        efforts: m.supportedEffortLevels || null, resolved: m.resolvedModel || "" }));
+    liveModels.set(sid, rows);
+    return rows;
+  } catch (_) { return null; }
+}
 function renderModelCard() {
   const list = $("#modelList");
   list.innerHTML = "";
   const cur = (activeId && sessions.get(activeId) && sessions.get(activeId).model) || "";
-  MODELS.forEach((m) => {
-    const row = el("div", "modelrow" + (m.id === cur ? " sel" : ""), esc(m.label));
+  const rows = (activeId && liveModels.get(activeId)) || MODELS;
+  rows.forEach((m) => {
+    const row = el("div", "modelrow" + (m.id === cur ? " sel" : ""), esc(m.label)
+      + (m.desc ? '<span class="flag-code">' + esc(m.desc) + "</span>" : ""));
+    if (m.desc) row.style.flexWrap = "wrap";
     row.addEventListener("click", () => selectModel(m));
     list.appendChild(row);
   });
@@ -3079,6 +3140,8 @@ const PERM_MODES = [
   { id: "default",           label: "default · ask before risky actions" },
   { id: "acceptEdits",       label: "accept edits · auto-approve file edits" },
   { id: "plan",              label: "plan · read-only, propose a plan first" },
+  { id: "auto",              label: "auto · a classifier approves routine actions, asks on the rest" },
+  { id: "dontAsk",           label: "don't ask · anything that would prompt is denied, the rest runs" },
 ];
 function curPerm() {
   const s = activeId && sessions.get(activeId);
@@ -3131,7 +3194,11 @@ function renderThinkCard() {
   const list = $("#thinkList");
   list.innerHTML = "";
   const cur = curEffort();
-  EFFORTS.forEach((e) => {
+  const s = activeId && sessions.get(activeId);
+  const live = (activeId && liveModels.get(activeId)) || [];
+  const m = s && live.find((x) => x.id === s.model || (x.resolved && x.resolved === (s.model || "").replace(/\[.*$/, "")));
+  const allowed = m && Array.isArray(m.efforts) ? new Set(m.efforts) : null;
+  EFFORTS.filter((e) => !e.id || !allowed || allowed.has(e.id)).forEach((e) => {
     const row = el("div", "modelrow" + (e.id === cur ? " sel" : ""), esc(e.label));
     row.addEventListener("click", () => selectEffort(e));
     list.appendChild(row);
@@ -3768,6 +3835,7 @@ function switchTo(id) {
   hideSlash();
   if (!isTouch()) input.focus();   // on a phone this would raise the keyboard on every switch
   reportActiveChat();   // AirDropped photos follow the chat you switch to
+  if (window.MODS) MODS.switched(s);   // this chat's status lines, panes, band, suggestion
 }
 async function createSession() {
   const r = await fetch("/sessions", { method: "POST" });
@@ -4484,6 +4552,7 @@ input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptSlash(slashIdx); return; }
     if (e.key === "Escape")    { e.preventDefault(); hideSlash(); return; }
   }
+  if (e.key === "Tab" && !e.shiftKey && window.MODS && MODS.acceptSuggestion()) { e.preventDefault(); return; }
   if (e.key === "Escape") {
     // First close any open overlay — reaching for Esc to dismiss a picker must
     // never stop MIST mid-work. Only a bare Esc interrupts the turn.
@@ -4604,6 +4673,7 @@ $("#settingsBtn").addEventListener("click", () => {
   loadMcpPanel();                          // MCP servers: live status + reconnect/toggle/auth
   loadWatchers();                          // watchers section (launchd watch jobs)
   loadRemote();                            // phone section: remote access + pairing
+  if (window.MODS) { MODS.loadModsPanel(); MODS.loadFlagsPanel(); }   // mods + claude flags sections
   $("#bmPanel").hidden = true;
   refreshNotifsSection();                  // notifications live as a settings section
   closeAnchoredCards();
@@ -5147,6 +5217,7 @@ const ANCHORED_CARDS = [
   { card: "#thinkCard", trigger: "#think" },
   { card: "#ctxCard",   trigger: "#ctx"   },
   { card: "#shareCard", trigger: "#shareBtn" },
+  { card: "#usageCard", trigger: "#r5h, #r7d" },
 ];
 function closeAnchoredCards(except) {
   ANCHORED_CARDS.forEach(({ card }) => {
@@ -5201,6 +5272,7 @@ function openModelCard(ev) {
   renderModelCard();
   card.hidden = false;
   anchorCard(card, (ev && ev.currentTarget) || $("#model"));
+  if (activeId && !liveModels.has(activeId)) fetchLiveModels(activeId).then((rows) => { if (rows && !card.hidden) renderModelCard(); });
 }
 $("#modelClose").addEventListener("click", () => { $("#modelCard").hidden = true; });
 // The model info badge doubles as the switcher (the old dedicated toolbar button
@@ -5350,7 +5422,7 @@ function closeTopOverlay() {
   if (closeRailDrawer()) return true;   // phone: the chat drawer sits over everything
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
-  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#shareCard", "#capPanel", "#bmPanel"]) {
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#usageCard", "#shareCard", "#diffCard", "#capPanel", "#bmPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }

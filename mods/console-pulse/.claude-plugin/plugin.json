@@ -1,0 +1,5 @@
+{
+  "name": "console-pulse",
+  "version": "0.1.0",
+  "description": "A status line with the turn's tool count and duration, a toast on long turns, and a /pulse pane with per-tool counts and a note box. Exercises every surface the Console draws."
+}

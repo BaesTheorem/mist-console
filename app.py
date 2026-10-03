@@ -35,6 +35,7 @@ import retention
 import search as chat_search
 import share
 import transcript
+import bridge
 from bridge import (ClaudeSession, CLAUDE, DATA_DIR, HARNESS, RATE_LIVE_PATH,
                     RATE_UTIL_PATH, DEFAULT_PERMISSION_MODE, IDLE_REAP_SEC)
 
@@ -1175,7 +1176,10 @@ def set_model(sid):
     return jsonify({"ok": True, "model": model, "live": bool(live)})
 
 
-_VALID_PERMS = {"default", "acceptEdits", "plan", "bypassPermissions"}
+# "manual" is the CLI's alias of default and is folded into it; "auto" is the
+# auto-mode classifier (the CLI answers whether it is available), "dontAsk"
+# denies anything that would prompt and runs the rest.
+_VALID_PERMS = {"default", "acceptEdits", "plan", "bypassPermissions", "auto", "dontAsk"}
 # `claude --effort <level>`. The CLI only WARNS on an unknown value and silently
 # falls back to its default, so a typo would look like it applied; validate here.
 # "" is allowed and means "omit the flag", i.e. let the CLI pick.
@@ -1284,6 +1288,198 @@ def elicitation_response(sid):
     ok = s.respond_elicitation(d.get("request_id"), d.get("action", "cancel"),
                                content=d.get("content"))
     return jsonify({"ok": ok})
+
+
+# ---- Claude Mods + remote surface (see bridge.UI_SURFACE) --------------------
+@app.route("/flags", methods=["GET", "POST"])
+def claude_flags():
+    """Global spawn-time switches (settings -> claude flags). A change applies
+    to each chat when its backend next starts."""
+    if request.method == "POST":
+        d = request.get_json(silent=True) or {}
+        if "max_budget_usd" in d and str(d["max_budget_usd"]).strip():
+            try:
+                float(str(d["max_budget_usd"]).strip())
+            except ValueError:
+                return jsonify({"ok": False, "error": "budget must be a number"}), 400
+        if "autocompact" in d and str(d["autocompact"]).strip():
+            v = str(d["autocompact"]).strip()
+            if v != "auto" and not re.match(r"^\d{2,7}(k|m)?$", v, re.I):
+                return jsonify({"ok": False, "error": "autocompact is 'auto' or a token count"}), 400
+        return jsonify({"ok": True, "flags": bridge.save_flags(d)})
+    return jsonify({"flags": dict(bridge.FLAGS), "defaults": dict(bridge.FLAG_DEFAULTS)})
+
+
+@app.route("/sessions/<sid>/mods")
+def session_mods(sid):
+    """Mods (plugins) as the backend last reported them, with their status
+    lines and the pane roster. Dormant chats answer from their last init."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    init = s.last_init or {}
+    return jsonify({"ok": True, "live": s.alive, "dir": bridge.MODS_DIR,
+                    "plugins": init.get("plugins") or [],
+                    "errors": init.get("plugin_errors") or [],
+                    "status": dict(s.mod_status), "panes": s.panes})
+
+
+@app.route("/sessions/<sid>/mods/reload", methods=["POST"])
+def session_mods_reload(sid):
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    ok, resp = s.reload_plugins()
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    plugins = resp.get("plugins") if isinstance(resp, dict) else None
+    if isinstance(plugins, list) and isinstance(s.last_init, dict):
+        s.last_init = dict(s.last_init, plugins=plugins)
+    return jsonify({"ok": True, "response": resp})
+
+
+@app.route("/mods/reveal", methods=["POST"])
+def mods_reveal():
+    """Open the mods folder in Finder (this Mac only)."""
+    if not remote.is_local(request):
+        return jsonify({"ok": False, "error": "local only"}), 403
+    os.makedirs(bridge.MODS_DIR, exist_ok=True)
+    try:
+        subprocess.Popen(["open", bridge.MODS_DIR])
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "dir": bridge.MODS_DIR})
+
+
+@app.route("/sessions/<sid>/ui/attach", methods=["POST"])
+def ui_attach(sid):
+    """The page reports the size it draws mods into (character cells)."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    ok, resp = s.ui_attach(request.get_json(silent=True) or {})
+    return jsonify({"ok": bool(ok), "response": resp if ok else None,
+                    "error": None if ok else str(resp), "panes": s.panes})
+
+
+_UI_CALLS = {"render": "ui_render", "press": "ui_press", "input": "ui_input",
+             "select": "ui_select", "panes": "ui_panes", "pane-show": "ui_pane_show",
+             "pane-focus": "ui_pane_focus", "pane-close": "ui_close",
+             "client-module": "ui_client_module", "client-press": "ui_client_press",
+             "message": "ui_message"}
+
+
+@app.route("/sessions/<sid>/ui/<call>", methods=["POST"])
+def ui_call(sid, call):
+    """One remote-surface request, body = the request's own fields (the
+    bridge stamps surface + client id). `render` answers the tree a mod drew
+    for a site, or hooked:false when no mod hooks that component."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    sub = _UI_CALLS.get(call)
+    if not sub:
+        return jsonify({"ok": False, "error": "unknown ui call"}), 404
+    body = request.get_json(silent=True) or {}
+    if sub == "ui_panes" and not s.alive:
+        return jsonify({"ok": True, "response": s.panes or {"panes": [], "shown_id": None,
+                                                           "focused_id": None,
+                                                           "focus_requested_id": None}})
+    ok, resp = s.ui_call(sub, body, timeout=float(body.pop("_timeout", 20.0) or 20.0))
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    if sub == "ui_panes" and isinstance(resp, dict):
+        s.panes = resp
+    return jsonify({"ok": True, "response": resp})
+
+
+@app.route("/sessions/<sid>/ui/answer", methods=["POST"])
+def ui_answer(sid):
+    """The page's answer to an engine-originated ask (ui_copy, ui_prompt_*)."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    return jsonify({"ok": bool(s.respond_ui_ask(d.get("request_id"), d.get("response")))})
+
+
+@app.route("/sessions/<sid>/dialog-response", methods=["POST"])
+def dialog_response(sid):
+    """Settle a request_user_dialog card. Body: {request_id, result}."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    return jsonify({"ok": bool(s.respond_dialog(d.get("request_id"), d.get("result")))})
+
+
+@app.route("/sessions/<sid>/usage-detail")
+def usage_detail(sid):
+    """The CLI's structured /usage for this chat: session cost by model plus
+    every plan rate-limit window (get_usage)."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    ok, resp = s.usage_detail()
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    return jsonify({"ok": True, "usage": resp})
+
+
+@app.route("/sessions/<sid>/models")
+def session_models(sid):
+    """The backend's own model catalog (list_models): display names,
+    descriptions and the effort levels each supports."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    ok, resp = s.list_models()
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    return jsonify({"ok": True, "models": (resp or {}).get("models") or []})
+
+
+@app.route("/sessions/<sid>/diff")
+def session_diff(sid):
+    """Workspace git diff of this chat's cwd (get_workspace_diff)."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    ok, resp = s.workspace_diff()
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    return jsonify({"ok": True, "diff": resp})
+
+
+@app.route("/sessions/<sid>/rate", methods=["POST"])
+def rate_message(sid):
+    """Thumbs up / down on a reply. Body: {uuid, sentiment, cleared?}."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    ok, resp = s.rate_message(d.get("uuid"), d.get("sentiment"), cleared=bool(d.get("cleared")))
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    return jsonify({"ok": True})
+
+
+@app.route("/sessions/<sid>/rewind-files", methods=["POST"])
+def rewind_files(sid):
+    """Undo file edits made since the user message at cut_seq. Body:
+    {cut_seq, dry_run}. A dry run answers which files would move."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    d = request.get_json(silent=True) or {}
+    try:
+        cut = int(d.get("cut_seq"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "cut_seq required"}), 400
+    ok, resp = s.rewind_files(cut, dry_run=d.get("dry_run", True) is not False)
+    if not ok:
+        return jsonify({"ok": False, "error": str(resp)}), 502
+    return jsonify({"ok": True, "result": resp})
 
 
 @app.route("/sessions/<sid>/rewind", methods=["POST"])
@@ -1451,6 +1647,12 @@ def rename_session(sid):
     s.title = title[:80]
     _touch(s)
     _save_meta()
+    # Keep the CLI's own session title in step (its --resume picker, `claude
+    # agents`); a dormant chat gets the new name through --name at its next spawn.
+    try:
+        s.rename_live(s.title)
+    except Exception:
+        pass
     return jsonify({"ok": True, "title": s.title})
 
 

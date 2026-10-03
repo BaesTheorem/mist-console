@@ -332,6 +332,35 @@ The session loads **all** MCP scopes (no `--strict-mcp-config`), exactly like th
 
 **Important:** `init` (with the server/tool list) doesn't fire until the **first user message**, because claude's stream-json mode is request-driven. So a brand-new chat shows `—` for model/MCP until you send something; after the first message everything populates (and the settings panel caches the last-known set). This is normal, not a hang.
 
+## Claude Mods (plugins of function hooks)
+
+Claude Code 2.1.287 added **mods**: plugins whose `hooks/hooks.json` names a TypeScript module exporting `register(on, options)`. A hook can intercept tool calls and prompts, add commands and tools, run timers, and draw UI. The Console loads them and draws them.
+
+- **Loading.** `bridge.py` puts the repo's `mods/` folder (or `MIST_CONSOLE_MODS_DIR`) in `CLAUDE_CODE_PLUGIN_DIRS` for every backend it spawns, which the CLI loads exactly as `--plugin-dir` would, headless included, and sets `CLAUDE_CODE_PLUGIN_DIR_WATCH=1` so a saved edit reloads the module in live chats. The in-chat "Enable hot reloading?" flow is off under `-p` (nobody can be asked), so mods for the Console are written from a terminal session or straight into `mods/`. `mods/console-pulse` is the starter: a status line, a toast, a `/pulse` pane with buttons and a text field.
+- **Status lines, toasts, log lines** (`$.ui.status`, `$.ui.toast`, `$.ui.log`) arrive on stdout as `system` messages with subtypes `ui_status` / `ui_toast` / `ui_log` (verified against 2.1.287). Status lines draw as chips in a strip above the composer, per chat; toasts stack under the top bar; log lines are dim transcript lines. Status and toasts are live only, never recorded.
+- **Panes, the band, and trees over rows** need a drawing surface. The CLI accepts a remote surface named `desktop`, `mobile` or `vscode`; after each `init` the bridge sends `ui_attach` (surface `desktop`, client id `mist-console`, the viewport in character cells, and the asks it answers) and the page asks `ui_render` for each site: a `Pane` per entry in the pane roster (`ui_panes` pushes), `AbovePrompt` for the band, and `ToolUse` / `UserMessage` / `AssistantMessage` for live transcript rows. `static/mods.js` turns the tree the hooks answer (Box, Text, Button, Input, Select, Link, Code, Markdown, Svg; `engine` nodes stand for the Console's own row) into DOM and relays presses, typed text and picks back as `ui_press` / `ui_input` / `ui_select`. `hooked: false` on a render answer stops further asks for that component until the next `ui_invalidate`. `Client` elements (plugin-side React modules) are not drawn yet; the spec allows a surface to draw nothing for them.
+- **Asks from the engine** (`$.ui.copy`, `$.prompt.read` / `fill` / `suggest`) reach the page as `ui_ask` events; it answers over `POST /sessions/<id>/ui/answer`, and the bridge answers the default shape itself when no page replies within 4.5 s (the CLI waits 5 s).
+- **Settings → mods** lists the loaded plugins (from `init.plugins`), their status lines and load errors, with **reload mods** (`reload_plugins`) and **open mods folder**. The pane dock on the right is resizable; a pane tab closes with its ×, Escape returns the keyboard to the composer, a Button's hotkey works while the pane holds focus.
+
+Routes: `POST /sessions/<id>/ui/attach|render|press|input|select|panes|pane-show|pane-focus|pane-close|answer`, `GET /sessions/<id>/mods`, `POST /sessions/<id>/mods/reload`, `POST /mods/reveal`.
+
+## Other CLI features wired in alongside mods
+
+- **Dialogs** (`request_user_dialog`). `initialize` now declares `supportedDialogKinds: ["refusal_fallback_prompt"]`, so an API refusal offers **Retry on &lt;fallback&gt; / Edit prompt / Cancel** as a card (and banner buttons) instead of ending in the refusal error. A kind the Console did not declare is deliberately left unanswered, as the protocol requires; the CLI settles it on its own deadline.
+- **Prompt suggestions** (`--prompt-suggestions`, on by default under settings → claude flags): the predicted next prompt shows as the composer placeholder while it is empty; **Tab** takes it. A mod's `$.prompt.suggest` lands in the same slot.
+- **Hook events** (`--include-hook-events`): each turn gets one collapsed "N hooks" card listing `hook_response`s; a failed hook (the guard hook's denials, for one) turns it amber and shows the stderr.
+- **Subagent text** (`--forward-subagent-text`): a subagent's own messages, which carry `parent_tool_use_id`, no longer touch the main bubble; they collect in a "subagent" fold inside the Agent tool card.
+- **Permission modes** `auto` and `dontAsk` join the picker (`manual` is the CLI's alias of default).
+- **Usage card**: the 5h / 7d badges open `get_usage`: every plan window the CLI knows (Opus, Sonnet, apps...) with reset times, plus this chat's cost by model.
+- **Live model catalog**: the model card reads `list_models` from a live backend (display names, descriptions) and the thinking-depth card hides effort levels the chosen model does not support; the binary-grep list remains the dormant fallback.
+- **Workspace diff**: settings → workspace, or `/diff` in the composer, opens `get_workspace_diff` for the chat's folder, files with +/- counts and hunks.
+- **Ratings**: thumbs up / down on a reply send `message_rated` with the CLI's own message uuid.
+- **Restore files**: the "history" action on a user message runs `rewind_files` (dry run first, then a confirm strip naming the files), the TUI's /rewind "restore code" without touching the chat.
+- **Session names**: backends spawn with `--name <chat title>` and a rail rename sends `rename_session`, so `claude --resume` and `claude agents` show the Console's titles.
+- **Claude flags** (settings section, `data/flags.json`, `bridge.FLAGS`): the three toggles above, `--chrome`, `--fallback-model`, `--autocompact`, `--max-budget-usd`. A change applies when a chat's backend next starts.
+
+Not wired, on purpose: `--bg` background sessions and `claude agents` (the Console's rail already is that list), `--cloud` / `--teleport` / `--remote-control` (cloud sessions), `--brief` (the model's text already reaches the person here), `--replay-user-messages` (the Console renders its own user bubbles).
+
 ## Quick access (always-on, even when MIST is closed)
 
 Double-tap the **Option (⌥)** key to summon the glowing quick-entry overlay from anywhere; type + Enter starts a new chat. Attach the current page **URL** (🔗) or a **screenshot** selection (⛶), and use the **conversation picker** (⤷, or press ↓ on an empty input) to drop the message + attachments into an existing chat instead of a new one. The overlay grows upward to show a searchable, pinned-first list, and the main window slides straight into the chosen conversation.

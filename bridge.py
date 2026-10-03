@@ -1489,7 +1489,9 @@ class ClaudeSession:
         with self._lock:
             has_page = bool(self._subscribers)
         if not has_page:
-            self.respond_ui_ask(req_id, None)
+            self._write_stdin({"type": "control_response", "response": {
+                "subtype": "success", "request_id": req_id,
+                "response": self._ui_default_answer(sub)}})
             return
         timer = threading.Timer(UI_ASK_TIMEOUT, self.respond_ui_ask, args=(req_id, None))
         timer.daemon = True

@@ -18,3 +18,6 @@ ios/MIST.xcodeproj/
 ios/Config/Signing.xcconfig
 static/anims/*/
 static/anims/meta.json
+
+# Claude Mods: the engine lays the API types beside each mod on load; generated, not content
+mods/*/.claude-plugin/types/

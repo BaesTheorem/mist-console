@@ -43,8 +43,8 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
     <span class="badge clickable" id="think" title="Thinking depth · click to switch">think —</span>
     <span class="badge" id="status" data-state="idle">idle</span>
     <span class="badge usage clickable" id="ctx" title="Context window used · click for the breakdown and compaction">ctx —</span>
-    <span class="badge usage" id="r5h" title="5-hour limit used">5h —</span>
-    <span class="badge usage" id="r7d" title="7-day limit used">7d —</span>
+    <span class="badge usage clickable" id="r5h" title="5-hour limit used · click for every window + this chat's cost">5h —</span>
+    <span class="badge usage clickable" id="r7d" title="7-day limit used · click for every window + this chat's cost">7d —</span>
   </div>
   <div class="actions">
     <md-icon-button id="settingsBtn" touch-target="none" title="Settings · active MCP servers + tools" aria-label="Settings"><md-icon>settings</md-icon></md-icon-button>
@@ -86,6 +86,21 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
   <div class="modelnote">What fills this chat's context. Compacting replaces the history with a summary, so every later message re-bills far less.</div>
 </aside>
 
+<aside id="usageCard" hidden>
+  <div class="capHead">usage <button id="usageClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
+  <div id="usageBody" class="ctx-body"></div>
+  <div class="perm-actions ctx-actions">
+    <button id="usageRefresh" class="perm-btn">Refresh</button>
+  </div>
+  <div class="modelnote">Every plan window the CLI knows about, plus what this chat has spent. Read from the live backend; a dormant chat shows the badges' own numbers only.</div>
+</aside>
+
+<aside id="diffCard" hidden>
+  <div class="capHead">workspace diff <span class="count" id="nDiff"></span><button id="diffClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
+  <div class="notes-hint" id="diffHint">What changed in the folder this chat works in, as the CLI's /diff shows it.</div>
+  <div class="capBody" id="diffBody"></div>
+</aside>
+
 <div id="mid">
   <nav id="tabrail">
     <div id="railSearch">
@@ -107,6 +122,13 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
          Lives inside #logs so it tracks the log area, not the window. -->
     <aside id="progDock" hidden></aside>
   </main>
+  <!-- Panes a mod opens ($.ui.open): one dock, tabs when several. Drawn from
+       ui_render trees (mods.js); hidden while no pane is open. -->
+  <aside id="paneDock" hidden>
+    <div id="paneTabs" role="tablist"></div>
+    <div id="paneBody"></div>
+  </aside>
+  <div id="paneResize" title="Drag to resize the pane"></div>
 </div>
 
 <aside id="capPanel" hidden>
@@ -182,6 +204,27 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
         <button id="phoneNative" class="qa-link shell-only" type="button">phone settings (server list, re-pair)</button>
       </div>
     </div>
+    <h4>mods <span class="count" id="nMods"></span></h4>
+    <div id="modsSection">
+      <div id="modsBody"></div>
+      <div class="routines-foot">
+        <button id="modsReload" class="rt-new">reload mods</button>
+        <button id="modsReveal" class="rt-new">open mods folder</button>
+        <div class="routines-note">Claude Mods: plugins of function hooks loaded into every chat from <code id="modsDir">mods/</code>. They can draw panes, a band above the prompt, status lines and toasts here, intercept tool calls and add commands. Saving a mod reloads it in live chats. Ask MIST to write one (the <code>/plugin-authoring</code> skill).</div>
+      </div>
+    </div>
+    <h4>claude flags</h4>
+    <div id="flagsSection">
+      <div id="flagsBody"></div>
+      <div class="routines-foot">
+        <div class="routines-note">Spawn-time switches for the <code>claude</code> process behind each chat. A change applies when a chat's backend next starts (a new chat, or a dormant one waking).</div>
+      </div>
+    </div>
+    <h4>workspace</h4>
+    <div id="workspaceSection">
+      <div class="qa-row"><button id="diffBtn" class="rt-new">show workspace diff</button></div>
+      <div class="qa-note">The git diff of the folder the active chat works in, from the CLI (<code>/diff</code> in the composer does the same).</div>
+    </div>
     <h4>mcp servers <span class="count" id="nMcp"></span></h4>
     <div id="mcpSection">
       <div id="mcpBody"></div>
@@ -219,6 +262,12 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
      (fixed, on body) so it isn't clipped by .session-log's overflow. -->
 <div id="ctxMenu" role="menu" hidden></div>
 
+<!-- The band above the prompt (a mod's AbovePrompt tree) and the mods' pinned
+     status lines ($.ui.status), per chat; both hidden while empty. -->
+<div id="aboveBand" hidden></div>
+<div id="modStatus" hidden></div>
+<div id="toasts" aria-live="polite"></div>
+
 <footer id="composer">
   <div id="slashMenu" hidden></div>
   <div id="attachPreview" hidden></div>
@@ -235,5 +284,6 @@ if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script
 
 <script src="vendor/qrcode.js"></script>
 <script src="app.js"></script>
+<script src="mods.js"></script>
 </body>
 </html>
