@@ -42,9 +42,9 @@ esac
 echo "  bundling python from: $PYBASE"
 cp -R "$PYBASE" "$APP/Contents/Resources/python"
 BUNDLE_PY="$APP/Contents/Resources/python/bin/python3.13"
-echo "  installing deps (flask pywebview setproctitle) into the bundle ..."
+echo "  installing deps (flask pywebview setproctitle Pillow) into the bundle ..."
 "$BUNDLE_PY" -m pip install -q --disable-pip-version-check --break-system-packages \
-  flask pywebview setproctitle >/dev/null
+  flask pywebview setproctitle Pillow >/dev/null
 
 # Symlink the interpreter INTO Contents/MacOS. NSBundle.mainBundle resolves from
 # the launched executable's directory: a binary under Contents/Resources/ resolves

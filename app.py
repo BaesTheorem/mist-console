@@ -1601,6 +1601,10 @@ def send(sid):
     body = request.get_json(silent=True) or {}
     text = (body.get("text") or "").strip()
     image_path = _save_pasted_image(body.get("image")) if body.get("image") else None
+    if body.get("image") and not image_path:
+        # Never send the text alone when the image was dropped: the reply would
+        # answer a message the user did not write. The front end restores both.
+        return jsonify({"ok": False, "error": "image"})
     if not text and not image_path:
         return jsonify({"ok": False, "error": "empty"}), 400
     # Auth slash commands (/login, /logout, /auth) can't run inside the headless

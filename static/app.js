@@ -2707,7 +2707,9 @@ class Session {
         return false;
       }
       if (!j.ok) {
-        this.notice("Could not deliver message to Claude.", true);
+        this.notice(j.error === "image"
+          ? "Could not attach that image (unreadable, or too large to shrink under 5 MB)."
+          : "Could not deliver message to Claude.", true);
         if (restoreOnFail) this.restoreDraft(text, image);
       }
       if (j.title && this.title === "New chat") { this.title = j.title; renderTabs(); }
