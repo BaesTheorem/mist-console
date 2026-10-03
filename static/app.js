@@ -55,6 +55,25 @@ function updateJumpBtn() {
   jumpBtn.hidden = !(s && !s.stick);
 }
 
+// Wrapping changes with the log's width, so the message heights primeHeights()
+// stored go stale on a resize. Once the width settles, re-prime the open chat;
+// the others re-prime when switched to.
+(function () {
+  if (!window.ResizeObserver) return;
+  let w = 0, t = 0;
+  new ResizeObserver(([e]) => {
+    const nw = Math.round(e.contentRect.width);
+    if (!w || nw === w) { w = nw; return; }
+    w = nw;
+    clearTimeout(t);
+    t = setTimeout(() => {
+      sessions.forEach((x) => { x._primed = false; });
+      const s = activeId && sessions.get(activeId);
+      if (s) s.primeHeights();
+    }, 300);
+  }).observe(logs);
+})();
+
 // Track the top bar's height (badges wrap, so it varies) into --topbar-h, used
 // to start the side panels below it — that keeps their trigger buttons visible
 // and clickable, so clicking a button again toggles its panel closed.
@@ -1379,6 +1398,22 @@ class Session {
 
   /* ---- dom helpers (scoped to this tab) ---- */
   atBottom() { return this.logEl.scrollHeight - this.logEl.scrollTop - this.logEl.clientHeight < 60; }
+  // `.msg` is content-visibility:auto with a 140px placeholder. A message that
+  // never rendered keeps that guess until it nears the viewport, then snaps to
+  // its real height, and WKWebView has no scroll anchoring to hide the snap:
+  // scrolling up through a chat jerked by 50-500px a step. Rendering every
+  // message for two frames when the chat first opens lets
+  // `contain-intrinsic-size: auto` remember each real height, so later skipped
+  // layout uses true sizes. One full layout per chat open, then cheap again.
+  primeHeights() {
+    if (this._primed || this._replaying || !this.active) return;
+    this._primed = true;
+    this.logEl.classList.add("prime");
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      this.logEl.classList.remove("prime");
+      this.scroll();
+    }));
+  }
   // Only auto-scroll when we're following the bottom. Pass force=true (user send,
   // tab switch, "jump to present") to re-arm following and snap down regardless.
   scroll(force) {
@@ -2600,6 +2635,7 @@ class Session {
         // backend is dormant), so drop it. A genuinely-live task re-appears from
         // its next task_progress tick (handleBgSystem recreates on unknown id).
         this._replaying = false;
+        this.primeHeights();
         this.paintAllBookmarks();
         hydrateTaskBoxes(this.logEl, this);
         { const q = this._afterReplay; this._afterReplay = []; q.forEach((f) => { try { f(); } catch (_) {} }); }
@@ -3854,6 +3890,7 @@ function switchTo(id) {
   const at = tabsEl.querySelector(".tab.active");
   if (at) at.scrollIntoView({ block: "nearest" });
   s.scroll(true);   // entering a chat lands on its latest message
+  s.primeHeights();   // no-op until the replay is done (replay_done calls it too)
   updateJumpBtn();
   // restore this chat's own draft + image attachment (neither bleeds across chats)
   input.value = s.draft || "";

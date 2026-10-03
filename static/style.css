@@ -374,6 +374,9 @@ body.tab-dragging .tab:not(.dragging):hover { background: inherit; color: inheri
   content-visibility: auto;
   contain-intrinsic-size: auto 140px;
 }
+/* Session.primeHeights(): render every message once so each one's real height
+   is remembered (see `auto` above) and scrolling up never meets a placeholder */
+.session-log.prime .msg { content-visibility: visible; }
 .msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
   display: flex; align-items: baseline; gap: 8px; }
 .msg.user .who   { color: var(--user); font-weight: 700; }
