@@ -22,6 +22,7 @@ zoom to get here, since Apple's WKWebView reports rects in CSS px):
                                  "js:<expression returning an element>". Prints
                                  both elements' class lists (rail drag-to-pin).
     {"eval": "js expression"}    print the expression's value (state checks)
+    {"wait": SECONDS}            let the page run (timers, fetches) before the next action
 ZOOM defaults to data/textsize.json. STAGE_JS runs once after load (scroll a
 message into view, toggle a state). The window sits at x=-4000 with a
 Prohibited activation policy: nothing on screen, no focus steal.
@@ -93,6 +94,8 @@ for a in ACTIONS:
     elif "under" in a:
         x, y = a["under"]
         print(f"under {a['under']} ->", js(wv, f"(()=>{{const e=document.elementFromPoint({x},{y});return e?e.tagName+'#'+e.id+'.'+e.className:null}})()"))
+    elif "wait" in a:
+        pump(float(a["wait"]))
     elif "eval" in a:
         print(f"eval -> {js(wv, a['eval'])}")
     elif "dragto" in a:

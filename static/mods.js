@@ -749,14 +749,27 @@
     const rec = st.sites.get(instanceId);
     if (!rec || !rec.original || !rec.original.isConnected) return;
     const r = await ask(s, rec.component, instanceId, rec.props);
-    if (!r || !r.tree || !rec.original.isConnected) { if (rec.host) { rec.host.remove(); rec.host = null; rec.original.classList.remove("engine-hidden"); } return; }
+    // An unhooked site comes back as a bare {type:"engine"} tree: the row as
+    // it is. Leave the row alone then, or the engine node below moves it
+    // into a host that never reaches the page and the reply vanishes.
+    const bare = !r || !r.hooked || !r.tree || r.tree.type === "engine";
+    if (bare || !rec.original.isConnected) {
+      if (rec.host) {
+        if (rec.host.contains(rec.original)) rec.host.replaceWith(rec.original); else rec.host.remove();
+        rec.host = null; rec.original.classList.remove("engine-hidden");
+      }
+      return;
+    }
+    // Hold the row's place before rendering: engine() moves the row itself
+    // into the new host, and the row is then no longer a valid anchor.
+    const anchor = rec.host || rec.original.parentNode.insertBefore(document.createComment("mod-site"), rec.original);
     let usedEngine = false;
     const host = el("div", "mod-site");
     const tree = renderTree(r.tree, Object.assign(ctxFor(s, rec.component, instanceId, () => drawSite(s, instanceId)), {
       engine() { usedEngine = true; return rec.original; },
     }));
     host.appendChild(tree);
-    if (rec.host) rec.host.replaceWith(host); else rec.original.parentNode.insertBefore(host, rec.original);
+    anchor.replaceWith(host);
     rec.host = host;
     if (!usedEngine) { rec.original.classList.add("engine-hidden"); host.classList.add("hides-engine"); }
   }
