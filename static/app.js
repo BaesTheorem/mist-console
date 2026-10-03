@@ -3863,6 +3863,7 @@ function switchTo(id) {
   crystal.emotion = null; crystal.lastActivity = Date.now();
   const s = sessions.get(id);
   if (!s) return;
+  if (activeId !== id) saveLastChat(id);
   activeId = id;
   pauseVideos(s.logEl);   // a video keeps playing in a hidden log otherwise
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
@@ -6197,6 +6198,24 @@ window.addEventListener("blur", hideCtxMenu);
 // in, so the app lands on the pinned chat with the freshest activity rather than
 // whatever sits at the top of the manual pin order. No pins: fall back to the
 // rail's own first row (newest unpinned chat).
+// Reopen the chat that was open at the last restart. localStorage is the fast
+// path, the server copy covers a wiped WebView. Per client: phone and Mac each
+// keep their own place.
+const LAST_CHAT_CLIENT = IS_SHELL ? "ios" : "mac";
+function saveLastChat(id) {
+  try { localStorage.setItem("lastChat", id); } catch (_) {}
+  fetch("/last-chat", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client: LAST_CHAT_CLIENT, id }) }).catch(() => {});
+}
+async function lastChat() {
+  let id = null;
+  try { id = localStorage.getItem("lastChat"); } catch (_) {}
+  if (id && sessions.has(id)) return sessions.get(id);
+  try {
+    id = (await (await fetch("/last-chat?client=" + LAST_CHAT_CLIENT)).json()).id;
+  } catch (_) {}
+  return (id && sessions.get(id)) || null;
+}
 function bootChat() {
   const pins = [...sessions.values()].filter((s) => s.pinned);
   if (pins.length) {
@@ -6216,7 +6235,7 @@ async function boot() {
   _syncSince = parseFloat(bootList.headers.get("X-Now")) || Date.now() / 1000;   // server clock, for syncSessions
   if (existing.length) {
     existing.forEach((info) => sessions.set(info.id, new Session(info.id, info.title, info)));
-    switchTo(bootChat().id);
+    switchTo(((await lastChat()) || bootChat()).id);
   } else {
     await createSession();
   }

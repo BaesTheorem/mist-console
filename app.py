@@ -784,6 +784,47 @@ def textsize():
                     "min": TEXTSIZE_MIN, "max": TEXTSIZE_MAX})
 
 
+# The chat that was open last, per client ("mac" or "ios"), so a restart opens
+# where you left off. Server-side for the same reason as the font: the WebView's
+# localStorage can be wiped. Keyed per client so the phone and the Mac do not
+# move each other's place.
+LAST_CHAT_PATH = os.path.join(DATA_DIR, "last_chat.json")
+_LAST_CHAT_CLIENTS = ("mac", "ios")
+_VALID_SESSION_ID = re.compile(r"^[A-Za-z0-9_\-]{1,80}$")
+_last_chat_lock = threading.Lock()
+
+
+def _load_last_chats():
+    try:
+        with open(LAST_CHAT_PATH) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+@app.route("/last-chat", methods=["GET", "POST"])
+def last_chat():
+    if request.method == "POST":
+        d = request.get_json(silent=True) or {}
+        client, sid = d.get("client"), d.get("id") or ""
+        if client not in _LAST_CHAT_CLIENTS or not _VALID_SESSION_ID.match(sid):
+            return jsonify({"ok": False, "error": "invalid client or id"}), 400
+        with _last_chat_lock:
+            chats = _load_last_chats()
+            if chats.get(client) != sid:
+                chats[client] = sid
+                try:
+                    tmp = LAST_CHAT_PATH + ".tmp"
+                    with open(tmp, "w") as f:
+                        json.dump(chats, f)
+                    os.replace(tmp, LAST_CHAT_PATH)
+                except Exception:
+                    pass
+        return jsonify({"ok": True})
+    return jsonify({"id": _load_last_chats().get(request.args.get("client", "mac"))})
+
+
 @app.route("/font", methods=["GET", "POST"])
 def font():
     if request.method == "POST":
