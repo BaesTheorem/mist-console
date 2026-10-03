@@ -141,17 +141,27 @@
       st.hooksCard = card;
     }
     const bad = o.outcome && o.outcome !== "success";
+    // A hook that passed and wrote nothing to stderr is only counted: those
+    // are most of them (one per tool call), and a row each is noise. Context
+    // a hook adds on success (now.sh's time stamp) is not a problem either.
+    const stderr = String(o.stderr || "").trim();
+    card._n++;
+    if (bad) { card._err++; card.classList.add("has-err"); }
+    else if (stderr) card._note = (card._note || 0) + 1;
+    const loud = (card._err || 0) + (card._note || 0);
+    card.classList.toggle("quiet", !loud);
+    card.querySelector("summary").textContent = card._n + (card._n === 1 ? " hook" : " hooks")
+      + (card._err ? " · " + card._err + " failed" : "")
+      + (card._note ? " · " + card._note + " with output" : "")
+      + (loud ? "" : " ok");
+    if (!bad && !stderr) { s.scroll(); return; }
     const row = el("div", "hook-row" + (bad ? " err" : ""));
     row.appendChild(el("span", "hk-ev", esc(o.hook_event || "")));
     row.appendChild(el("span", "hk-name", esc(o.hook_name || "")));
     row.appendChild(el("span", "hk-out", esc(o.outcome || "") + (o.exit_code != null && o.exit_code !== 0 ? " · exit " + o.exit_code : "")));
     const detail = String(o.stderr || o.output || o.stdout || "").trim();
-    if (bad && detail) row.appendChild(el("pre", null, esc(detail.slice(0, 2000))));
+    if (detail) row.appendChild(el("pre", null, esc(detail.slice(0, 2000))));
     card.appendChild(row);
-    card._n++;
-    if (bad) { card._err++; card.classList.add("has-err"); }
-    card.querySelector("summary").textContent = card._n + (card._n === 1 ? " hook" : " hooks")
-      + (card._err ? " · " + card._err + " failed" : "");
     s.scroll();
   }
 

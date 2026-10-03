@@ -1213,6 +1213,33 @@ let spinnerIdx = 0;
 let lastInit = null;
 try { lastInit = JSON.parse(localStorage.getItem("lastInit") || "null"); } catch (_) {}
 
+// A run of thinking and tool cards with no text between them folds into one
+// collapsed "steps" row, so a 28-call turn takes one line, not 28. Text
+// blocks end a run: the reply stays visible between its steps.
+function appendStep(body, node) {
+  let group = body.lastElementChild;
+  if (!group || !group.matches("details.steps")) {
+    group = el("details", "steps");
+    group.appendChild(el("summary", null, ""));
+    group.appendChild(el("div", "steps-body"));
+    body.appendChild(group);
+  }
+  group.lastElementChild.appendChild(node);
+  refreshSteps(group);
+}
+function refreshSteps(group) {
+  if (!group) return;
+  const items = group.querySelectorAll(":scope > .steps-body > details");
+  if (!items.length) { group.remove(); return; }
+  const counts = new Map();
+  items.forEach((d) => {
+    const k = d.classList.contains("think") ? "thinking" : ((d.querySelector(".tname") || {}).textContent || "tool");
+    counts.set(k, (counts.get(k) || 0) + 1);
+  });
+  const parts = [...counts].map(([k, n]) => (n > 1 ? k + " ×" + n : k));
+  group.firstElementChild.textContent = items.length + (items.length === 1 ? " step" : " steps") + " · " + parts.join(", ");
+}
+
 class Session {
   constructor(id, title, info) {
     info = info || {};
@@ -2312,7 +2339,7 @@ class Session {
     card.appendChild(head);
     const pre = el("pre");
     card.appendChild(pre);
-    this.current.body.appendChild(card);
+    appendStep(this.current.body, card);
     return { type: "tool", el: card, pre, state: st, summary, name };
   }
   finalizeToolInputs(message) {
@@ -2379,7 +2406,7 @@ class Session {
         d.appendChild(el("summary", null, "thinking"));
         const tb = el("div", "think-body");
         d.appendChild(tb);
-        this.current.body.appendChild(d);
+        appendStep(this.current.body, d);
         this.blocks[idx] = { type: "thinking", el: tb };
       } else if (cb.type === "text") {
         // Each text block gets its own div, appended at its real stream
@@ -2426,7 +2453,7 @@ class Session {
         // default before we opted into "summarized", still replayed from old
         // chats). A hollow THINKING card is noise; drop it.
         const card = b.el.closest("details.think");
-        if (card) card.remove();
+        if (card) { const group = card.closest("details.steps"); card.remove(); refreshSteps(group); }
       }
     }
     this.scroll();
@@ -2446,7 +2473,7 @@ class Session {
         const tb = el("div", "think-body");
         tb.textContent = b.text;
         d.appendChild(tb);
-        body.appendChild(d);
+        appendStep(body, d);
       } else if (b.kind === "tool") {
         const card = el("details", "tool");
         const head = el("summary", "tool-head");
@@ -2459,7 +2486,7 @@ class Session {
         catch (_) { pre.textContent = String(b.input); }
         card.appendChild(pre);
         if (b.result) card.appendChild(el("pre", "tool-result", esc(String(b.result).slice(0, 6000))));
-        body.appendChild(card);
+        appendStep(body, card);
       }
     });
     if (seq != null) this.setMsgSeq(body.parentNode, seq);   // condensed history keeps the assistant seq

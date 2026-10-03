@@ -457,6 +457,20 @@ body.log-drag #jumpBtn, body.log-drag .msg-actions, body.log-drag .copy-btn { vi
 .think > summary::-webkit-details-marker { display: none; }
 .think .think-body { padding: 6px 10px; color: var(--md-sys-color-on-surface-variant); white-space: pre-wrap; font-size: 12px; }
 
+/* a run of thinking + tool cards folds into one collapsed row (appendStep) */
+details.steps { border: 1px solid var(--line-soft); margin: 6px 0; }
+details.steps > summary {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+  padding: 4px 8px; color: var(--dim); font-size: 11px; letter-spacing: .5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+details.steps > summary::-webkit-details-marker { display: none; }
+details.steps > summary::before {
+  content: "chevron_right"; font-family: "Material Symbols Sharp"; font-size: 14px; line-height: 1;
+}
+details.steps[open] > summary::before { content: "expand_more"; }
+details.steps > .steps-body { padding: 0 8px 4px; }
+
 /* tool cards — collapsed by default (click the header to expand the code) */
 .tool { border: 1px solid var(--line); margin: 8px 0; }
 details.tool > summary.tool-head {
@@ -1725,6 +1739,9 @@ details.hooks { border: 1px solid var(--line-soft); margin: 6px 0; font-size: 11
 details.hooks > summary { cursor: pointer; list-style: none; padding: 3px 8px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
 details.hooks > summary::-webkit-details-marker { display: none; }
 details.hooks.has-err > summary { color: var(--warn); }
+/* every hook passed quietly: a count, not a control */
+details.hooks.quiet { border-color: transparent; }
+details.hooks.quiet > summary { cursor: default; pointer-events: none; padding: 1px 0; opacity: .7; }
 .hook-row { display: flex; gap: 8px; padding: 2px 8px; border-top: 1px dashed var(--line-soft); color: var(--md-sys-color-on-surface-variant); }
 .hook-row .hk-ev { color: var(--teal); min-width: 110px; }
 .hook-row .hk-out { margin-left: auto; color: var(--dim); }
