@@ -61,6 +61,95 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 DEFAULT_PERMISSION_MODE = "bypassPermissions"
 
+# ---- Claude Mods (plugins of function hooks, CLI 2.1.287+) ------------------
+# A mod is a plugin folder whose hooks/hooks.json names a TypeScript module; the
+# CLI loads every child of CLAUDE_CODE_PLUGIN_DIRS exactly as --plugin-dir
+# would, headless included (verified 2026-10-03). The Console ships its own
+# folder of them (mods/ in this repo) and watches it, so a saved edit reloads
+# the module in every live chat. MIST_CONSOLE_MODS_DIR points elsewhere.
+CONSOLE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODS_DIR = os.environ.get("MIST_CONSOLE_MODS_DIR") or os.path.join(CONSOLE_DIR, "mods")
+
+# The Console attaches to each backend as a remote drawing surface, the same
+# way Claude Code Desktop does: `ui_attach` names the surface and a client id,
+# then the UI asks `ui_render` for every site a mod may draw (a pane, the band
+# above the prompt, a tool row...) and relays presses back. The CLI accepts
+# only desktop / mobile / vscode as surface names; desktop is the one whose
+# element table (Box, Text, Button, Input, Select, Svg, Link, Code, Markdown,
+# Client) matches what a web view can draw.
+UI_SURFACE = "desktop"
+UI_CLIENT_ID = "mist-console"
+# Engine-originated asks this client answers on a plugin's behalf: its
+# clipboard ($.ui.copy) and its composer ($.prompt.read / fill / suggest). The
+# CLI waits 5 s for each; UI_ASK_TIMEOUT answers with the "nothing happened"
+# shape just before that so a closed window never stalls a hook.
+UI_ANSWERS = ["ui_copy", "ui_prompt_read", "ui_prompt_fill", "ui_prompt_suggest"]
+UI_ASK_TIMEOUT = 4.5
+UI_DEFAULT_VIEWPORT = {"columns": 100, "rows": 40, "isFullscreen": True}
+# Pushes the hooks engine sends a remote surface. Ephemeral state, so they are
+# broadcast live and not recorded (a replayed status line or toast would be
+# stale). ui_log IS recorded: it is a transcript line.
+UI_PUSH_SUBTYPES = ("ui_status", "ui_toast", "ui_panes", "ui_invalidate",
+                    "ui_focus", "ui_scroll")
+
+# request_user_dialog kinds the Console renders. The CLI only sends a kind the
+# host declared in `initialize`, and an undeclared one must NOT be answered
+# (the CLI cancels it on its own deadline), so this list is the contract.
+DIALOG_KINDS = ["refusal_fallback_prompt"]
+
+# ---- global claude flags (settings -> "claude flags") ----------------------
+# Spawn-time switches every NEW backend gets. Persisted in data/flags.json by
+# app.py; a change applies when a chat's backend next starts.
+FLAGS_PATH = os.path.join(DATA_DIR, "flags.json")
+FLAG_DEFAULTS = {
+    "prompt_suggestions": True,   # --prompt-suggestions: a predicted next prompt after each turn
+    "hook_events": True,          # --include-hook-events: hook_started / hook_response in the stream
+    "subagent_text": True,        # --forward-subagent-text: subagent text under its Agent card
+    "chrome": False,              # --chrome: Claude in Chrome integration
+    "fallback_model": "",         # --fallback-model <id>
+    "autocompact": "",            # --autocompact auto|<tokens>
+    "max_budget_usd": "",         # --max-budget-usd <amount>
+}
+FLAGS = dict(FLAG_DEFAULTS)
+
+
+def load_flags():
+    """Read data/flags.json over the defaults (unknown keys dropped)."""
+    try:
+        with open(FLAGS_PATH) as f:
+            saved = json.load(f) or {}
+    except Exception:
+        saved = {}
+    FLAGS.clear()
+    FLAGS.update(FLAG_DEFAULTS)
+    for k, v in saved.items():
+        if k in FLAG_DEFAULTS and isinstance(v, type(FLAG_DEFAULTS[k])):
+            FLAGS[k] = v
+    return dict(FLAGS)
+
+
+def save_flags(update):
+    """Merge `update` into FLAGS (typed per FLAG_DEFAULTS) and persist."""
+    for k, v in (update or {}).items():
+        if k not in FLAG_DEFAULTS:
+            continue
+        want = type(FLAG_DEFAULTS[k])
+        if want is bool:
+            FLAGS[k] = bool(v)
+        else:
+            FLAGS[k] = str(v or "").strip()
+    try:
+        tmp = FLAGS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(FLAGS, f, indent=1)
+        os.replace(tmp, FLAGS_PATH)
+    except Exception:
+        pass
+    return dict(FLAGS)
+
+
+load_flags()
+
 # Graceful pause (the composer's pause button, next to stop). Stop is the CLI's
 # hard interrupt: the turn ends wherever it is. Pause is a mid-turn user message,
 # so it reaches the model at its next step; the model finishes the tool call in
@@ -575,6 +664,16 @@ class ClaudeSession:
         self._init_sent = False      # control-protocol initialize handshake sent?
         self._progress = {}          # progress bar id -> {last: ts, done: bool}
         self._pending_ctl = {}       # control request_id -> {"ev": Event, "resp": dict}
+        # Mods + remote surface (see UI_SURFACE above). mod_status: the pinned
+        # status line per plugin ($.ui.status); panes: the pane roster as the
+        # engine last pushed it; _pending_ui_asks: engine-originated asks
+        # (ui_copy, ui_prompt_*) waiting on the front end, answered with their
+        # default when it does not answer in time.
+        self.mod_status = {}
+        self.panes = None
+        self._pending_ui_asks = {}
+        self._ui_viewport = dict(UI_DEFAULT_VIEWPORT)
+        self._ui_attached = False
         self._ctx_window = 0         # context window of the last result (for compaction math)
         # Rewind: the next spawn resumes the conversation truncated at this CLI
         # message uuid (--resume-session-at + --fork-session). See rewind()/branch().
@@ -742,6 +841,26 @@ class ClaudeSession:
         # the valid set is enforced at the route (_VALID_EFFORTS in app.py).
         if self.effort:
             cmd += ["--effort", self.effort]
+        # A display name for the CLI's own session list (`claude --resume`
+        # picker, `claude agents`), so a Console chat is findable from a
+        # terminal too. rename_live() keeps it in step with a rail rename.
+        if self.title:
+            cmd += ["--name", self.title[:80]]
+        # Global switches (settings -> claude flags; bridge.FLAGS).
+        if FLAGS.get("prompt_suggestions"):
+            cmd += ["--prompt-suggestions"]       # prompt_suggestion after each turn
+        if FLAGS.get("hook_events"):
+            cmd += ["--include-hook-events"]      # hook_started / hook_response
+        if FLAGS.get("subagent_text"):
+            cmd += ["--forward-subagent-text"]    # subagent text, parent_tool_use_id set
+        if FLAGS.get("chrome"):
+            cmd += ["--chrome"]
+        if FLAGS.get("fallback_model"):
+            cmd += ["--fallback-model", FLAGS["fallback_model"]]
+        if FLAGS.get("autocompact"):
+            cmd += ["--autocompact", FLAGS["autocompact"]]
+        if FLAGS.get("max_budget_usd"):
+            cmd += ["--max-budget-usd", FLAGS["max_budget_usd"]]
         # Thinking display. The current model family (Fable 5 / Opus 5 and
         # kin) defaults thinking display to "omitted": the API streams
         # thinking blocks whose text is EMPTY (only estimated_tokens ticks),
@@ -785,6 +904,16 @@ class ClaudeSession:
             # and its bar renders inline in the conversation that started it.
             env["MIST_CONSOLE_SESSION"] = self.id or ""
             env["MIST_CONSOLE_URL"] = CONSOLE_URL
+            # Claude Mods: the Console's folder of plugins, plus whatever the
+            # environment already names, each child loaded as a --plugin-dir.
+            # DIR_WATCH makes this long-lived headless session reload a mod
+            # when its files change (reload lines arrive as ui_log).
+            dirs = [d for d in (env.get("CLAUDE_CODE_PLUGIN_DIRS") or "").split(os.pathsep) if d]
+            if os.path.isdir(MODS_DIR) and MODS_DIR not in dirs:
+                dirs.insert(0, MODS_DIR)
+            if dirs:
+                env["CLAUDE_CODE_PLUGIN_DIRS"] = os.pathsep.join(dirs)
+            env.setdefault("CLAUDE_CODE_PLUGIN_DIR_WATCH", "1")
             if self._transcript_gone():
                 # Claude Code's retention sweep deleted this chat's CLI session
                 # file, so --resume could only fail. Start fresh instead; the
@@ -808,6 +937,8 @@ class ClaudeSession:
                 self._resume_missing = False
                 self._init_sent = False
                 self._pending_perms = {}
+                self._ui_attached = False
+                self._pending_ui_asks = {}
                 # A fresh backend starts un-flagged. If the OLD process's watcher
                 # never consumed a pending _intentional_stop (it skips itself once
                 # self.proc is replaced), leaving it set would make this new
@@ -847,7 +978,12 @@ class ClaudeSession:
             return
         self._init_sent = True
         req = {"type": "control_request", "request_id": self._next_ctl_id("init"),
-               "request": {"subtype": "initialize", "hooks": None}}
+               "request": {"subtype": "initialize", "hooks": None,
+                           # Dialogs the Console renders (request_user_dialog).
+                           # Absent, the CLI fails closed: a refused request
+                           # ends in the classic refusal error instead of the
+                           # "retry on the fallback model?" card.
+                           "supportedDialogKinds": list(DIALOG_KINDS)}}
         self._write_stdin(req)
 
     def _next_ctl_id(self, prefix):
@@ -1083,6 +1219,27 @@ class ClaudeSession:
                         on_meta_dirty()
                     except Exception:
                         pass
+                # A fresh process knows no status lines or panes yet.
+                self.mod_status = {}
+                self.panes = None
+                # Join the session as a drawing surface (see UI_SURFACE). Off the
+                # reader thread: the attach is a control call that waits for its
+                # own response, which this very thread delivers.
+                threading.Thread(target=self._ui_attach_async, daemon=True).start()
+            elif obj.get("type") == "system" and obj.get("subtype") in UI_PUSH_SUBTYPES:
+                self._note_ui_push(obj)
+                self._broadcast(obj, record=False)
+                continue
+            elif obj.get("type") == "prompt_suggestion":
+                # --prompt-suggestions: the predicted next prompt. Live only; a
+                # replayed suggestion would offer last week's next step.
+                self._broadcast(obj, record=False)
+                continue
+            elif obj.get("type") == "system" and obj.get("subtype") in ("hook_started", "hook_progress"):
+                # --include-hook-events. Only hook_response is kept for replay;
+                # the start/progress ticks are live chrome.
+                self._broadcast(obj, record=False)
+                continue
             elif obj.get("type") == "assistant":
                 # Each assistant message carries the usage of ONE API call — a true
                 # snapshot of current context occupancy. Keep the latest for ctx %.
@@ -1218,14 +1375,272 @@ class ClaudeSession:
             self._broadcast(ev)
             self._notify_elicitation(ev)
             return True
-        # Unknown blocking request (e.g. request_user_dialog): decline politely so
-        # the CLI applies its default and the turn keeps moving.
+        if sub == "request_user_dialog":
+            kind = req.get("dialog_kind")
+            if kind not in DIALOG_KINDS:
+                # Protocol rule: a kind this client did not declare must not be
+                # answered at all (an error reply is discarded, a "cancelled"
+                # reply counts as the user dismissing it). The CLI settles it
+                # on its own deadline.
+                return True
+            self._pending_perms[req_id] = {"tool_name": "__dialog__", "kind": kind}
+            ev = {"type": "dialog_request", "request_id": req_id, "kind": kind,
+                  "payload": req.get("payload") or {},
+                  "tool_use_id": req.get("tool_use_id")}
+            self._broadcast(ev)
+            self._notify_dialog(ev)
+            return True
+        if sub in UI_ANSWERS:
+            # The engine asks THIS surface for something only the page has: its
+            # clipboard or its composer. Relay to the front end and answer with
+            # the default shape if nobody answers in time (or no page is open).
+            self._relay_ui_ask(req_id, sub, req)
+            return True
+        # Unknown blocking request: decline politely so the CLI applies its
+        # default and the turn keeps moving.
         if req_id:
             self._write_stdin({"type": "control_response", "response": {
                 "subtype": "error", "request_id": req_id,
                 "error": f"unsupported control_request: {sub}"}})
             return True
         return False
+
+    # ---- mods + remote surface ------------------------------------------------
+    def _note_ui_push(self, obj):
+        """Keep the engine's pushed state so a page that connects later (or
+        switches back to this chat) can paint it without a replay."""
+        sub = obj.get("subtype")
+        if sub == "ui_status":
+            plugin = str(obj.get("plugin") or "")
+            text = obj.get("text")
+            if text:
+                self.mod_status[plugin] = str(text)
+            else:
+                self.mod_status.pop(plugin, None)
+        elif sub == "ui_panes":
+            self.panes = {k: obj.get(k) for k in ("panes", "shown_id", "focused_id",
+                                                  "focus_requested_id")}
+
+    def _ui_attach_async(self):
+        try:
+            self.ui_attach(None)
+        except Exception as e:  # noqa: BLE001 -- a failed attach must not kill the reader
+            logging.getLogger("mist.mods").warning("ui_attach failed: %s", e)
+
+    def ui_attach(self, viewport=None):
+        """Join (or re-measure) this backend as the Console drawing surface.
+        Idempotent per client id; a new viewport re-runs the hooked sites."""
+        if isinstance(viewport, dict):
+            vp = dict(self._ui_viewport)
+            for k in ("columns", "rows"):
+                try:
+                    v = int(viewport.get(k))
+                    if v > 0:
+                        vp[k] = v
+                except (TypeError, ValueError):
+                    pass
+            if isinstance(viewport.get("isFullscreen"), bool):
+                vp["isFullscreen"] = viewport["isFullscreen"]
+            self._ui_viewport = vp
+        if not self.alive:
+            return False, "backend not running"
+        ok, resp = self.control_call("ui_attach", {
+            "surface": UI_SURFACE, "client_id": UI_CLIENT_ID,
+            "viewport": dict(self._ui_viewport), "answers": list(UI_ANSWERS)})
+        self._ui_attached = bool(ok)
+        if ok:
+            # The roster as it stands now: a pane opened before the stream
+            # armed pushes nothing, so read it once on attach.
+            pk, panes = self.control_call("ui_panes", {"client_id": UI_CLIENT_ID})
+            if pk and isinstance(panes, dict):
+                self.panes = panes
+                self._broadcast(dict(panes, type="system", subtype="ui_panes"), record=False)
+        return ok, resp
+
+    def ui_call(self, subtype, payload=None, timeout=20.0):
+        """One remote-surface control request (ui_render, ui_press, ui_input,
+        ui_select, ui_panes, ui_pane_show, ui_pane_focus, ui_close,
+        ui_client_module), stamped with this client's surface and id."""
+        if not self.alive:
+            return False, "backend not running"
+        if not self._ui_attached:
+            self.ui_attach(None)
+        body = dict(payload or {})
+        body.setdefault("client_id", UI_CLIENT_ID)
+        if subtype in ("ui_render", "ui_press", "ui_input", "ui_select",
+                       "ui_pane_show", "ui_pane_focus"):
+            body.setdefault("surface", UI_SURFACE)
+        if subtype == "ui_render":
+            body.setdefault("viewport", dict(self._ui_viewport))
+        return self.control_call(subtype, body, timeout=timeout)
+
+    @staticmethod
+    def _ui_default_answer(sub):
+        return {"ui_copy": {"copied": False},
+                "ui_prompt_read": {"text": "", "cursor": 0},
+                "ui_prompt_fill": {"filled": False},
+                "ui_prompt_suggest": {"shown": False}}.get(sub, {})
+
+    def _relay_ui_ask(self, req_id, sub, req):
+        ev = {"type": "ui_ask", "request_id": req_id, "ask": sub}
+        for k in ("plugin", "text", "mode", "decorations"):
+            if k in req:
+                ev[k] = req[k]
+        with self._lock:
+            has_page = bool(self._subscribers)
+        if not has_page:
+            self.respond_ui_ask(req_id, None)
+            return
+        timer = threading.Timer(UI_ASK_TIMEOUT, self.respond_ui_ask, args=(req_id, None))
+        timer.daemon = True
+        self._pending_ui_asks[req_id] = {"ask": sub, "timer": timer}
+        timer.start()
+        self._broadcast(ev, record=False)
+
+    def respond_ui_ask(self, request_id, response):
+        """Answer an engine-originated ask (see _relay_ui_ask). `response`
+        None means the default "nothing happened" shape for that ask."""
+        pend = self._pending_ui_asks.pop(request_id, None)
+        if pend is None:
+            return False
+        try:
+            pend["timer"].cancel()
+        except Exception:
+            pass
+        if not isinstance(response, dict):
+            response = self._ui_default_answer(pend["ask"])
+        return self._write_stdin({"type": "control_response", "response": {
+            "subtype": "success", "request_id": request_id, "response": response}})
+
+    def respond_dialog(self, request_id, result=None):
+        """Settle a request_user_dialog card. `result` is the kind's own
+        choice (refusal_fallback_prompt: retry_fallback / edit_prompt /
+        cancelled); None or "cancelled" dismisses it."""
+        pend = self._pending_perms.pop(request_id, None)
+        if pend is None or pend.get("tool_name") != "__dialog__":
+            return False
+        if result in (None, "", "cancelled"):
+            resp = {"behavior": "cancelled"}
+        else:
+            resp = {"behavior": "completed", "result": result}
+        return self._write_stdin({"type": "control_response", "response": {
+            "subtype": "success", "request_id": request_id, "response": resp}})
+
+    def _notify_dialog(self, ev):
+        kind = ev.get("kind")
+        pl = ev.get("payload") or {}
+        if kind == "refusal_fallback_prompt":
+            msg = ("The API refused a request on %s. Retry on %s?"
+                   % (pl.get("originalModel") or "the current model",
+                      pl.get("fallbackModel") or "the fallback model"))
+        else:
+            msg = "MIST needs a decision in the Console (%s)." % kind
+        url = f"{CONSOLE_URL}/sessions/{self.id}/dialog-response"
+        rid = ev.get("request_id")
+        try:
+            cmd = [NOTIFY_BIN, msg, "MIST needs a decision", "Purr", f"console:{self.id}",
+                   "--subtitle", "Claude Code dialog", "--urgency", "timeSensitive",
+                   "--group", f"perm-{self.id}", "--id", f"perm-{rid}", "--no-voice"]
+            if kind == "refusal_fallback_prompt":
+                cmd += ["--action", self._curl_button("Retry on fallback", url,
+                                                      {"request_id": rid, "result": "retry_fallback"}),
+                        "--action", self._curl_button("Cancel", url,
+                                                      {"request_id": rid, "result": "cancelled"})]
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    def rename_live(self, title):
+        """Tell a live backend its new title (`rename_session`, source host),
+        so the CLI's session list agrees with the rail. Dormant chats get it
+        at their next spawn through --name."""
+        if not self.alive or not title:
+            return False
+        ok, _ = self.control_call("rename_session", {"title": title[:80], "source": "host"})
+        return ok
+
+    def rate_message(self, message_uuid, sentiment, cleared=False):
+        """Thumbs up / down on a reply (`message_rated`), the TUI's own rating."""
+        if not message_uuid or sentiment not in ("positive", "negative"):
+            return False, "bad rating"
+        if not self.alive and not self.wake():
+            return False, "backend not running"
+        payload = {"messageUuid": message_uuid, "sentiment": sentiment,
+                   "surface": "assistant_text"}
+        if cleared:
+            payload["cleared"] = True
+        return self.control_call("message_rated", payload)
+
+    def usage_detail(self):
+        """Structured /usage: session cost + plan rate-limit windows (`get_usage`)."""
+        if not self.alive:
+            return False, "backend not running"
+        return self.control_call("get_usage", {"skip_behaviors": True}, timeout=15.0)
+
+    def list_models(self):
+        """The CLI's own selectable model catalog (`list_models`)."""
+        if not self.alive:
+            return False, "backend not running"
+        return self.control_call("list_models", {}, timeout=15.0)
+
+    def workspace_diff(self):
+        """Git diff of this chat's cwd as the CLI's /diff shows it."""
+        if not self.alive and not self.wake():
+            return False, "backend not running"
+        return self.control_call("get_workspace_diff", {}, timeout=30.0)
+
+    def reload_plugins(self):
+        """Reload mods from disk (`reload_plugins`); answers the refreshed set."""
+        if not self.alive and not self.wake():
+            return False, "backend not running"
+        return self.control_call("reload_plugins", {}, timeout=60.0)
+
+    def _user_uuid_for_cut(self, cut_seq):
+        """The CLI uuid of the user message a rewind at `cut_seq` discards:
+        the first user-role chain entry after the rewind anchor in the CLI's
+        transcript (or the very first one when the cut is before any reply)."""
+        ok, plan = self.rewind_plan(cut_seq)
+        if not ok:
+            return None, plan
+        if not self.claude_session_id:
+            return None, "no CLI session"
+        path = self._cli_transcript_path(self.cwd, self.claude_session_id)
+        anchor = plan.get("resume_at")
+        passed = anchor is None
+        try:
+            with open(path) as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    if not passed:
+                        if obj.get("uuid") == anchor:
+                            passed = True
+                        continue
+                    if obj.get("type") != "user" or obj.get("isSidechain") or obj.get("isMeta"):
+                        continue
+                    content = (obj.get("message") or {}).get("content")
+                    if isinstance(content, list) and any(
+                            isinstance(c, dict) and c.get("type") == "tool_result" for c in content):
+                        continue
+                    if obj.get("uuid"):
+                        return obj["uuid"], None
+        except OSError as e:
+            return None, f"could not read the CLI transcript: {e}"
+        return None, "no user message found after that point"
+
+    def rewind_files(self, cut_seq, dry_run=True):
+        """Undo file edits made since the user message at `cut_seq`
+        (`rewind_files`, the TUI's /rewind "restore code"). Dry run first:
+        the answer says canRewind and which files move."""
+        uuid, why = self._user_uuid_for_cut(cut_seq)
+        if not uuid:
+            return False, why or "no message"
+        if not self.alive and not self.wake():
+            return False, "backend not running"
+        return self.control_call("rewind_files", {"user_message_id": uuid, "dry_run": bool(dry_run)},
+                                 timeout=60.0)
 
     @staticmethod
     def _perm_summary(tool_name, tool_input):
@@ -1993,6 +2408,9 @@ class ClaudeSession:
         _turn_active. Any permission cards still pending are moot, so drop them."""
         if not self.alive or not self.proc or self.proc.stdin is None:
             return False
+        for rid, pend in list(self._pending_perms.items()):
+            if pend.get("tool_name") == "__dialog__":
+                self.respond_dialog(rid, None)
         self._pending_perms.clear()
         self._pause_pending = False   # a hard stop is not a pause
         req = {"type": "control_request", "request_id": self._next_ctl_id("interrupt"),
