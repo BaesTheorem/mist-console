@@ -1244,6 +1244,16 @@ def set_effort(sid):
     return jsonify({"ok": True, "effort": s.effort or ""})
 
 
+@app.route("/sessions/<sid>/restart", methods=["POST"])
+def restart_session(sid):
+    """Restart this chat's backend on its next message, keeping its transcript.
+    For config the CLI reads only at spawn (a new MCP server, a plugin)."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False}), 404
+    return jsonify({"ok": True, "stopped": bool(s.restart_backend())})
+
+
 @app.route("/sessions/<sid>/permission", methods=["POST"])
 def set_permission(sid):
     """Scoped to THIS chat only. It used to also set a global default that new

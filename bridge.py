@@ -1124,6 +1124,17 @@ class ClaudeSession:
             self._resume_tried = False
             self.stop()
 
+    def restart_backend(self):
+        """Stop the backend and let the next send resume it (same transcript,
+        same cwd). This is how a chat picks up a config change the CLI only
+        reads at spawn: a new MCP server, a plugin, a settings edit. Returns
+        True when there was a live backend to stop."""
+        if not self.alive:
+            return False
+        self._resume_tried = False
+        self.stop()
+        return True
+
     def set_permission(self, mode):
         """Switch permission mode. Between the asking modes (default /
         acceptEdits / plan) this goes live over `set_permission_mode`, exactly
