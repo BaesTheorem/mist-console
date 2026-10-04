@@ -715,6 +715,17 @@ class Api:
             pass
         return True
 
+    def design_pane(self, spec):
+        """Place the Claude Design web view over the page's #designBody slot
+        (static/design.js sends {show, url, x, y, w, h} in page points on every
+        layout change). AppKit work happens on the main thread."""
+        try:
+            from PyObjCTools import AppHelper
+            AppHelper.callAfter(_design_pane, dict(spec or {}))
+        except Exception as e:
+            print("design: pane call failed:", e, flush=True)
+        return True
+
     def copy_image(self, path, at=None):
         """Put a transcript image on the system pasteboard as an image (TIFF +
         PNG flavors), so it pastes into Docs, Slack, Preview and the like.
@@ -736,6 +747,117 @@ class Api:
         except Exception as e:
             print("copy_image failed:", e)
             return False
+
+
+# ---- Claude Design pane: a second WKWebView inside the main window ------------
+# claude.ai sends X-Frame-Options: SAMEORIGIN, so the page cannot iframe it. A
+# sibling web view laid over the page's empty #designBody slot looks embedded and
+# is a real top-level page, so login, Cloudflare and the app itself all work. It
+# shares the app's default website data store, so the claude.ai login persists
+# across launches with the rest of the Console's cookies. Built once, then hidden
+# or moved; never torn down, or the login would have to be redone.
+_design_wv = None
+_design_nav = None
+_design_ui = None
+DESIGN_SITES = ("claude.ai", "claude.com", "anthropic.com", "accounts.google.com",
+                "login.microsoftonline.com", "appleid.apple.com", "challenges.cloudflare.com")
+DESIGN_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+             "(KHTML, like Gecko) Version/18.4 Safari/605.1.15")
+
+
+def _design_host_ok(url):
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(str(url)).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == s or host.endswith("." + s) for s in DESIGN_SITES)
+
+
+def _design_build():
+    global _design_wv, _design_nav, _design_ui
+    import objc
+    from Foundation import NSObject, NSMakeRect
+    from WebKit import (WKWebView, WKWebViewConfiguration, WKNavigationActionPolicyAllow,
+                        WKNavigationActionPolicyCancel)
+
+    class _DesignNav(NSObject, protocols=[objc.protocolNamed("WKNavigationDelegate")]):
+        def webView_decidePolicyForNavigationAction_decisionHandler_(self, wv, action, handler):
+            url = action.request().URL()
+            s = str(url.absoluteString()) if url else ""
+            scheme = (str(url.scheme()) if url else "").lower()
+            # Every navigation is logged: the first real "Send to local coding
+            # agent" handoff shows here, and that is how it gets wired up.
+            print("design: nav", s[:300], flush=True)
+            if scheme in ("http", "https", "about", "blob", "data"):
+                if scheme in ("http", "https") and not _design_host_ok(s):
+                    # Off-site links (docs, a Dribbble reference) go to the browser.
+                    subprocess.run(["/usr/bin/open", s], check=False)
+                    handler(WKNavigationActionPolicyCancel)
+                    return
+                handler(WKNavigationActionPolicyAllow)
+                return
+            # A custom scheme (claude://, cursor://…): hand it to the OS and log it.
+            if s:
+                subprocess.run(["/usr/bin/open", s], check=False)
+            handler(WKNavigationActionPolicyCancel)
+
+        def webView_didFailProvisionalNavigation_withError_(self, wv, nav, err):
+            print("design: load failed:", err, flush=True)
+
+    class _DesignUI(NSObject, protocols=[objc.protocolNamed("WKUIDelegate")]):
+        # target=_blank inside Claude Design: keep same-site pages in the pane,
+        # send anything else to the browser. Returning None opens no new window.
+        def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(self, wv, cfg, action, feat):
+            url = action.request().URL()
+            s = str(url.absoluteString()) if url else ""
+            print("design: popup", s[:300], flush=True)
+            if _design_host_ok(s):
+                wv.loadRequest_(action.request())
+            elif s:
+                subprocess.run(["/usr/bin/open", s], check=False)
+            return None
+
+    config = WKWebViewConfiguration.alloc().init()
+    wv = WKWebView.alloc().initWithFrame_configuration_(NSMakeRect(0, 0, 10, 10), config)
+    wv.setCustomUserAgent_(DESIGN_UA)
+    _design_nav = _DesignNav.alloc().init()
+    _design_ui = _DesignUI.alloc().init()
+    wv.setNavigationDelegate_(_design_nav)
+    wv.setUIDelegate_(_design_ui)
+    wv.setHidden_(True)
+    _design_wv = wv
+    return wv
+
+
+def _design_pane(spec):
+    """Main thread. spec: {show, url|None, x, y, w, h} in page points, top-left
+    origin; AppKit wants bottom-left, so flip against the content view's height."""
+    global _design_wv
+    win = _main_nswindow()
+    if win is None:
+        return
+    try:
+        from AppKit import NSWindowAbove
+        from Foundation import NSMakeRect, NSURL, NSURLRequest
+        content = win.contentView()
+        wv = _design_wv or _design_build()
+        if wv.superview() is None:
+            content.addSubview_positioned_relativeTo_(wv, NSWindowAbove, None)
+        url = spec.get("url")
+        if url:
+            wv.loadRequest_(NSURLRequest.requestWithURL_(NSURL.URLWithString_(str(url))))
+        show = bool(spec.get("show"))
+        w, h = float(spec.get("w") or 0), float(spec.get("h") or 0)
+        if not show or w < 2 or h < 2:
+            wv.setHidden_(True)
+            return
+        H = content.bounds().size.height
+        x, y = float(spec.get("x") or 0), float(spec.get("y") or 0)
+        wv.setFrame_(NSMakeRect(x, H - (y + h), w, h))
+        wv.setHidden_(False)
+    except Exception as e:
+        print("design: pane failed:", e, flush=True)
 
 
 def _install_edit_menu():

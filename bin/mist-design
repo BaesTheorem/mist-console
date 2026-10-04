@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""mist-design — open the Claude Design pane in the MIST Console chat that started
+this process, and keep the repo linked to its Claude Design project.
+
+Usage
+  mist-design open                      # show the pane on this repo's project (or the Design home)
+  mist-design open <project-url-or-id>  # show the pane on that project, without linking
+  mist-design link <project-url-or-id> [--name "Pocket Dungeon"]
+      Record the project in design/claude-design.json in the chat's working
+      directory (committed: a fresh clone must find the same canvas) and show it.
+  mist-design status                    # the link the Console sees for this chat
+  mist-design hide                      # close the pane
+
+Addressing: the chat is $MIST_CONSOLE_SESSION and the server is $MIST_CONSOLE_URL,
+both exported into every Console session's shell. Elsewhere pass --session/--url.
+With neither, the CLI prints what it would have done and exits 0, so a skill that
+calls it outside the Console never breaks.
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+DEFAULT_URL = "http://127.0.0.1:5014"
+
+
+def _post(url, path, body):
+    req = urllib.request.Request(url.rstrip("/") + path, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return json.loads(r.read().decode() or "{}")
+
+
+def _get(url, path):
+    with urllib.request.urlopen(url.rstrip("/") + path, timeout=5) as r:
+        return json.loads(r.read().decode() or "{}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("cmd", choices=["open", "link", "status", "hide"])
+    ap.add_argument("project", nargs="?", help="claude.ai/design/p/<id> URL or bare project id")
+    ap.add_argument("--name", help="project name to record with `link`")
+    ap.add_argument("--design-system", help="design-system project id to record with `link`")
+    ap.add_argument("--session", default=os.environ.get("MIST_CONSOLE_SESSION"))
+    ap.add_argument("--url", default=os.environ.get("MIST_CONSOLE_URL") or DEFAULT_URL)
+    a = ap.parse_args()
+    if not a.session:
+        print("mist-design: no Console chat ($MIST_CONSOLE_SESSION unset); nothing to show", file=sys.stderr)
+        return 0
+    if a.cmd in ("link",) and not a.project:
+        ap.error("link needs a project URL or id")
+    try:
+        if a.cmd == "status":
+            print(json.dumps(_get(a.url, "/design?session=" + a.session), indent=2))
+            return 0
+        body = {"show": a.cmd != "hide"}
+        if a.project:
+            body["project"] = a.project
+        if a.cmd == "link":
+            body["link"] = True
+            if a.name:
+                body["name"] = a.name
+            if a.design_system:
+                body["design_system"] = a.design_system
+        r = _post(a.url, "/design/" + a.session, body)
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode()).get("error") or str(e)
+        except Exception:
+            msg = str(e)
+        print("mist-design:", msg, file=sys.stderr)
+        return 1
+    except (urllib.error.URLError, OSError) as e:
+        print("mist-design: Console not reachable:", e, file=sys.stderr)
+        return 1
+    if not r.get("ok"):
+        print("mist-design:", r.get("error", "failed"), file=sys.stderr)
+        return 1
+    if a.cmd == "hide":
+        print("design pane hidden")
+    else:
+        print(f"design pane: {r.get('url')}" + (f"  (linked in {r.get('file')})" if a.cmd == "link" else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

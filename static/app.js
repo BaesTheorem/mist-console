@@ -2703,6 +2703,10 @@ class Session {
         // A download/upload/install reporting itself. Same id = same element.
         this.handleProgress(o);
         break;
+      case "design":
+        // MIST (bin/mist-design) pointing this chat's Claude Design pane at a project.
+        if (window.DESIGN) DESIGN.event(this, o);
+        break;
       case "status_idle":
         // An out-of-band action (auth flow) finished; clear the thinking spinner.
         this.setStatus("idle", "idle");
@@ -3901,6 +3905,7 @@ function switchTo(id) {
   if (!isTouch()) input.focus();   // on a phone this would raise the keyboard on every switch
   reportActiveChat();   // AirDropped photos follow the chat you switch to
   if (window.MODS) MODS.switched(s);   // this chat's status lines, panes, band, suggestion
+  if (window.DESIGN) DESIGN.switched(s);   // this chat's Claude Design project in the pane
 }
 async function createSession() {
   const r = await fetch("/sessions", { method: "POST" });

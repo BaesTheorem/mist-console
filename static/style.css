@@ -1827,6 +1827,37 @@ details.subagent .sub-body .md + .md { margin-top: 6px; }
 body.pane-open #usage { right: calc(var(--pane-w, 380px) + 20px); }
 @media (max-width: 760px) { #paneDock, #paneResize { display: none !important; } }
 
+/* --- design dock: Claude Design beside the chat (design.js + desktop.py) --- */
+#designDock {
+  width: var(--design-w, 560px); flex: 0 0 var(--design-w, 560px); min-width: 0;
+  border-left: 1px solid var(--line); background: var(--md-sys-color-surface-container-low);
+  display: flex; flex-direction: column;
+}
+#designDock[hidden] { display: none; }
+#designResize { width: 5px; flex: 0 0 5px; cursor: col-resize; background: transparent; margin-right: -5px; z-index: 2; }
+#designResize:hover, #designResize.dragging { background: var(--teal); }
+#designDock[hidden] ~ #designResize, #designResize:has(+ #designDock[hidden]) { display: none; }
+#designHead {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line);
+  font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;
+}
+#designHead > .msi { font-size: 15px; color: var(--teal); }
+#designHead .design-name { color: var(--text); text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; }
+#designHead .design-spacer { flex: 1; }
+#designHead .xclose .msi { font-size: 15px; }
+/* The native web view sits exactly over #designBody; keep the slot empty and
+   solid so nothing shows through while the page loads. */
+#designBody { flex: 1; min-height: 0; position: relative; background: #fff; }
+html[data-theme="terminal"] #designBody { background: #000; }
+.design-fallback { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px; padding: 20px; text-align: center; color: var(--dim); font-size: 12px;
+  background: var(--md-sys-color-surface-container-low); }
+.design-fallback a { color: var(--teal); }
+#designBtn[aria-pressed="true"] { color: var(--teal); }
+body.design-open #usage { right: calc(var(--design-w, 560px) + 20px); }
+body.design-open.pane-open #usage { right: calc(var(--design-w, 560px) + var(--pane-w, 380px) + 20px); }
+@media (max-width: 760px) { #designDock, #designResize { display: none !important; } }
+
 /* --- settings: mods + flags --- */
 .mod-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--line-soft); font-size: 12px; flex-wrap: wrap; }
 .mod-row .mod-name { color: var(--text); }

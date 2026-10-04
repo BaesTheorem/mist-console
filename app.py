@@ -27,6 +27,7 @@ from flask import Flask, Response, abort, jsonify, redirect, request, send_file,
 
 import archive
 import bookmarks
+import design
 import notifchat
 import embeds
 import quickaccess
@@ -1653,6 +1654,48 @@ def stop_bg_task(sid, task_id):
     if not s.stop_task(task_id):
         return jsonify({"ok": False, "error": "backend not running"}), 409
     return jsonify({"ok": True})
+
+
+@app.route("/design")
+def design_info():
+    """What the design pane shows for a chat: the Claude Design project linked
+    from that chat's working directory (design/claude-design.json), or the Design
+    home when the repo has none yet."""
+    sid = request.args.get("session")
+    s = _sessions.get(sid) if sid else None
+    return jsonify(design.pane_info(s.cwd if s else HARNESS))
+
+
+@app.route("/design/<sid>", methods=["POST"])
+def design_open(sid):
+    """Point chat <sid>'s design pane at a project and show it.
+
+    Body: {project?: "<id or claude.ai/design/p/<id> URL>", name?, show?: bool,
+           link?: bool}. With `link` the project is also recorded in the chat's
+    repo (design/claude-design.json), so later chats in that repo open the same
+    canvas. The address of the chat lives in $MIST_CONSOLE_SESSION inside every
+    session's shell; bin/mist-design is the front end."""
+    s = _sessions.get(sid)
+    if not s:
+        return jsonify({"ok": False, "error": "no such session"}), 404
+    body = request.get_json(silent=True) or {}
+    ref = body.get("project") or body.get("url")
+    if body.get("link") and ref:
+        try:
+            design.write_link(s.cwd, ref, name=body.get("name"),
+                              design_system=body.get("design_system"))
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+    info = design.pane_info(s.cwd)
+    if ref and not body.get("link"):
+        pid = design.parse_project(ref)
+        if not pid:
+            return jsonify({"ok": False, "error": "not a Claude Design project id or URL"}), 400
+        info["url"] = design.project_url(pid)
+        info["project"] = pid
+    s.design_pane({"url": info["url"], "project": info.get("project"),
+                   "name": info.get("name"), "show": body.get("show", True)})
+    return jsonify({"ok": True, **info})
 
 
 @app.route("/progress/<sid>", methods=["POST"])
