@@ -776,12 +776,14 @@ def _design_host_ok(url):
 
 def _design_build():
     global _design_wv, _design_nav, _design_ui
-    import objc
     from Foundation import NSObject, NSMakeRect
     from WebKit import (WKWebView, WKWebViewConfiguration, WKNavigationActionPolicyAllow,
                         WKNavigationActionPolicyCancel)
 
-    class _DesignNav(NSObject, protocols=[objc.protocolNamed("WKNavigationDelegate")]):
+    # No protocols=[...] on these delegates. A formal protocol makes PyObjC take
+    # the bare "@?" block encoding from the runtime, so calling decisionHandler
+    # raises "cannot call block without a signature" and the app aborts.
+    class _DesignNav(NSObject):
         def webView_decidePolicyForNavigationAction_decisionHandler_(self, wv, action, handler):
             url = action.request().URL()
             s = str(url.absoluteString()) if url else ""
@@ -805,7 +807,7 @@ def _design_build():
         def webView_didFailProvisionalNavigation_withError_(self, wv, nav, err):
             print("design: load failed:", err, flush=True)
 
-    class _DesignUI(NSObject, protocols=[objc.protocolNamed("WKUIDelegate")]):
+    class _DesignUI(NSObject):
         # target=_blank inside Claude Design: keep same-site pages in the pane,
         # send anything else to the browser. Returning None opens no new window.
         def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(self, wv, cfg, action, feat):
