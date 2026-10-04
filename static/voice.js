@@ -156,9 +156,15 @@
     if (st.vad) return st.vad;
     if (!window.vad || !window.vad.MicVAD) throw new Error("voice detector not loaded (vendor/vad)");
     setState("warming");
+    // Absolute URLs: onnxruntime loads its .mjs helper with a dynamic import(),
+    // and WebKit rejects a relative specifier there ("does not resolve to a
+    // valid URL"). One thread: no cross-origin isolation on this page, so no
+    // SharedArrayBuffer for the threaded build to use.
+    const assets = new URL(VAD_ASSETS, location.href).href;
+    if (window.ort && ort.env && ort.env.wasm) ort.env.wasm.numThreads = 1;
     st.vad = await window.vad.MicVAD.new({
       model: "v5",
-      baseAssetPath: VAD_ASSETS, onnxWASMBasePath: VAD_ASSETS,
+      baseAssetPath: assets, onnxWASMBasePath: assets,
       getStream,
       positiveSpeechThreshold: 0.6, negativeSpeechThreshold: 0.35,
       minSpeechMs: 250, preSpeechPadMs: 400, redemptionMs: 900,

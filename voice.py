@@ -42,8 +42,23 @@ log = logging.getLogger("mist.voice")
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL = os.environ.get("MIST_WHISPER_MODEL",
                        os.path.join(HERE, "models", "ggml-small.en.bin"))
-WHISPER_CLI = shutil.which("whisper-cli")
-WHISPER_SERVER = shutil.which("whisper-server")
+
+
+def _which(name):
+    """PATH first, then the Homebrew and /usr/local bins: the .app is launched
+    by launchd with a bare PATH, so shutil.which alone misses brew binaries."""
+    p = shutil.which(name)
+    if p:
+        return p
+    for d in ("/opt/homebrew/bin", "/usr/local/bin"):
+        c = os.path.join(d, name)
+        if os.access(c, os.X_OK):
+            return c
+    return None
+
+
+WHISPER_CLI = _which("whisper-cli")
+WHISPER_SERVER = _which("whisper-server")
 STT_PORT = int(os.environ.get("MIST_STT_PORT", "8089"))
 STT_URL = f"http://127.0.0.1:{STT_PORT}/inference"
 THREADS = "4"
