@@ -1284,7 +1284,15 @@ def main():
         pass
     # The quick-entry overlay is a native NSPanel (built lazily in _show_panel),
     # not a pywebview window — only that can float over fullscreen apps.
-    webview.start(_on_start)
+    # private_mode=False is load-bearing: pywebview defaults it to True, and on
+    # macOS private mode means "wipe the default WKWebsiteDataStore (every data
+    # type, since the epoch) on each launch" (webview/platforms/cocoa.py). That
+    # is why the UI's localStorage keys (the chat-list width, the collapsed
+    # sections, the design pane width) died at every restart while theme, font
+    # and text size survived through their server-side copies. With the wipe
+    # gone, localStorage lives in ~/Library/WebKit/com.exobrain.mist-console/
+    # like any other WKWebView app.
+    webview.start(_on_start, private_mode=False)
 
 
 if __name__ == "__main__":

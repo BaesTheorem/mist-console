@@ -7,7 +7,7 @@
 <!-- Apply the saved theme + font before CSS paints so switching never flashes.
      __mistFont is replaced server-side (app.py) with the persisted font so a
      wiped localStorage still paints the right face. localStorage wins if set. -->
-<script>window.__mistFont=null;window.__mistZoom=null;
+<script>window.__mistFont=null;window.__mistZoom=null;window.__mistRailW=null;
 try{if(/MISTShell/.test(navigator.userAgent)||/[?&]shell=ios\b/.test(location.search))document.documentElement.dataset.shell="ios";}catch(e){}</script>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"terminal"}catch(e){document.documentElement.dataset.theme="terminal"}
 try{var _d=document.documentElement,_fs=localStorage.getItem("fontStack"),_fid=localStorage.getItem("font");
@@ -17,7 +17,11 @@ if(_fid)_d.dataset.font=_fid;}catch(e){}
 /* text size, applied before first paint so it never flashes at 100% */
 try{var _z=parseInt(localStorage.getItem("textSize"),10);
 if(!_z&&window.__mistZoom)_z=window.__mistZoom;
-if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}</script>
+if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}
+/* chat-list width, same two lanes: localStorage first, the server copy when that is empty */
+try{var _rw=parseInt(localStorage.getItem("railW"),10);
+if(!(_rw>=120&&_rw<=560)&&window.__mistRailW)_rw=window.__mistRailW;
+if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--rail-w",_rw+"px");}catch(e){}</script>
 <link rel="stylesheet" href="md-tokens.css">
 <link rel="stylesheet" href="fonts/fonts.css">
 <link rel="stylesheet" href="style.css">

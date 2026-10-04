@@ -231,6 +231,32 @@ def _save_textsize(pct):
         pass
 
 
+# Chat-list (tab rail) width, the same lane as the text size: the drag handle
+# writes localStorage for an instant pre-paint and POSTs here so the width also
+# survives a wiped WebView store. Clamped to the handle's own drag range.
+RAILW_PATH = os.path.join(DATA_DIR, "railw.json")
+RAILW_MIN, RAILW_MAX, RAILW_DEFAULT = 120, 560, 196
+
+
+def _load_railw():
+    try:
+        with open(RAILW_PATH) as f:
+            w = int((json.load(f) or {}).get("px"))
+        if RAILW_MIN <= w <= RAILW_MAX:
+            return w
+    except Exception:
+        pass
+    return RAILW_DEFAULT
+
+
+def _save_railw(px):
+    try:
+        with open(RAILW_PATH, "w") as f:
+            json.dump({"px": px}, f)
+    except Exception:
+        pass
+
+
 _meta_dirty = threading.Event()
 _meta_io_lock = threading.Lock()
 
@@ -589,6 +615,7 @@ def index():
         html = html.replace('<html lang="en">', '<html lang="en" data-theme="%s">' % theme)
         html = html.replace('window.__mistFont=null;', 'window.__mistFont=%s;' % json.dumps(_load_font()))
         html = html.replace('window.__mistZoom=null;', 'window.__mistZoom=%d;' % _load_textsize())
+        html = html.replace('window.__mistRailW=null;', 'window.__mistRailW=%d;' % _load_railw())
         return Response(html, mimetype="text/html")
     except Exception:
         return send_from_directory("static", "index.html")
@@ -783,6 +810,19 @@ def textsize():
         return jsonify({"ok": True, "pct": pct})
     return jsonify({"pct": _load_textsize(),
                     "min": TEXTSIZE_MIN, "max": TEXTSIZE_MAX})
+
+
+@app.route("/railw", methods=["GET", "POST"])
+def railw():
+    if request.method == "POST":
+        try:
+            px = int((request.get_json(silent=True) or {}).get("px"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "px must be a number"}), 400
+        px = max(RAILW_MIN, min(RAILW_MAX, px))
+        _save_railw(px)
+        return jsonify({"ok": True, "px": px})
+    return jsonify({"px": _load_railw(), "min": RAILW_MIN, "max": RAILW_MAX})
 
 
 # The chat that was open last, per client ("mac" or "ios"), so a restart opens

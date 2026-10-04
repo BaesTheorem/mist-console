@@ -5595,8 +5595,19 @@ if (jumpBtn) {
   const handle = $("#railResize");
   const root = document.documentElement;
   const DEFAULT = 196, MIN = 120, MAX = 560;
+  // The <head> script already applied the saved width pre-paint (localStorage,
+  // then the server-injected copy). Reaffirm it here so a value that only lives
+  // in localStorage still wins over a stale server copy.
   const saved = parseInt(localStorage.getItem("railW") || "", 10);
   if (saved >= MIN && saved <= MAX) root.style.setProperty("--rail-w", saved + "px");
+  // Persisted twice, like the theme, font and text size: localStorage for the
+  // pre-paint, and data/railw.json so a wiped WebView store still opens at the
+  // width you dragged to.
+  const persist = (px) => {
+    try { localStorage.setItem("railW", String(px)); } catch (_) {}
+    fetch("/railw", { method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ px }) }).catch(() => {});
+  };
   let dragging = false;
   handle.addEventListener("mousedown", (e) => {
     dragging = true; handle.classList.add("dragging");
@@ -5620,11 +5631,11 @@ if (jumpBtn) {
     dragging = false; handle.classList.remove("dragging");
     document.body.classList.remove("col-resizing");
     const cur = parseInt(getComputedStyle(root).getPropertyValue("--rail-w"), 10);
-    if (cur) localStorage.setItem("railW", cur);
+    if (cur) persist(cur);
   });
   handle.addEventListener("dblclick", () => {
     root.style.setProperty("--rail-w", DEFAULT + "px");
-    localStorage.setItem("railW", DEFAULT);
+    persist(DEFAULT);
   });
 })();
 
