@@ -128,6 +128,11 @@
     });
   })();
 
+  // pywebview injects window.pywebview.api after the page's scripts run, so a
+  // pane reopened at load would see no native side and show the fallback.
+  // Push again the moment the bridge is ready.
+  window.addEventListener("pywebviewready", () => push(true));
+
   // Reopen the way it was left; the chat's own project loads on the first switchTo.
   if (localStorage.getItem("designOpen") === "1") setOpen(true);
 })();

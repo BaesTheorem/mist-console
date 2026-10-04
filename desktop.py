@@ -881,9 +881,12 @@ def _design_popup_close(child):
 
 
 def _design_main_webview(view):
-    """pywebview's own WKWebView (the Console page) inside `view`; the design
-    view is skipped. Depth-first, since pywebview may wrap it in a container."""
+    """pywebview's own WKWebView (the Console page): `view` itself when
+    pywebview made it the window's content view, else the first one below it.
+    The design view is skipped."""
     from WebKit import WKWebView
+    if isinstance(view, WKWebView) and view is not _design_wv:
+        return view
     for sub in (view.subviews() or []):
         if sub is _design_wv:
             continue
@@ -913,17 +916,25 @@ def _design_pane(spec):
         from Foundation import NSMakeRect, NSURL, NSURLRequest
         wv = _design_wv or _design_build()
         page = _design_main_webview(win.contentView())
-        host = page.superview() if page is not None else win.contentView()
+        if page is None:
+            print("design: no Console web view found", flush=True)
+            return
+        # When the page IS the content view there is no sibling slot to use, so
+        # the design view rides inside it as a subview (a WKWebView takes them).
+        host = page if page is win.contentView() else page.superview()
         if wv.superview() is not host:
             if wv.superview() is not None:
                 wv.removeFromSuperview()
-            host.addSubview_positioned_relativeTo_(wv, NSWindowAbove, page)
+            if host is page:
+                host.addSubview_(wv)
+            else:
+                host.addSubview_positioned_relativeTo_(wv, NSWindowAbove, page)
         url = spec.get("url")
         if url:
             wv.loadRequest_(NSURLRequest.requestWithURL_(NSURL.URLWithString_(str(url))))
         show = bool(spec.get("show"))
         w, h = float(spec.get("w") or 0), float(spec.get("h") or 0)
-        if not show or w < 2 or h < 2 or page is None:
+        if not show or w < 2 or h < 2:
             wv.setHidden_(True)
             return
         pb = page.bounds()
@@ -934,7 +945,7 @@ def _design_pane(spec):
         w, h = w * sx, h * sy
         top_down = page.isFlipped()
         r = NSMakeRect(x, y if top_down else pb.size.height - (y + h), w, h)
-        wv.setFrame_(page.convertRect_toView_(r, host))
+        wv.setFrame_(r if host is page else page.convertRect_toView_(r, host))
         wv.setHidden_(False)
     except Exception as e:
         print("design: pane failed:", e, flush=True)
