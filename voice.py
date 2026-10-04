@@ -12,7 +12,9 @@ things a browser cannot do locally:
                        system voice (`say`), used when the web view's own
                        speechSynthesis has no voices. "mist" is MIST's cloned
                        XTTS voice from the harness voice service, slower than
-                       real time, started on request and warmed in the
+                       real time. "chatterbox" is the same cloned voice from
+                       Chatterbox Turbo on MLX, close to real time. Both
+                       cloned engines start on request and warm in the
                        background.
 
 INVARIANTS (do not break these in an edit):
@@ -71,6 +73,18 @@ HARNESS = os.environ.get("MIST_HARNESS", "/Users/alexhedtke/Documents/Exobrain h
 MIST_TTS_URL = os.environ.get("MIST_TTS_URL", "http://127.0.0.1:8087")
 MIST_SERVE_PY = os.path.join(HARNESS, "mist-voice", "scripts", "serve.py")
 MIST_PY = os.path.join(HARNESS, "mist-voice", ".venv", "bin", "python")
+MIST_CHATTERBOX_URL = os.environ.get("MIST_CHATTERBOX_URL", "http://127.0.0.1:8088")
+
+# The cloned engines: name -> (service URL, start command, log file). Each one
+# is a resident service with GET /health and POST /say -> WAV.
+ENGINES = {
+    "mist": (MIST_TTS_URL, [MIST_PY, MIST_SERVE_PY, "--device", "cpu"],
+             "mist-console-mist-voice.log"),
+    "chatterbox": (MIST_CHATTERBOX_URL,
+                   [os.path.join(HARNESS, "mist-voice", ".venv-chatterbox", "bin", "python"),
+                    os.path.join(HARNESS, "mist-voice", "scripts", "serve_chatterbox.py")],
+                   "mist-console-chatterbox.log"),
+}
 
 LOG_DIR = os.path.expanduser("~/Library/Logs/exobrain")
 
@@ -87,8 +101,8 @@ VOICE_HINT = (
 _lock = threading.Lock()
 _stt_proc = None
 _stt_started_at = 0.0
-_mist_proc = None
-_mist_started_at = 0.0
+_engine_procs = {}       # engine name -> Popen of a start we issued
+_engine_started_at = {}  # engine name -> time of that start
 
 
 def _port_open(port, timeout=0.3):
@@ -108,20 +122,25 @@ def _detach(cmd, logname):
 
 # ---------------------------------------------------------------- status ----
 
-def mist_state():
-    """"up" when the XTTS service answers, "warming" while a start we issued
-    is still loading (about 80 s cold), else "down"."""
-    if _port_open(8087 if MIST_TTS_URL.endswith(":8087") else
-                  int(MIST_TTS_URL.rsplit(":", 1)[-1])):
+def engine_state(name):
+    """"up" when the engine's service answers, "warming" while a start we
+    issued is still loading, else "down"."""
+    url = ENGINES[name][0]
+    if _port_open(int(url.rsplit(":", 1)[-1])):
         try:
-            with urllib.request.urlopen(MIST_TTS_URL + "/health", timeout=1) as r:
+            with urllib.request.urlopen(url + "/health", timeout=1) as r:
                 if json.loads(r.read() or b"{}").get("ok"):
                     return "up"
         except Exception:  # noqa: BLE001 -- any failure reads as not up yet
             pass
-    if _mist_proc is not None and _mist_proc.poll() is None:
+    proc = _engine_procs.get(name)
+    if proc is not None and proc.poll() is None:
         return "warming"
     return "down"
+
+
+def engine_available(name):
+    return all(os.path.exists(p) for p in ENGINES[name][1][:2])
 
 
 def status():
@@ -132,8 +151,10 @@ def status():
         "stt_server": _port_open(STT_PORT),
         "say": os.path.exists(SAY),
         "say_voice": SAY_VOICE,
-        "mist_voice": mist_state(),
-        "mist_available": os.path.exists(MIST_SERVE_PY) and os.path.exists(MIST_PY),
+        "mist_voice": engine_state("mist"),
+        "mist_available": engine_available("mist"),
+        "chatterbox_voice": engine_state("chatterbox"),
+        "chatterbox_available": engine_available("chatterbox"),
     }
 
 
@@ -245,31 +266,29 @@ def tts_live(text):
             pass
 
 
-def mist_start():
-    """Start the XTTS voice service detached if it is not up. Returns the
+def engine_start(name):
+    """Start a cloned engine's service detached if it is not up. Returns the
     state after the call ("up" / "warming" / "down")."""
-    global _mist_proc, _mist_started_at
-    st = mist_state()
+    st = engine_state(name)
     if st != "down":
         return st
-    if not (os.path.exists(MIST_SERVE_PY) and os.path.exists(MIST_PY)):
+    if not engine_available(name):
         return "down"
     with _lock:
-        if time.time() - _mist_started_at > 30:
-            _mist_started_at = time.time()
-            _mist_proc = _detach([MIST_PY, MIST_SERVE_PY, "--device", "cpu"],
-                                 "mist-console-mist-voice.log")
-            log.info("mist voice service started (pid %s)", _mist_proc.pid)
+        if time.time() - _engine_started_at.get(name, 0.0) > 30:
+            _engine_started_at[name] = time.time()
+            _engine_procs[name] = _detach(ENGINES[name][1], ENGINES[name][2])
+            log.info("%s voice service started (pid %s)", name, _engine_procs[name].pid)
     return "warming"
 
 
-def tts_mist(text):
-    """MIST's own voice as 24 kHz PCM16 WAV bytes. Raises RuntimeError("warming")
+def tts_engine(name, text):
+    """A cloned engine's voice as PCM16 WAV bytes. Raises RuntimeError("warming")
     or ("down") when the service cannot answer yet."""
-    st = mist_state()
+    st = engine_state(name)
     if st != "up":
         raise RuntimeError(st)
-    req = urllib.request.Request(MIST_TTS_URL + "/say", method="POST",
+    req = urllib.request.Request(ENGINES[name][0] + "/say", method="POST",
                                  data=json.dumps({"text": text}).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=300) as r:
@@ -277,4 +296,4 @@ def tts_mist(text):
 
 
 def tts(text, which="live"):
-    return tts_mist(text) if which == "mist" else tts_live(text)
+    return tts_engine(which, text) if which in ENGINES else tts_live(text)

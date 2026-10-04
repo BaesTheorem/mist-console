@@ -1949,11 +1949,11 @@ def voice_stt():
 
 @app.route("/voice/tts", methods=["POST"])
 def voice_tts():
-    """Body: {text, voice: "live"|"mist"}. Returns audio/wav, or 503 with
+    """Body: {text, voice: "live"|"mist"|"chatterbox"}. Returns audio/wav, or 503 with
     {error, state} when that voice cannot answer (state = warming/down)."""
     body = request.get_json(silent=True) or {}
     text = (body.get("text") or "").strip()
-    which = "mist" if body.get("voice") == "mist" else "live"
+    which = body.get("voice") if body.get("voice") in voice.ENGINES else "live"
     if not text:
         return jsonify({"ok": False, "error": "empty"}), 400
     try:
@@ -1965,9 +1965,11 @@ def voice_tts():
     return Response(data, mimetype="audio/wav")
 
 
-@app.route("/voice/mist/start", methods=["POST"])
-def voice_mist_start():
-    return jsonify({"ok": True, "state": voice.mist_start()})
+@app.route("/voice/<engine>/start", methods=["POST"])
+def voice_engine_start(engine):
+    if engine not in voice.ENGINES:
+        return jsonify({"ok": False, "error": "no such voice"}), 404
+    return jsonify({"ok": True, "state": voice.engine_start(engine)})
 
 
 @app.route("/send/<sid>", methods=["POST"])

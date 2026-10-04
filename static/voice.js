@@ -12,7 +12,8 @@
    - Speech to text: POST /voice/stt with a 16 kHz WAV (voice.py, whisper.cpp).
    - Text to speech: "live" = the web view's own speechSynthesis (instant, word
      boundaries) with the server's `say` as the fallback; "mist" = her XTTS
-     voice via POST /voice/tts (slower than real time, so a "rendering" state).
+     voice and "chatterbox" = the same clone on Chatterbox Turbo, both via
+     POST /voice/tts (they render ahead, so a "rendering" state).
    - Barge-in: real speech while she talks stops the audio and drops the rest
      of that reply's queue; the text still lands in the chat.
 
@@ -25,10 +26,17 @@
   const $ = (q) => document.querySelector(q);
   const LS = { mode: "voiceMode", voice: "voiceVoice" };
   const VAD_ASSETS = "vendor/vad/";
+  // The cloned voices: server engines that render ahead and warm on first use.
+  const CLONED = {
+    mist: { name: "MIST voice", up: "MIST's XTTS voice (slower than real time)",
+            warming: "MIST's XTTS voice is loading (about 80 s)" },
+    chatterbox: { name: "Chatterbox voice", up: "MIST's voice on Chatterbox (close to real time)",
+                  warming: "The Chatterbox voice is loading (about 20 s)" },
+  };
   const st = {
     on: false, sid: null,
     mode: (localStorage.getItem(LS.mode) === "hold") ? "hold" : "handsfree",
-    voice: (localStorage.getItem(LS.voice) === "mist") ? "mist" : "live",
+    voice: CLONED[localStorage.getItem(LS.voice)] ? localStorage.getItem(LS.voice) : "live",
     muted: false, state: "off", label: "", caption: "", draft: "",
     vad: null, vadBusy: false, level: 0, holdDown: false,
     speaking: false, queue: [], cur: null, dropTurn: false,
@@ -126,14 +134,15 @@
     ui.hf.classList.toggle("on", st.mode === "handsfree");
     ui.hold.classList.toggle("on", st.mode === "hold");
     ui.live.classList.toggle("on", st.voice === "live");
-    ui.mist.classList.toggle("on", st.voice === "mist");
+    for (const k in CLONED) {
+      const b = ui[k], ms = st.status && st.status[k + "_voice"];
+      b.classList.toggle("on", st.voice === k);
+      b.title = ms === "up" ? CLONED[k].up : ms === "warming" ? CLONED[k].warming
+              : CLONED[k].name + " · starts its voice service on first use";
+      b.classList.toggle("warm", ms === "warming");
+    }
     ui.micIcon.textContent = st.muted ? "mic_off" : "mic";
     ui.mic.title = st.mode === "hold" ? "Hold to talk" : (st.muted ? "Unmute the mic" : "Mute the mic");
-    const ms = st.status && st.status.mist_voice;
-    ui.mist.title = ms === "up" ? "MIST's own voice (slower than real time)"
-                  : ms === "warming" ? "MIST's voice is loading (about 80 s)"
-                  : "MIST's own voice · starts her voice service on first use";
-    ui.mist.classList.toggle("warm", ms === "warming");
     syncCrystal();
   }
   function syncCrystal() {
@@ -221,8 +230,8 @@
   }
   function enqueue(text) {
     const item = { text, audio: null, fetching: null, error: null };
-    // MIST's voice (and the server fallback) render ahead so playback stays continuous.
-    if (st.voice === "mist" || !ssVoice()) item.fetching = fetchAudio(item);
+    // The cloned voices (and the server fallback) render ahead so playback stays continuous.
+    if (CLONED[st.voice] || !ssVoice()) item.fetching = fetchAudio(item);
     st.queue.push(item);
     pump();
   }
@@ -233,7 +242,7 @@
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         item.error = j.error || ("tts " + r.status);
-        if (j.state === "warming") { st.status = Object.assign({}, st.status, { mist_voice: "warming" }); render(); }
+        if (j.state === "warming" && CLONED[st.voice]) { st.status = Object.assign({}, st.status, { [st.voice + "_voice"]: "warming" }); render(); }
         return;
       }
       item.audio = URL.createObjectURL(await r.blob());
@@ -260,9 +269,10 @@
       item.fetching.then(() => {
         if (st.cur !== item) return;
         if (item.error) {
-          if (st.voice === "mist") {
+          if (CLONED[st.voice]) {
             // Her voice is not ready: say this one with the live voice rather than go silent.
-            setState("rendering", item.error === "warming" ? "MIST voice is loading · using the live voice" : "MIST voice unavailable · using the live voice");
+            const nm = CLONED[st.voice].name;
+            setState("rendering", item.error === "warming" ? nm + " is loading · using the live voice" : nm + " unavailable · using the live voice");
             item.fetching = null; item.error = null;
             if (ssVoice()) return speakSS(item, finish);
             fetch("/voice/tts", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -386,7 +396,7 @@
     }
     if (!st.on) return;
     if (st.mode === "handsfree" && !st.muted) st.vad.start(); else st.vad.pause();
-    if (st.voice === "mist") warmMist();
+    if (CLONED[st.voice]) warm(st.voice);
     setState(idleState());
     if ("speechSynthesis" in window) speechSynthesis.getVoices();   // Safari fills the list lazily
   }
@@ -407,18 +417,18 @@
   }
   function setVoice(v) {
     st.voice = v; localStorage.setItem(LS.voice, v);
-    if (v === "mist") warmMist();
+    if (CLONED[v]) warm(v);
     render();
   }
-  function warmMist() {
-    fetch("/voice/mist/start", { method: "POST" }).then((r) => r.json()).then((j) => {
-      st.status = Object.assign({}, st.status, { mist_voice: j.state }); render();
+  function warm(engine) {
+    fetch("/voice/" + engine + "/start", { method: "POST" }).then((r) => r.json()).then((j) => {
+      st.status = Object.assign({}, st.status, { [engine + "_voice"]: j.state }); render();
       if (j.state === "warming" && !st.warmTimer) {
         st.warmTimer = setInterval(async () => {
           try {
             const s = await (await fetch("/voice/status")).json();
             st.status = s; render();
-            if (s.mist_voice !== "warming") { clearInterval(st.warmTimer); st.warmTimer = null; }
+            if (s[engine + "_voice"] !== "warming") { clearInterval(st.warmTimer); st.warmTimer = null; }
           } catch (_) {}
         }, 5000);
       }
@@ -454,6 +464,7 @@
       crystal: $("#voiceCrystal"), still: $("#voiceStill"),
       label: $("#voiceLabel"), caption: $("#voiceCaption"), meter: $("#voiceMeter"),
       hf: $("#voiceHandsfree"), hold: $("#voiceHold"), live: $("#voiceLive"), mist: $("#voiceMist"),
+      chatterbox: $("#voiceChatterbox"),
       mic: $("#voiceMic"), micIcon: $("#voiceMicIcon"), end: $("#voiceEnd"),
     };
     for (let i = 0; i < 12; i++) ui.meter.appendChild(document.createElement("i"));
@@ -463,6 +474,7 @@
     ui.hold.addEventListener("click", () => setMode("hold"));
     ui.live.addEventListener("click", () => setVoice("live"));
     ui.mist.addEventListener("click", () => setVoice("mist"));
+    ui.chatterbox.addEventListener("click", () => setVoice("chatterbox"));
     ui.mic.addEventListener("click", () => { if (st.mode !== "hold") toggleMute(); });
     ui.mic.addEventListener("pointerdown", (e) => { if (st.mode === "hold") { e.preventDefault(); holdStart(); } });
     for (const ev of ["pointerup", "pointercancel", "pointerleave"]) ui.mic.addEventListener(ev, holdEnd);
