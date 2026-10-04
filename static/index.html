@@ -134,6 +134,34 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
     <div id="paneBody"></div>
   </aside>
   <div id="paneResize" title="Drag to resize the pane"></div>
+  <!-- Conversation mode (voice.js): MIST stands beside the chat while you talk.
+       Design: design/handoff/2026-10-03, layout 1c. -->
+  <aside id="voicePane" data-state="off" hidden>
+    <div class="voice-stage">
+      <img id="voiceCrystal" alt="" draggable="false" hidden>
+      <img id="voiceStill" src="MIST_nobg.png" alt="MIST" draggable="false">
+    </div>
+    <div class="voice-row">
+      <span id="voiceLabel" class="voice-label c-teal">listening</span>
+      <div id="voiceMeter" class="voice-meter c-teal still" aria-hidden="true"></div>
+    </div>
+    <div id="voiceCaption" class="voice-caption" aria-live="polite"></div>
+    <div class="voice-controls">
+      <div class="voice-seg" role="group" aria-label="Listening mode">
+        <button id="voiceHandsfree" type="button" title="Hands-free: the mic stays open and MIST answers when you pause">hands-free</button>
+        <button id="voiceHold" type="button" title="Push-to-talk: hold Space (empty composer) or the mic button">hold</button>
+      </div>
+      <div class="voice-seg" role="group" aria-label="Voice">
+        <button id="voiceLive" type="button" title="The fast system voice">Live voice</button>
+        <button id="voiceMist" type="button">MIST voice</button>
+      </div>
+      <div class="voice-actions">
+        <button id="voiceMic" type="button" class="voice-ib" aria-label="Microphone"><span id="voiceMicIcon" class="msi">mic</span></button>
+        <span class="voice-spacer"></span>
+        <button id="voiceEnd" type="button" class="voice-end" title="End conversation mode"><span class="msi">call_end</span>end</button>
+      </div>
+    </div>
+  </aside>
   <!-- Claude Design beside the chat. The header is HTML; the body is an empty
        slot a native WKWebView (desktop.py) covers, because claude.ai refuses to
        be framed. In a browser or the iOS shell the slot shows a link instead. -->
@@ -301,6 +329,7 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
   <md-icon-button id="bookmarksBtn" touch-target="none" title="Bookmarks · saved messages, this chat and all chats" aria-label="Bookmarks"><md-icon>bookmarks</md-icon></md-icon-button>
   <md-icon-button id="fileBtn" touch-target="none" title="Attach a file (inserts its path)" aria-label="Attach a file"><md-icon>attach_file</md-icon></md-icon-button>
   <textarea id="input" rows="1" placeholder="Talk to MIST…  (Enter to send · Shift+Enter for newline)"></textarea>
+  <md-icon-button id="voiceBtn" touch-target="none" title="Conversation mode · talk to MIST and hear her answer" aria-label="Conversation mode" aria-pressed="false"><md-icon>graphic_eq</md-icon></md-icon-button>
   <md-icon-button id="pauseBtn" touch-target="none" data-mode="off" title="Pause gracefully  (Shift+Esc)" aria-label="Pause gracefully" hidden><md-icon id="pauseIcon">pause</md-icon></md-icon-button>
   <md-filled-icon-button id="sendBtn" touch-target="none" title="Send  (Enter)" aria-label="Send"><md-icon id="sendIcon">send</md-icon></md-filled-icon-button>
   <input type="file" id="hiddenFile" multiple hidden>
@@ -310,6 +339,10 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
 
 <script src="vendor/qrcode.js"></script>
 <script src="app.js"></script>
+<!-- conversation mode: onnxruntime (wasm) + Silero VAD, then the mode itself -->
+<script src="vendor/vad/ort.wasm.min.js"></script>
+<script src="vendor/vad/bundle.min.js"></script>
+<script src="voice.js"></script>
 <script src="mods.js"></script>
 <script src="design.js"></script>
 </body>

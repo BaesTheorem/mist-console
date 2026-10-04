@@ -1,0 +1,7 @@
+Voice activity detection for conversation mode.
+
+@ricky0123/vad-web 0.0.31 (bundle.min.js, vad.worklet.bundle.min.js, silero_vad_v5.onnx)
+  https://github.com/ricky0123/vad  ISC license. Model: Silero VAD (MIT), snakers4/silero-vad.
+onnxruntime-web 1.30.0 (ort.wasm.min.js, ort-wasm-simd-threaded.wasm, ort-wasm-simd-threaded.mjs)
+  https://github.com/microsoft/onnxruntime  MIT license, Copyright (c) Microsoft Corporation.
+Refresh: npm pack both packages and copy the files listed above into this folder.

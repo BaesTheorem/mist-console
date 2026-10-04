@@ -36,6 +36,7 @@ import retention
 import search as chat_search
 import share
 import transcript
+import voice
 import bridge
 from bridge import (ClaudeSession, CLAUDE, DATA_DIR, HARNESS, RATE_LIVE_PATH,
                     RATE_UTIL_PATH, DEFAULT_PERMISSION_MODE, IDLE_REAP_SEC)
@@ -1929,6 +1930,46 @@ def archive_session(sid):
                     "pinned": s.pinned})
 
 
+@app.route("/voice/status")
+def voice_status():
+    return jsonify(voice.status())
+
+
+@app.route("/voice/stt", methods=["POST"])
+def voice_stt():
+    """Body: a WAV file (16 kHz mono). Returns {ok, text}."""
+    wav = request.get_data()
+    if not wav or len(wav) < 100:
+        return jsonify({"ok": False, "error": "empty"}), 400
+    try:
+        return jsonify({"ok": True, "text": voice.transcribe(wav)})
+    except Exception as e:  # noqa: BLE001 -- the message is the UI's error caption
+        return jsonify({"ok": False, "error": str(e)}), 503
+
+
+@app.route("/voice/tts", methods=["POST"])
+def voice_tts():
+    """Body: {text, voice: "live"|"mist"}. Returns audio/wav, or 503 with
+    {error, state} when that voice cannot answer (state = warming/down)."""
+    body = request.get_json(silent=True) or {}
+    text = (body.get("text") or "").strip()
+    which = "mist" if body.get("voice") == "mist" else "live"
+    if not text:
+        return jsonify({"ok": False, "error": "empty"}), 400
+    try:
+        data = voice.tts(text, which)
+    except RuntimeError as e:
+        return jsonify({"ok": False, "error": str(e), "state": str(e)}), 503
+    except Exception as e:  # noqa: BLE001 -- say/urllib failures become a caption
+        return jsonify({"ok": False, "error": str(e)}), 503
+    return Response(data, mimetype="audio/wav")
+
+
+@app.route("/voice/mist/start", methods=["POST"])
+def voice_mist_start():
+    return jsonify({"ok": True, "state": voice.mist_start()})
+
+
 @app.route("/send/<sid>", methods=["POST"])
 def send(sid):
     s = _sessions.get(sid)
@@ -1954,7 +1995,12 @@ def send(sid):
     held = s.context_gate()
     if held:
         return jsonify({"ok": False, "held": True, "pct": s.context_pct, "reason": held})
-    ok = s.send(text, image_path=image_path)
+    if body.get("voice") and text:
+        # A spoken turn: the chat shows what was said; the model also gets the
+        # spoken-reply hint (voice.VOICE_HINT) so the answer suits the ear.
+        ok = s.send(text + "\n\n" + voice.VOICE_HINT, image_path=image_path, display=text)
+    else:
+        ok = s.send(text, image_path=image_path)
     _touch(s)   # the first send titles the chat
     _save_meta()
     return jsonify({"ok": ok, "title": s.title})

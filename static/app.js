@@ -1134,6 +1134,7 @@ function crystalResolve() {
   if (s.statusState === "thinking") return { anim: "thinking" };
   if (s.statusState === "working" || s.bgActiveCount() > 0) return { anim: "loading" };
   if (crystal.audioPlaying > 0) return { anim: "speaking" };
+  if (window.VOICE && VOICE.crystalAnim()) return { anim: VOICE.crystalAnim() };   // conversation mode: mic open
   if (now - crystal.typingAt < TYPING_HOLD_MS) return { anim: "listening" };
   if (crystal.emotion && now - crystal.emotionAt < EMOTION_HOLD_MS) return { anim: crystal.emotion };
   if (now - crystal.lastActivity > SLEEP_AFTER_MS) return { anim: "sleeping" };
@@ -1149,6 +1150,7 @@ function crystalRefresh() {
   const r = crystalResolve(), src = crystalSrc(r.anim, r.look);
   if (crystal.cur !== src) { crystal.cur = src; img.src = src; img.title = "MIST · " + r.anim; }
   wallSync();
+  if (window.VOICE) VOICE.syncCrystal();   // the conversation pane's crystal mirrors the header's
 }
 // Play a one-shot (appear) on the header, then fall back to whatever the state says.
 function crystalOneshot(anim) {
@@ -2472,6 +2474,7 @@ class Session {
             this.scroll();
           }, 150);
         }
+        if (window.VOICE && VOICE.on) VOICE.onText(this, b, false);   // read finished sentences aloud as they stream
       } else if (d.type === "input_json_delta") {
         this.toolInputs[e.index] += d.partial_json || "";
         b.pre.textContent = this.toolInputs[e.index];
@@ -2481,6 +2484,7 @@ class Session {
       if (b && b.type === "text") {
         if (b._mdTimer) { clearTimeout(b._mdTimer); b._mdTimer = null; }
         b.el.innerHTML = md(b.text || "", b.ts); b.el._mdsrc = b.text || "";
+        if (window.VOICE && VOICE.on) VOICE.onText(this, b, true);
         if (!this._replaying) { const em = crystalEmotionFrom(b.text); if (em) this.emotion = em; }
         if (window.MODS && b.text) MODS.siteAssistant(this, b.el, b.text, e.index === 0);
       } else if (b && b.type === "thinking" && !b.el.textContent.trim()) {
@@ -2729,6 +2733,7 @@ class Session {
           this.emotion = null;
         }
         crystal.lastActivity = Date.now();
+        if (window.VOICE) VOICE.onTurnEnd(this);
         this.splitPending = false;   // turn over; any unanswered interjection gets its own turn
         this.clearPermCards();       // any unanswered permission cards are moot now
         if (window.MODS) MODS.turnEnded(this);
@@ -2794,9 +2799,10 @@ class Session {
       if (image) this.draftImage = image;
     }
   }
-  async send(text, image, restoreOnFail = true) {
+  async send(text, image, restoreOnFail = true, extra = null) {
     // The user bubble is rendered from the broadcast user_text event (so it
     // also appears on replay); don't add it optimistically here.
+    // `extra` merges into the request body (voice.js sends {voice: true}).
     this.stick = true;   // sending always returns us to the live bottom
     this.setStatus("thinking", "thinking");
     this.lastActivity = Date.now();
@@ -2805,7 +2811,7 @@ class Session {
     try {
       const r = await fetch("/send/" + this.id, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, image: image || undefined }),
+        body: JSON.stringify(Object.assign({ text, image: image || undefined }, extra || {})),
       });
       const j = await r.json();
       if (j.held) {
@@ -3869,6 +3875,7 @@ function switchTo(id) {
   if (!s) return;
   if (activeId !== id) saveLastChat(id);
   activeId = id;
+  if (window.VOICE) VOICE.onSwitch();   // the conversation pane shows only on its own chat
   pauseVideos(s.logEl);   // a video keeps playing in a hidden log otherwise
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
   syncPhoneTitle();
@@ -4478,6 +4485,7 @@ function sendActive() {
   setPendingImage(null);
   const a = sessions.get(activeId);
   a.draft = "";
+  if (window.VOICE && VOICE.on) VOICE.stopSpeaking(true);   // a typed turn cuts her off like a spoken one
   a.send(text, image);
 }
 
@@ -4627,6 +4635,8 @@ input.addEventListener("keydown", (e) => {
     // First close any open overlay — reaching for Esc to dismiss a picker must
     // never stop MIST mid-work. Only a bare Esc interrupts the turn.
     if (closeTopOverlay()) { e.preventDefault(); return; }
+    // In conversation mode, Esc first stops MIST talking (the reply keeps streaming as text).
+    if (window.VOICE && VOICE.on && VOICE.state === "speaking") { e.preventDefault(); VOICE.stopSpeaking(true); return; }
     // Esc interrupts the in-flight turn (the TUI's stop), when nothing else claimed it.
     const a = activeId && sessions.get(activeId);
     if (a && (a.statusState === "thinking" || a.statusState === "working")) {

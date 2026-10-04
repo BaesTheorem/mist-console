@@ -749,6 +749,44 @@ class Api:
             return False
 
 
+# ---- microphone for conversation mode ------------------------------------------
+def _grant_microphone():
+    """Answer WebKit's media-capture question for the Console page. Before
+    getUserMedia resolves, WKWebView asks its UI delegate
+    webView:requestMediaCapturePermissionForOrigin:…:decisionHandler:; pywebview's
+    delegate has no such method, so WebKit treats the request as denied and the
+    page never gets a stream. The method is added to pywebview's delegate class
+    here (not a replacement delegate: pywebview's handles file pickers, alerts
+    and new windows). Only the microphone, only for the local page. macOS still
+    shows its own one-time prompt, which needs NSMicrophoneUsageDescription in
+    the .app (make-app.sh). Explicit block metadata: with the bare "@?" encoding
+    the decisionHandler call raises "cannot call block without a signature"."""
+    try:
+        import objc
+        from webview.platforms.cocoa import BrowserView
+        sel = b"webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:"
+        objc.registerMetaDataForSelector(b"NSObject", sel, {
+            "arguments": {6: {"callable": {"retval": {"type": b"v"},
+                                           "arguments": {0: {"type": b"^v"}, 1: {"type": b"q"}}}}}})
+
+        def handler(self, wv, origin, frame, kind, decision):
+            try:
+                host = str(origin.host() or "")
+                port = int(origin.port() or 0)
+            except Exception:
+                host, port = "", 0
+            # WKMediaCaptureType: 0 camera, 1 microphone, 2 both.
+            # WKPermissionDecision: 0 prompt, 1 grant, 2 deny.
+            ok = kind == 1 and host in ("127.0.0.1", "localhost") and port == PORT
+            print(f"mic: {'grant' if ok else 'deny'} {host}:{port} type={kind}", flush=True)
+            decision(1 if ok else 2)
+
+        objc.classAddMethods(BrowserView.BrowserDelegate,
+                             [objc.selector(handler, selector=sel, signature=b"v@:@@@q@?")])
+    except Exception as e:
+        print("mic permission hook skipped:", e, flush=True)
+
+
 # ---- Claude Design pane: a second WKWebView inside the main window ------------
 # claude.ai sends X-Frame-Options: SAMEORIGIN, so the page cannot iframe it. A
 # sibling web view laid over the page's empty #designBody slot looks embedded and
@@ -1230,6 +1268,7 @@ def main():
     # into the page (webview/js/customize.js), which kills selection app-wide and
     # leaves the right-click menu with nothing to copy.
     _enable_video_fullscreen()
+    _grant_microphone()
     _main_window = webview.create_window(
         "MIST Console", f"http://127.0.0.1:{PORT}",
         js_api=Api(), width=1120, height=800, min_size=(720, 520),

@@ -1,0 +1,17 @@
+#!/bin/bash
+# Download the whisper.cpp model conversation mode transcribes with (voice.py).
+# models/ is gitignored (the file is ~490 MB). Needs whisper-cpp from brew.
+set -eu
+HERE="$(cd "$(dirname "$0")" && pwd)"
+NAME="${1:-small.en}"
+DEST="$HERE/../models/ggml-$NAME.bin"
+mkdir -p "$HERE/../models"
+if [ -s "$DEST" ]; then echo "already here: $DEST"; exit 0; fi
+URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$NAME.bin"
+if command -v mist-progress >/dev/null 2>&1; then
+  mist-progress run --label "whisper $NAME model" -- curl -sL -o "$DEST" "$URL"
+else
+  curl -L --progress-bar -o "$DEST" "$URL"
+fi
+echo "saved: $DEST"
+command -v whisper-cli >/dev/null 2>&1 || echo "whisper-cli missing: brew install whisper-cpp"

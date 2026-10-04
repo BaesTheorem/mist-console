@@ -281,6 +281,41 @@ The player keeps its data in a registry (`loopPlayers` in `app.js`) and not in t
 
 `embeds.py` does not make a snapshot of a `#loop` embed, because its extension test sees the fragment. Thus a loop embed always plays the live file.
 
+## Conversation mode (talk to MIST, hear her answer)
+
+The sound-wave button in the composer opens a column beside the chat (design:
+`design/handoff/2026-10-03`, layout 1c) with the live crystal, a one-word
+state, a caption and the controls. The chat stays the record: each spoken turn
+is a normal message, and MIST's reply is read aloud sentence by sentence as it
+streams. Typing still works at any time, and a typed send cuts her off the same
+way speech does.
+
+- **Listening.** `static/vendor/vad/` holds Silero VAD on onnxruntime-web; the
+  page finds the end of each utterance itself. `hands-free` keeps the mic open,
+  `hold` is push-to-talk (Space with an empty composer, or the mic button held).
+  Real speech while she talks is a barge-in: her audio stops and the rest of
+  that reply's queue is dropped (the text still lands in the chat). Esc does the
+  same from the keyboard.
+- **Speech to text** runs on this Mac: `POST /voice/stt` (voice.py) feeds a 16 kHz
+  WAV to whisper.cpp. The first call starts a resident `whisper-server` on
+  :8089 (sub-second after that); until it is up, `whisper-cli` answers. The
+  model is `models/ggml-small.en.bin`, gitignored; `bin/fetch-whisper-model`
+  downloads it, and `brew install whisper-cpp` provides the binaries.
+- **Voice.** `Live voice` is the web view's own speechSynthesis (instant, with
+  word boundaries for the caption); when it has no voices the server's `say`
+  stands in. `MIST voice` is her XTTS clone from the harness voice service
+  (`mist-voice/scripts/serve.py`, :8087): slower than real time, so the pane
+  shows `rendering` while the next sentence is not ready, and the first pick
+  starts the service (about 80 s cold) and uses the live voice until it answers.
+- **The model hears the difference.** A spoken turn is sent with `voice: true`;
+  `app.py` appends `voice.VOICE_HINT` for the model and shows only what was said.
+- **Microphone.** WKWebView asks its UI delegate before `getUserMedia` resolves;
+  `desktop.py` `_grant_microphone()` adds that answer to pywebview's delegate
+  (mic only, local page only). macOS also needs `NSMicrophoneUsageDescription`
+  in the .app, which `make-app.sh` writes, so a rebuild is required once
+  (`bin/rebuild-app-when-quit` does it the next time the Console is closed).
+  Nothing plays until the mode is switched on.
+
 ## Share links (public read-only snapshots)
 
 The **share** button in the top bar emulates claude.ai's "share chat": it

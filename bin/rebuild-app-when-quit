@@ -1,0 +1,29 @@
+#!/bin/bash
+# Rebuild /Applications/MIST Console.app the next time the Console is not
+# running, then open it. For make-app.sh changes (an Info.plist key, a new
+# dependency) landed from inside a Console chat: make-app.sh refuses to run
+# under a live Console, and a chat cannot quit the app it lives in.
+#
+# Run it DETACHED through /bin/bash, same as restart-server:
+#   launchctl remove com.exobrain.mist-console-rebuild 2>/dev/null
+#   launchctl submit -l com.exobrain.mist-console-rebuild -- /bin/bash "$(pwd)/bin/rebuild-app-when-quit"
+# It polls for up to 12 hours, builds once, and removes its own launchd job
+# (submit jobs are keep-alive; see restart-server for the 2026-09-17 loop).
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG="$HERE/../desktop.log"
+for _ in $(seq 1 8640); do
+  pgrep -f "MIST Console.app/Contents" >/dev/null 2>&1 || break
+  sleep 5
+done
+if pgrep -f "MIST Console.app/Contents" >/dev/null 2>&1; then
+  echo "rebuild-app-when-quit: gave up after 12 h" >> "$LOG"
+  [ -n "${XPC_SERVICE_NAME:-}" ] && exec launchctl remove "$XPC_SERVICE_NAME"
+  exit 0
+fi
+sleep 2
+echo "rebuild-app-when-quit: $(date '+%F %T') building" >> "$LOG"
+/bin/bash "$HERE/../make-app.sh" >> "$LOG" 2>&1
+open -a "MIST Console"
+[ -n "${XPC_SERVICE_NAME:-}" ] && exec launchctl remove "$XPC_SERVICE_NAME"
+exit 0

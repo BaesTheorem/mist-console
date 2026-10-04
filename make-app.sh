@@ -92,6 +92,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Conversation mode listens to you through the microphone. Speech is transcribed on this Mac and never leaves it.</string>
 </dict>
 </plist>
 EOF
