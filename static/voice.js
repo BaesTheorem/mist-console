@@ -176,7 +176,8 @@
       baseAssetPath: assets, onnxWASMBasePath: assets,
       getStream,
       positiveSpeechThreshold: 0.6, negativeSpeechThreshold: 0.35,
-      minSpeechMs: 250, preSpeechPadMs: 400, redemptionMs: 900,
+      // 600 ms of pre-roll: "Hi" lost its onset at 400 and came back as "I".
+      minSpeechMs: 250, preSpeechPadMs: 600, redemptionMs: 900,
       submitUserSpeechOnPause: true,
       onFrameProcessed: (probs) => { if (st.state === "hearing" || st.state === "recording") setLevel(probs.isSpeech); },
       onSpeechStart: () => {

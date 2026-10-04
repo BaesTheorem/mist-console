@@ -1,9 +1,10 @@
 #!/bin/bash
 # Download the whisper.cpp model conversation mode transcribes with (voice.py).
-# models/ is gitignored (the file is ~490 MB). Needs whisper-cpp from brew.
+# Default large-v3-turbo (1.6 GB); pass small.en for the 0.5 GB one. voice.py
+# uses the best model present. models/ is gitignored. Needs whisper-cpp from brew.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
-NAME="${1:-small.en}"
+NAME="${1:-large-v3-turbo}"
 DEST="$HERE/../models/ggml-$NAME.bin"
 mkdir -p "$HERE/../models"
 if [ -s "$DEST" ]; then echo "already here: $DEST"; exit 0; fi

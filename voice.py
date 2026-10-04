@@ -21,9 +21,12 @@ INVARIANTS (do not break these in an edit):
   - Nothing here plays sound. Audio goes back to the page as bytes and the
     page plays it, so the "no sound Alex did not ask for" rule stays a
     front-end decision tied to the conversation-mode switch.
-  - The whisper model is a local file under models/ (gitignored, ~490 MB).
-    A missing model is a status the UI shows with the fetch command, never
-    an automatic download inside a request.
+  - The whisper model is a local file under models/ (gitignored, 0.5 to
+    1.6 GB). A missing model is a status the UI shows with the fetch command,
+    never an automatic download inside a request.
+  - The vocabulary prompt is a comma-separated list of terms, never a
+    sentence. A prompt that reads like the opening of an utterance ("Hi
+    MIST.") made whisper skip the real opening as already decoded.
   - Child processes are detached (their own session) so a server restart
     does not take them down and they do not hold the server's pipes.
 """
@@ -42,8 +45,53 @@ import uuid
 log = logging.getLogger("mist.voice")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODEL = os.environ.get("MIST_WHISPER_MODEL",
-                       os.path.join(HERE, "models", "ggml-small.en.bin"))
+MODELS_DIR = os.path.join(HERE, "models")
+
+# Best model present wins. large-v3-turbo (1.6 GB, ~1.8 s per utterance on
+# the Air) hears names and short phrases that small.en (0.5 GB, ~0.5 s)
+# turns into other words; MIST_WHISPER_MODEL pins one explicitly.
+MODEL_PREFERENCE = ("ggml-large-v3-turbo.bin", "ggml-small.en.bin")
+
+
+def _pick_model():
+    pinned = os.environ.get("MIST_WHISPER_MODEL")
+    if pinned:
+        return pinned
+    for name in MODEL_PREFERENCE:
+        c = os.path.join(MODELS_DIR, name)
+        if os.path.exists(c):
+            return c
+    return os.path.join(MODELS_DIR, MODEL_PREFERENCE[-1])
+
+
+MODEL = _pick_model()
+
+# Words whisper has not met: MIST's own name and the systems Alex talks to
+# her about. "Hi MIST" came back as "I missed" without this. The private
+# half (people's names) lives in models/stt-vocab.txt, one term per line,
+# gitignored with the models. Short list on purpose: with 12 terms turbo
+# heard "Plaud", with 16 or more it heard "plug" again, so each term past
+# the cap weakens every other one and is dropped (first terms win).
+DEFAULT_VOCAB = ("MIST", "Plaud Note", "Plaud", "Supernote", "Loki", "Obsidian",
+                 "Things 3")
+VOCAB_FILE = os.path.join(MODELS_DIR, "stt-vocab.txt")
+VOCAB_CAP = 12
+
+
+def vocab_prompt():
+    """The initial prompt for every transcription: a term list, see INVARIANTS."""
+    terms = list(DEFAULT_VOCAB)
+    try:
+        with open(VOCAB_FILE, encoding="utf-8") as f:
+            for line in f:
+                t = line.strip()
+                if t and not t.startswith("#") and t not in terms:
+                    terms.append(t)
+    except OSError:
+        pass
+    if len(terms) > VOCAB_CAP:
+        log.warning("stt vocabulary has %d terms; only the first %d are used", len(terms), VOCAB_CAP)
+    return ", ".join(terms[:VOCAB_CAP]) + "."
 
 
 def _which(name):
@@ -101,6 +149,7 @@ VOICE_HINT = (
 _lock = threading.Lock()
 _stt_proc = None
 _stt_started_at = 0.0
+_stt_checked = False
 _engine_procs = {}       # engine name -> Popen of a start we issued
 _engine_started_at = {}  # engine name -> time of that start
 
@@ -147,6 +196,8 @@ def status():
     return {
         "model": os.path.exists(MODEL),
         "model_path": MODEL,
+        "model_name": os.path.basename(MODEL),
+        "vocab_file": os.path.exists(VOCAB_FILE),
         "whisper": bool(WHISPER_CLI or WHISPER_SERVER),
         "stt_server": _port_open(STT_PORT),
         "say": os.path.exists(SAY),
@@ -160,11 +211,35 @@ def status():
 
 # ------------------------------------------------------------ transcribe ----
 
+def _stop_stale_stt_server():
+    """A whisper-server left on the port by an earlier run serves whatever
+    model it was started with. When that is not MODEL (a bigger one landed
+    in models/, or the env var changed), stop it so the start below picks
+    the right one. Checked once per process."""
+    global _stt_checked
+    if _stt_checked:
+        return False
+    _stt_checked = True
+    try:
+        pids = subprocess.run(["lsof", "-ti", f"tcp:{STT_PORT}", "-sTCP:LISTEN"],
+                              capture_output=True, text=True, timeout=5, check=False).stdout.split()
+        for pid in pids:
+            args = subprocess.run(["ps", "-o", "args=", "-p", pid],
+                                  capture_output=True, text=True, timeout=5, check=False).stdout
+            if "whisper-server" in args and MODEL not in args:
+                log.info("whisper-server %s runs another model; stopping it", pid)
+                os.kill(int(pid), 15)
+                return True
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("stale whisper-server check failed: %s", e)
+    return False
+
+
 def ensure_stt_server():
     """Start the resident whisper-server once; callers fall back to the CLI
     until it answers. Returns True when the server is listening now."""
     global _stt_proc, _stt_started_at
-    if _port_open(STT_PORT):
+    if _port_open(STT_PORT) and not _stop_stale_stt_server():
         return True
     if not (WHISPER_SERVER and os.path.exists(MODEL)):
         return False
@@ -173,7 +248,7 @@ def ensure_stt_server():
         if not alive and time.time() - _stt_started_at > 20:
             _stt_started_at = time.time()
             _stt_proc = _detach([WHISPER_SERVER, "-m", MODEL, "--host", "127.0.0.1",
-                                 "--port", str(STT_PORT), "-t", THREADS, "-nt"],
+                                 "--port", str(STT_PORT), "-t", THREADS, "-nt", "-l", "en"],
                                 "mist-console-stt.log")
             log.info("whisper-server started (pid %s)", _stt_proc.pid)
     return False
@@ -207,7 +282,8 @@ def clean_transcript(text):
 
 
 def _transcribe_server(wav):
-    body, ct = _multipart({"temperature": "0.0", "response_format": "json"},
+    body, ct = _multipart({"temperature": "0.0", "response_format": "json",
+                           "language": "en", "prompt": vocab_prompt()},
                           {"file": ("speech.wav", wav, "audio/wav")})
     req = urllib.request.Request(STT_URL, data=body, method="POST",
                                  headers={"Content-Type": ct})
@@ -221,7 +297,8 @@ def _transcribe_cli(wav):
         f.write(wav)
         path = f.name
     try:
-        r = subprocess.run([cli, "-m", MODEL, "-f", path, "-nt", "-np", "-t", THREADS],
+        r = subprocess.run([cli, "-m", MODEL, "-f", path, "-nt", "-np", "-t", THREADS,
+                            "-l", "en", "--prompt", vocab_prompt()],
                            capture_output=True, text=True, timeout=60)
         return r.stdout
     finally:

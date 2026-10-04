@@ -298,9 +298,16 @@ way speech does.
   same from the keyboard.
 - **Speech to text** runs on this Mac: `POST /voice/stt` (voice.py) feeds a 16 kHz
   WAV to whisper.cpp. The first call starts a resident `whisper-server` on
-  :8089 (sub-second after that); until it is up, `whisper-cli` answers. The
-  model is `models/ggml-small.en.bin`, gitignored; `bin/fetch-whisper-model`
-  downloads it, and `brew install whisper-cpp` provides the binaries.
+  :8089; until it is up, `whisper-cli` answers. The model is the best one in
+  `models/` (gitignored): `ggml-large-v3-turbo.bin` (1.6 GB, about 1.8 s per
+  utterance) over `ggml-small.en.bin` (0.5 GB, about 0.5 s), or
+  `MIST_WHISPER_MODEL` pins one. `bin/fetch-whisper-model [name]` downloads a
+  model and `brew install whisper-cpp` provides the binaries. Every request
+  carries a vocabulary prompt (MIST, Plaud, Supernote and other words whisper
+  has not met; "Hi MIST" came back as "I missed" without it). Add private terms
+  such as people's names to `models/stt-vocab.txt`, one per line, gitignored.
+  The prompt is capped at 12 terms: past that each term weakens the others
+  (turbo heard "Plaud" with 12 terms and "plug" with 16).
 - **Voice.** `Live voice` is the web view's own speechSynthesis (instant, with
   word boundaries for the caption); when it has no voices the server's `say`
   stands in. `MIST voice` is her XTTS clone from the harness voice service
