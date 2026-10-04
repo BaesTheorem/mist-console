@@ -323,6 +323,11 @@ way speech does.
   (mic only, local page only). macOS also needs `NSMicrophoneUsageDescription`
   in the .app, which `make-app.sh` writes, so a rebuild is required once
   (`bin/rebuild-app-when-quit` does it the next time the Console is closed).
+- **System audio.** Tools MIST runs from a chat (the harness `govee-music`, which
+  taps one app's audio through a Core Audio process tap) are attributed to the
+  Console, so the .app also carries `NSAudioCaptureUsageDescription`. Without it
+  macOS never prompts and the tap records silence. The first run after a rebuild
+  asks once (System Settings > Privacy & Security > Screen & System Audio Recording).
   Nothing plays until the mode is switched on.
 
 ## Share links (public read-only snapshots)
