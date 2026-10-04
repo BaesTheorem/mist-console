@@ -307,7 +307,9 @@ way speech does.
   has not met; "Hi MIST" came back as "I missed" without it). Add private terms
   such as people's names to `models/stt-vocab.txt`, one per line, gitignored.
   The prompt is capped at 12 terms: past about a dozen, extra terms dilute the
-  others and stopped helping in tests.
+  others and stopped helping in tests. The last 20 utterances and their
+  transcripts are kept in `data/stt/` (local, gitignored; `MIST_STT_KEEP=0`
+  turns it off) so models and prompts can be tested on the real microphone.
 - **Voice.** `Live voice` is the web view's own speechSynthesis (instant, with
   word boundaries for the caption); when it has no voices the server's `say`
   stands in. `MIST voice` is her XTTS clone from the harness voice service

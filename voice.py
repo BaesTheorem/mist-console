@@ -77,6 +77,13 @@ DEFAULT_VOCAB = ("MIST", "Plaud Note", "Plaud", "Supernote", "Loki", "Obsidian",
 VOCAB_FILE = os.path.join(MODELS_DIR, "stt-vocab.txt")
 VOCAB_CAP = 12
 
+# The last utterances as they reached the server, with what whisper made of
+# them, so model and prompt choices can be tested on Alex's real microphone
+# instead of a synthetic voice (which passed where his mic failed). Local
+# only: data/ is gitignored. MIST_STT_KEEP=0 turns it off.
+KEEP_DIR = os.path.join(HERE, "data", "stt")
+KEEP_LAST = int(os.environ.get("MIST_STT_KEEP", "20"))
+
 
 def vocab_prompt():
     """The initial prompt for every transcription: a term list, see INVARIANTS."""
@@ -308,19 +315,45 @@ def _transcribe_cli(wav):
             pass
 
 
+def keep_utterance(wav, text):
+    """Write the utterance and its transcript under data/stt/, keep KEEP_LAST."""
+    if KEEP_LAST <= 0:
+        return
+    try:
+        os.makedirs(KEEP_DIR, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+        with open(os.path.join(KEEP_DIR, stamp + ".wav"), "wb") as f:
+            f.write(wav)
+        with open(os.path.join(KEEP_DIR, stamp + ".txt"), "w", encoding="utf-8") as f:
+            f.write(f"{os.path.basename(MODEL)}\n{vocab_prompt()}\n{text}\n")
+        wavs = sorted(n for n in os.listdir(KEEP_DIR) if n.endswith(".wav"))
+        for old in wavs[:-KEEP_LAST]:
+            for ext in (".wav", ".txt"):
+                try:
+                    os.remove(os.path.join(KEEP_DIR, old[:-4] + ext))
+                except OSError:
+                    pass
+    except OSError as e:
+        log.warning("could not keep utterance: %s", e)
+
+
 def transcribe(wav):
     """WAV bytes (16 kHz mono, PCM16 or float32) -> text. Raises RuntimeError
     with a message the UI can show when nothing can transcribe."""
     if not os.path.exists(MODEL):
         raise RuntimeError("whisper model missing: run bin/fetch-whisper-model")
+    text = None
     if ensure_stt_server():
         try:
-            return clean_transcript(_transcribe_server(wav))
+            text = clean_transcript(_transcribe_server(wav))
         except Exception as e:  # noqa: BLE001 -- the CLI below is the fallback
             log.warning("whisper-server failed (%s); using whisper-cli", e)
-    if not WHISPER_CLI:
-        raise RuntimeError("whisper-cli not installed: brew install whisper-cpp")
-    return clean_transcript(_transcribe_cli(wav))
+    if text is None:
+        if not WHISPER_CLI:
+            raise RuntimeError("whisper-cli not installed: brew install whisper-cpp")
+        text = clean_transcript(_transcribe_cli(wav))
+    keep_utterance(wav, text)
+    return text
 
 
 # ------------------------------------------------------------------- tts ----
