@@ -306,8 +306,8 @@ way speech does.
   carries a vocabulary prompt (MIST, Plaud, Supernote and other words whisper
   has not met; "Hi MIST" came back as "I missed" without it). Add private terms
   such as people's names to `models/stt-vocab.txt`, one per line, gitignored.
-  The prompt is capped at 12 terms: past that each term weakens the others
-  (turbo heard "Plaud" with 12 terms and "plug" with 16).
+  The prompt is capped at 12 terms: past about a dozen, extra terms dilute the
+  others and stopped helping in tests.
 - **Voice.** `Live voice` is the web view's own speechSynthesis (instant, with
   word boundaries for the caption); when it has no voices the server's `say`
   stands in. `MIST voice` is her XTTS clone from the harness voice service

@@ -69,9 +69,9 @@ MODEL = _pick_model()
 # Words whisper has not met: MIST's own name and the systems Alex talks to
 # her about. "Hi MIST" came back as "I missed" without this. The private
 # half (people's names) lives in models/stt-vocab.txt, one term per line,
-# gitignored with the models. Short list on purpose: with 12 terms turbo
-# heard "Plaud", with 16 or more it heard "plug" again, so each term past
-# the cap weakens every other one and is dropped (first terms win).
+# gitignored with the models. Short list on purpose: in tests, prompts past
+# about a dozen terms stopped helping (whisper's prompt window is 224 tokens
+# and each term dilutes the others), so extra terms are dropped, first wins.
 DEFAULT_VOCAB = ("MIST", "Plaud Note", "Plaud", "Supernote", "Loki", "Obsidian",
                  "Things 3")
 VOCAB_FILE = os.path.join(MODELS_DIR, "stt-vocab.txt")
