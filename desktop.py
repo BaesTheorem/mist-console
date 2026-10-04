@@ -792,7 +792,12 @@ def _design_build():
             # agent" handoff shows here, and that is how it gets wired up.
             print("design: nav", s[:300], flush=True)
             if scheme in ("http", "https", "about", "blob", "data"):
-                if scheme in ("http", "https") and not _design_host_ok(s):
+                # Only a top-level page may be sent to the browser. Sign-in and
+                # captcha flows load helper iframes from other hosts
+                # (accounts.youtube.com, hcaptcha.com); those must load in place.
+                tf = action.targetFrame()
+                main = bool(tf is None or tf.isMainFrame())
+                if main and scheme in ("http", "https") and not _design_host_ok(s):
                     # Off-site links (docs, a Dribbble reference) go to the browser.
                     subprocess.run(["/usr/bin/open", s], check=False)
                     handler(WKNavigationActionPolicyCancel)
@@ -808,17 +813,23 @@ def _design_build():
             print("design: load failed:", err, flush=True)
 
     class _DesignUI(NSObject):
-        # target=_blank inside Claude Design: keep same-site pages in the pane,
-        # send anything else to the browser. Returning None opens no new window.
+        # window.open inside Claude Design. A sign-in popup (Google, Apple,
+        # Microsoft) must be a REAL child web view built from WebKit's `cfg`:
+        # the flow ends by posting its result to window.opener, and a view
+        # made any other way has no opener, so the pane stalls on a blank
+        # accounts.google.com/gsi/transform page. Same-site and sign-in popups
+        # get a small native window; anything else goes to the browser.
         def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(self, wv, cfg, action, feat):
             url = action.request().URL()
             s = str(url.absoluteString()) if url else ""
             print("design: popup", s[:300], flush=True)
-            if _design_host_ok(s):
-                wv.loadRequest_(action.request())
-            elif s:
+            if s and not _design_host_ok(s) and not s.startswith("about:"):
                 subprocess.run(["/usr/bin/open", s], check=False)
-            return None
+                return None
+            return _design_popup(cfg)
+
+        def webViewDidClose_(self, wv):
+            _design_popup_close(wv)
 
     config = WKWebViewConfiguration.alloc().init()
     wv = WKWebView.alloc().initWithFrame_configuration_(NSMakeRect(0, 0, 10, 10), config)
@@ -830,6 +841,43 @@ def _design_build():
     wv.setHidden_(True)
     _design_wv = wv
     return wv
+
+
+_design_popups = {}   # child WKWebView -> its NSWindow; kept alive until the page closes it
+
+
+def _design_popup(cfg):
+    """A sign-in popup for the design pane: a plain titled window holding a
+    child web view built from WebKit's configuration (that is what gives the
+    page its window.opener). Main thread; WebKit calls this from its delegate."""
+    from AppKit import (NSWindow, NSBackingStoreBuffered, NSWindowStyleMaskTitled,
+                        NSWindowStyleMaskClosable, NSWindowStyleMaskResizable)
+    from Foundation import NSMakeRect
+    from WebKit import WKWebView
+    rect = NSMakeRect(0, 0, 520, 680)
+    child = WKWebView.alloc().initWithFrame_configuration_(rect, cfg)
+    child.setCustomUserAgent_(DESIGN_UA)
+    child.setNavigationDelegate_(_design_nav)
+    child.setUIDelegate_(_design_ui)
+    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        rect, NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable,
+        NSBackingStoreBuffered, False)
+    win.setReleasedWhenClosed_(False)
+    win.setTitle_("Sign in")
+    win.setContentView_(child)
+    win.center()
+    win.makeKeyAndOrderFront_(None)
+    _design_popups[child] = win
+    return child
+
+
+def _design_popup_close(child):
+    win = _design_popups.pop(child, None)
+    if win is not None:
+        try:
+            win.orderOut_(None)
+        except Exception:
+            pass
 
 
 def _design_pane(spec):
