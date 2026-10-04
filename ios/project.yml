@@ -30,8 +30,8 @@ targets:
       path: MIST/Info.plist
       properties:
         CFBundleDisplayName: MIST
-        CFBundleShortVersionString: "1.2"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "1.3"
+        CFBundleVersion: "5"
         UILaunchScreen:
           UIColorName: LaunchBackground
         # The Console is a dark surface; keep the status bar and keyboard on it.
@@ -55,6 +55,11 @@ targets:
         NSBonjourServices:
           - _http._tcp
         NSCameraUsageDescription: The camera reads the pairing QR code shown in the Console's settings on the Mac.
+        # The icon's long-press menu (QuickActions.swift routes it).
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.alexhedtke.mistconsole.new
+            UIApplicationShortcutItemTitle: New chat
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeCompose
         CFBundleURLTypes:
           - CFBundleURLName: com.alexhedtke.mistconsole
             CFBundleURLSchemes: [mist]
@@ -65,8 +70,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        MARKETING_VERSION: "1.2"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "1.3"
+        CURRENT_PROJECT_VERSION: "5"
         SWIFT_STRICT_CONCURRENCY: minimal
     dependencies:
       - target: MISTWidget   # the Lock Screen / Home Screen widgets, embedded as a plug-in
@@ -85,8 +90,8 @@ targets:
       path: MISTWidget/Info.plist
       properties:
         CFBundleDisplayName: MIST
-        CFBundleShortVersionString: "1.2"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "1.3"
+        CFBundleVersion: "5"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
@@ -97,6 +102,6 @@ targets:
         ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME: WidgetBackground
         TARGETED_DEVICE_FAMILY: "1,2"
         SKIP_INSTALL: YES
-        MARKETING_VERSION: "1.2"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "1.3"
+        CURRENT_PROJECT_VERSION: "5"
         SWIFT_STRICT_CONCURRENCY: minimal

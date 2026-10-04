@@ -25,7 +25,8 @@ function syncPhoneTitle() {
   const t = $("#phoneTitle");
   if (!t) return;
   const s = activeId && sessions.get(activeId);
-  t.textContent = (s && s.title) || "";
+  const name = t.querySelector(".pt-name") || t;
+  name.textContent = (s && s.title) || "";
 }
 // The iOS shell listens for these (WKScriptMessageHandler "mist"): the event
 // stream going down is its cue that the Mac may have moved (hotspot, VPN, a
@@ -1182,7 +1183,7 @@ function setCrystalLook(look, on) {
   if (on != null) crystal.on = !!on;
   try { localStorage.setItem("crystalLook", crystal.look); localStorage.setItem("crystalAnim", crystal.on ? "1" : "0"); } catch (_) {}
   crystal.cur = ""; crystalRefresh();
-  document.querySelectorAll(".tab .dot, #phoneStatus .ps-dot").forEach((d) => {
+  document.querySelectorAll(".tab .dot").forEach((d) => {
     const st = d.classList.contains("bg") ? "bg" : d.classList.contains("thinking") ? "thinking"
       : d.classList.contains("working") ? "working" : d.classList.contains("error") ? "error" : "idle";
     crystalDot(d, st);
@@ -3794,6 +3795,16 @@ function commitPinOrder(srcId, toIndex) {
     body: JSON.stringify({ ids: order }),
   }).catch(() => {});
 }
+async function saveTitle(s, v) {
+  if (!v || v === s.title) return;
+  s.title = v;
+  try {
+    await fetch("/sessions/" + s.id + "/title", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: v }),
+    });
+  } catch (_) {}
+}
 function startRename(s, t) {
   const span = t.querySelector(".ttitle");
   if (!span || t.querySelector(".trename")) return;   // already editing
@@ -3808,15 +3819,7 @@ function startRename(s, t) {
     if (done) return;
     done = true;
     const v = inp.value.trim();
-    if (save && v && v !== s.title) {
-      s.title = v;
-      try {
-        await fetch("/sessions/" + s.id + "/title", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: v }),
-        });
-      } catch (_) {}
-    }
+    if (save) await saveTitle(s, v);
     renaming = false;
     _tabsSig = "";   // force a rebuild even if the title didn't change — the edit box must go
     renderTabs();
@@ -4714,6 +4717,9 @@ function reflectSend() {
   const empty = !input.value.trim() && !pendingImage;
   const stop = busy && empty;
   sendBtn.dataset.mode = stop ? "stop" : "send";
+  // the phone shows one button: voice while the field is empty, send once it has text
+  const comp = $("#composer");
+  if (comp) { comp.classList.toggle("has-text", !empty); comp.classList.toggle("busy", !!busy); }
   const ic = $("#sendIcon");                       // md-filled-icon-button — swap the glyph, not textContent
   if (ic) ic.textContent = stop ? "stop" : "send";
   sendBtn.title = stop ? "Stop this turn" : "Send  (Enter)";
@@ -6896,8 +6902,6 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   setRailOpen = (on) => { mid.classList.toggle("rail-open", on); backdrop.hidden = !on; };
   open.addEventListener("click", () => setRailOpen(!isOpen()));
   backdrop.addEventListener("click", () => setRailOpen(false));
-  const title = $("#phoneTitle");
-  if (title) title.addEventListener("click", () => setRailOpen(!isOpen()));
   closeRailDrawer = () => {
     if (!isOpen()) return false;
     setRailOpen(false);
@@ -6965,38 +6969,281 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   document.addEventListener("touchend", finish);
   document.addEventListener("touchcancel", finish);
 })();
-/* ---------- phone: status chip that mirrors the badge strip ---------- */
+/* ---------- phone: title status line, context line, New Chat ----------
+   The top bar on a phone is menu, title, New Chat. Under the title one quiet
+   line mirrors the badge strip (state dot, model, state); the 2px line under
+   the bar is context use. Everything else from the strip lives in the
+   chat-details sheet the title opens (below). */
 (function () {
-  const chip = $("#phoneStatus"), bar = $("#topbar");
-  if (!chip || !bar) return;
-  const dot = chip.querySelector(".ps-dot"), text = chip.querySelector(".ps-text");
+  const title = $("#phoneTitle"), bar = $("#phoneCtx");
   const status = $("#status"), model = $("#model"), ctx = $("#ctx");
-  if (!dot || !text || !status || !model || !ctx) return;
+  if (!title || !status || !model || !ctx) return;
+  const text = title.querySelector(".pt-text");
   const sync = () => {
-    chip.dataset.state = status.dataset.state || "idle";
-    crystalDot(dot, chip.dataset.state);
-    // "claude-opus-5[1m]" -> "opus-5[1m]"; "model —" / "model: default" -> nothing
-    let m = (model.textContent || "").trim();
-    m = /^model\b/.test(m) ? "" : m.replace(/^claude-/, "");
+    const state = status.dataset.state || "idle";
+    title.dataset.state = state;
+    const m = phoneModelName(model.textContent);
+    const st = (status.textContent || "").trim() || "idle";
+    if (text) text.textContent = [m, st].filter(Boolean).join(" · ");
     const pct = parseFloat((ctx.textContent || "").replace(/^ctx\s*/, ""));
-    const parts = [];
-    if (m) parts.push(m);
-    if (!isNaN(pct)) parts.push(Math.round(pct) + "%");
-    const st = (status.textContent || "").trim();
-    if (!parts.length || (chip.dataset.state !== "idle" && st)) parts.push(st || "idle");
-    text.textContent = parts.join(" · ");
-    chip.title = [status.textContent, model.textContent, ctx.textContent].filter(Boolean).join(" · ");
+    if (bar) {
+      const i = bar.querySelector("i");
+      if (i) i.style.width = (isNaN(pct) ? 0 : Math.min(100, pct)) + "%";
+      bar.classList.toggle("warn", pct >= 70 && pct < 90);
+      bar.classList.toggle("err", pct >= 90);
+    }
   };
   const mo = new MutationObserver(sync);
   [status, model, ctx].forEach((n) => mo.observe(n, { attributes: true, childList: true, characterData: true, subtree: true }));
-  const setOpen = (on) => {
-    bar.classList.toggle("info-open", on);
-    chip.classList.toggle("open", on);
-    chip.setAttribute("aria-expanded", on ? "true" : "false");
-  };
-  chip.addEventListener("click", () => setOpen(!bar.classList.contains("info-open")));
-  PHONE_MQ.addEventListener("change", () => setOpen(false));
   sync();
+})();
+// "claude-opus-5-5[1m]" -> "opus 5.5"; "claude-haiku-4-5-20251001" -> "haiku 4.5"
+function phoneModelName(raw) {
+  let m = (raw || "").trim();
+  if (!m || /^model\b/.test(m)) return "";
+  return m.replace(/^claude-/, "").replace(/\[.*\]$/, "").replace(/-\d{8}$/, "")
+    .replace(/-(\d+)-(\d+)$/, " $1.$2").replace(/-(\d+)$/, " $1");
+}
+// "perm: bypassPermissions" -> "Bypass"; "think: default" -> "Default"
+function phoneBadgeValue(raw, prefix) {
+  const v = (raw || "").trim().replace(new RegExp("^" + prefix + ":?\\s*"), "").replace(/Permissions$/, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+  return v && v !== "—" ? v.charAt(0).toUpperCase() + v.slice(1) : "";
+}
+
+/* ---------- phone: bottom sheet + long-press menus ----------
+   One sheet element, three uses: chat details (tap the title), message
+   actions (long-press a message), chat-row actions (long-press a row in the
+   drawer). The message actions are the same buttons the desktop shows on
+   hover, so a sheet row just clicks the hidden original. */
+const phoneSheet = (function () {
+  const root = $("#phoneSheet");
+  if (!root) return null;
+  const content = root.querySelector(".sheet-content");
+  let onClose = null;
+  const close = () => {
+    if (root.hidden) return;
+    root.hidden = true;
+    content.innerHTML = "";
+    if (onClose) { const f = onClose; onClose = null; f(); }
+  };
+  const open = (fill, whenClosed) => {
+    close();
+    content.innerHTML = "";
+    fill(content);
+    onClose = whenClosed || null;
+    root.hidden = false;
+    root.classList.add("enter");
+    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("enter")));
+  };
+  root.querySelector(".sheet-scrim").addEventListener("click", close);
+  PHONE_MQ.addEventListener("change", close);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !root.hidden) close(); });
+  // A row's action runs after the sheet is gone and after this click has
+  // finished bubbling, so the outside-click closers of the cards it opens do
+  // not see the same click and shut them again.
+  const act = (run) => () => { close(); setTimeout(run, 0); };
+  const row = (icon, label, run, opts) => {
+    const o = opts || {};
+    const b = el(run ? "button" : "div", "sh-row" + (o.cls ? " " + o.cls : "") + (run ? "" : " static"));
+    if (run) { b.type = "button"; b.addEventListener("click", act(run)); }
+    b.innerHTML = '<span class="msi">' + icon + '</span><span class="k">' + esc(label) + "</span>"
+      + (o.value != null ? '<span class="v">' + esc(o.value) + "</span>" : "")
+      + (run && o.chevron ? '<span class="msi">chevron_right</span>' : "");
+    return b;
+  };
+  return { open, close, act, row, isOpen: () => !root.hidden };
+})();
+
+function openChatSheet() {
+  const s = activeId && sessions.get(activeId);
+  if (!phoneSheet || !s) return;
+  const anchor = { currentTarget: $("#phoneTitle") };
+  const txt = (id) => (($(id) || {}).textContent || "").trim();
+  phoneSheet.open((c) => {
+    const repo = txt("#repo").replace(/^repo\s*/, "");
+    const head = el("div", "sh-head", "<b>" + esc(s.title || "New chat") + "</b>"
+      + (repo && repo !== "—" ? "<span>" + esc(repo) + "</span>" : ""));
+    c.appendChild(head);
+    const R = phoneSheet.row;
+    c.appendChild(R("neurology", "Model", () => openModelCard(anchor), { value: phoneModelName(txt("#model")) || "default", chevron: true }));
+    c.appendChild(R("shield", "Permissions", () => openPermCard(anchor), { value: phoneBadgeValue(txt("#perm"), "perm"), chevron: true }));
+    c.appendChild(R("psychology", "Thinking", () => openThinkCard(anchor), { value: phoneBadgeValue(txt("#think"), "think"), chevron: true }));
+    // usage: context, 5h and 7d as bars; a tap opens the full card
+    const meters = el("div", "sh-meters");
+    const meter = (label, id, run) => {
+      const t = txt(id);
+      const pct = parseFloat((t.match(/([\d.]+)%/) || [])[1]);
+      if (isNaN(pct)) return;
+      const right = id === "#ctx" ? Math.round(pct) + "%" : Math.round(pct) + "%" + (t.match(/resets (.*)$/) ? " · " + t.match(/resets (.*)$/)[1] : "");
+      const b = el("button", "sh-meter" + (pct >= 90 ? " err" : pct >= 70 ? " warn" : ""),
+        "<span>" + label + '</span><span class="bar"><i style="width:' + Math.min(100, pct) + '%"></i></span><span>' + esc(right) + "</span>");
+      b.type = "button";
+      b.addEventListener("click", phoneSheet.act(run));
+      meters.appendChild(b);
+    };
+    meter("Context", "#ctx", () => openCtxCard(anchor));
+    meter("5 hours", "#r5h", () => { const b = $("#r5h"); if (b) b.click(); });
+    meter("7 days", "#r7d", () => { const b = $("#r7d"); if (b) b.click(); });
+    if (meters.children.length) c.appendChild(meters);
+    const grid = el("div", "sh-grid");
+    const cell = (icon, label, run) => {
+      const b = el("button", null, '<span class="msi">' + icon + "</span>" + esc(label));
+      b.type = "button";
+      b.addEventListener("click", phoneSheet.act(run));
+      grid.appendChild(b);
+    };
+    cell("ios_share", "Share", () => openShareCard(anchor));
+    cell("difference", "Diff", () => { const b = $("#diffBtn"); if (b) b.click(); });
+    cell("edit", "Rename", async () => {
+      const v = window.prompt("Rename this chat", s.title || "");
+      if (v == null) return;
+      await saveTitle(s, v.trim());
+      _tabsSig = "";
+      renderTabs();
+      syncPhoneTitle();
+    });
+    if (!s.archived) cell(s.pinned ? "keep_off" : "push_pin", s.pinned ? "Unpin" : "Pin", () => togglePin(s.id));
+    c.appendChild(grid);
+    c.appendChild(R("delete", "Delete chat", () => {
+      if (window.confirm("Delete “" + (s.title || "this chat") + "”? This cannot be undone.")) closeSession(s.id);
+    }, { cls: "warn" }));
+  });
+}
+
+// Short labels for the hover icons, keyed by glyph; the order of the sheet is
+// copy first (the common one), then select, then the icons as the desktop has them.
+const PHONE_MSG_LABELS = {
+  edit: "Edit", call_split: "Fork into a new chat", history: "Restore files",
+  thumb_up: "Good answer", thumb_down: "Bad answer",
+};
+function openMessageSheet(msg) {
+  const box = msg && msg.querySelector(".msg-actions");
+  if (!phoneSheet || !box) return;
+  const isUser = msg.classList.contains("user");
+  msg.classList.add("pressed");
+  phoneSheet.open((c) => {
+    // the prose only: a reply's step summaries and tool rows are not what was said
+    const body = msg.querySelector(".body") || msg;
+    const blocks = [...body.children].filter((n) => !n.matches("details.steps, .tool, .spinner"));
+    const quote = (body.children.length ? blocks.map((n) => n.innerText).join("\n") : body.innerText || "").trim();
+    if (quote) c.appendChild(el("div", "sh-quote", esc(quote.slice(0, 400))));
+    const buttons = [...box.querySelectorAll("button")];
+    const glyph = (b) => ((b.querySelector(".msi") || {}).textContent || "").trim();
+    const copy = buttons.find((b) => glyph(b) === "content_copy");
+    if (copy) c.appendChild(phoneSheet.row("content_copy", "Copy", () => copy.click()));
+    c.appendChild(phoneSheet.row("select", "Select text", () => {
+      msg.classList.add("selectable");
+      const sel = window.getSelection(), range = document.createRange();
+      range.selectNodeContents(body);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }));
+    buttons.forEach((b) => {
+      const g = glyph(b);
+      if (g === "content_copy") return;
+      let label = PHONE_MSG_LABELS[g];
+      if (g === "refresh") label = isUser ? "Resend" : "Retry";
+      if (g === "bookmark" || g === "bookmark_added") label = b.getAttribute("aria-pressed") === "true" ? "Remove bookmark" : "Save";
+      if (!label) label = b.title || g;
+      const on = b.classList.contains("rate") && b.classList.contains("on");
+      c.appendChild(phoneSheet.row(g, label, () => b.click(), { cls: on ? "on" : "" }));
+    });
+  }, () => msg.classList.remove("pressed"));
+}
+
+function openTabSheet(tab) {
+  const s = tab && sessions.get(tab.dataset.sid);
+  if (!phoneSheet || !s) return;
+  tab.classList.add("pressed");
+  phoneSheet.open((c) => {
+    c.appendChild(el("div", "sh-head", "<b>" + esc(s.title || "New chat") + "</b>"));
+    const R = phoneSheet.row;
+    if (!s.archived) c.appendChild(R(s.pinned ? "keep_off" : "push_pin", s.pinned ? "Unpin" : "Pin", () => togglePin(s.id)));
+    c.appendChild(R(s.archived ? "unarchive" : "archive", s.archived ? "Unarchive" : "Archive", () => toggleArchive(s.id)));
+    c.appendChild(R("edit", "Rename", () => startRename(s, tab)));
+    c.appendChild(R("delete", "Delete chat", () => {
+      if (window.confirm("Delete “" + (s.title || "this chat") + "”? This cannot be undone.")) closeSession(s.id);
+    }, { cls: "warn" }));
+  }, () => tab.classList.remove("pressed"));
+}
+
+(function () {
+  const title = $("#phoneTitle");
+  if (title) {
+    title.addEventListener("click", openChatSheet);
+    title.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChatSheet(); } });
+  }
+
+  // New Chat: focus the field inside the tap itself, so iOS raises the
+  // keyboard (it refuses a focus that arrives after an await), then make the chat.
+  const newChat = () => {
+    closeRailDrawer();
+    if (isPhone()) input.focus();
+    createSession().then(() => { if (isPhone()) input.focus(); });
+  };
+  const pn = $("#phoneNew");
+  if (pn) pn.addEventListener("click", newChat);
+  const nt = $("#newTab");
+  if (nt) nt.addEventListener("click", (e) => { if (!isPhone()) return; e.stopImmediatePropagation(); newChat(); }, true);
+
+  // drawer footer: saved, the shell's offline copy, settings (the gear's "new" dot follows)
+  const foot = (id, run) => { const b = $(id); if (b) b.addEventListener("click", () => { closeRailDrawer(); run(); }); };
+  foot("#railSaved", () => toggleBookmarks());
+  foot("#railOffline", () => { location.href = "mist://offline"; });
+  foot("#railSettings", () => $("#settingsBtn").click());
+  const gear = $("#settingsBtn"), rs = $("#railSettings");
+  if (gear && rs) {
+    const mirror = () => rs.classList.toggle("has-new", gear.classList.contains("has-new"));
+    new MutationObserver(mirror).observe(gear, { attributes: true, attributeFilter: ["class"] });
+    mirror();
+  }
+
+  // the + is the attach button on a phone (saved moved to the drawer)
+  const fileIcon = $("#fileBtn md-icon");
+  const syncIcon = () => { if (fileIcon) fileIcon.textContent = isPhone() ? "add" : "attach_file"; };
+  PHONE_MQ.addEventListener("change", syncIcon);
+  syncIcon();
+
+  // Long-press: a message opens its actions, a drawer row opens pin / archive /
+  // rename / delete. Movement past a few px is a scroll or a drawer swipe and
+  // cancels it. The touch that fired the menu does not also click.
+  const HOLD = 450, SLOP = 10;
+  let lp = null;
+  const cancel = () => { if (lp) { clearTimeout(lp.timer); lp = null; } };
+  document.addEventListener("touchstart", (e) => {
+    cancel();
+    if (!isPhone() || e.touches.length !== 1 || !e.target.closest) return;
+    if (phoneSheet && phoneSheet.isOpen()) return;
+    if (e.target.closest("a, button, input, textarea, select, summary, .trename, .msg-edit")) return;
+    const msg = e.target.closest(".session-log .msg");
+    const tab = !msg && e.target.closest("#tabs .tab");
+    if (msg && msg.classList.contains("selectable")) return;
+    if (!msg && !tab) return;
+    const t = e.touches[0];
+    const st = { x: t.clientX, y: t.clientY, fired: false };
+    st.timer = setTimeout(() => {
+      st.fired = true;
+      if (msg) openMessageSheet(msg); else openTabSheet(tab);
+    }, HOLD);
+    lp = st;
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!lp || lp.fired) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - lp.x) > SLOP || Math.abs(t.clientY - lp.y) > SLOP) cancel();
+  }, { passive: true });
+  document.addEventListener("touchend", (e) => {
+    if (lp && lp.fired) e.preventDefault();
+    cancel();
+  }, { passive: false });
+  document.addEventListener("touchcancel", cancel);
+  // a tap anywhere else ends "select text" on a message
+  document.addEventListener("touchstart", (e) => {
+    document.querySelectorAll(".session-log .msg.selectable").forEach((m) => {
+      if (!m.contains(e.target)) m.classList.remove("selectable");
+    });
+  }, { passive: true });
 })();
 // On touch the return key is a newline, so the desktop hint would mislead.
 if (isTouch()) input.placeholder = "Talk to MIST…";

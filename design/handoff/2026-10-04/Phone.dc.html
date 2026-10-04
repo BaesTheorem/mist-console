@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600&amp;family=Poiret+One&amp;family=Material+Symbols+Sharp:opsz,wght,FILL,GRAD@20,400,0,0&amp;display=block" />
+        <style>
+          body { margin: 0; background: #050b12; font-family: "Raleway", system-ui, sans-serif; color: #d9e3f4; }
+          a { color: #38dbdb; } a:hover { color: #60f8f8; }
+          .msi { font-family: "Material Symbols Sharp"; font-size: 22px; line-height: 1; display: inline-block; font-weight: normal; letter-spacing: normal; text-transform: none; white-space: nowrap; -webkit-font-smoothing: antialiased; }
+          .msi.sm { font-size: 18px; }
+
+          .lbl { position: absolute; display: flex; flex-direction: column; gap: 6px; width: 393px; }
+          .lid { font: 600 11px ui-monospace, Menlo, monospace; color: #38dbdb; }
+          .lnote { font-size: 12px; line-height: 1.5; color: #8392a7; text-wrap: pretty; }
+
+          .ph { position: absolute; width: 393px; height: 852px; background: #050b12; border: 1px solid #39485a; overflow: hidden; display: flex; flex-direction: column; box-sizing: border-box; }
+          .ph img.ref { width: 100%; height: 100%; object-fit: cover; }
+          .sb { height: 54px; flex: none; }
+
+          /* top bar */
+          .top { height: 52px; flex: none; display: grid; grid-template-columns: 48px minmax(0, 1fr) 48px; align-items: center; padding: 0 4px; border-bottom: 1px solid #1c2836; }
+          .ib { width: 44px; height: 44px; display: grid; place-items: center; color: #b8c8de; }
+          .ib.new { color: #38dbdb; }
+          .title { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; }
+          .tname { font-size: 15px; font-weight: 600; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .tsub { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #8392a7; }
+          .dot { width: 6px; height: 6px; background: #38dbdb; flex: none; }
+          .dot.think { background: #9b8cff; }
+          .ctx { height: 2px; flex: none; background: #121c28; }
+          .ctx i { display: block; height: 2px; width: 6%; background: #38dbdb; }
+
+          /* log */
+          .log { flex: 1; min-height: 0; overflow: hidden; padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 18px; position: relative; }
+          .who { font-size: 11px; letter-spacing: .08em; color: #8392a7; display: flex; gap: 8px; }
+          .who.m { color: #38dbdb; }
+          .msg { font-size: 16px; line-height: 1.5; text-wrap: pretty; }
+          .umsg { align-self: flex-end; max-width: 82%; background: #16202c; border: 1px solid #39485a; padding: 10px 12px; font-size: 16px; line-height: 1.45; color: #cfe8ff; }
+          .steps { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #5d6c80; }
+          .code { font: 13px ui-monospace, Menlo, monospace; background: #121c28; padding: 0 4px; }
+          .jump { position: absolute; right: 14px; bottom: 10px; width: 40px; height: 40px; display: grid; place-items: center; background: #121c28; border: 1px solid #38dbdb; color: #38dbdb; }
+
+          /* composer */
+          .comp { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 8px 10px 30px; border-top: 1px solid #1c2836; background: #091420; }
+          .inp { flex: 1; min-width: 0; min-height: 44px; box-sizing: border-box; border: 1px solid #39485a; padding: 11px 12px; font-size: 16px; color: #5d6c80; }
+          .inp.typed { color: #d9e3f4; }
+          .cb { width: 44px; height: 44px; flex: none; display: grid; place-items: center; color: #b8c8de; }
+          .cb.fill { background: #38dbdb; color: #003737; }
+
+          /* drawer */
+          .scrim { position: absolute; inset: 0; background: rgba(2, 6, 10, .6); }
+          .drawer { position: absolute; top: 0; bottom: 0; left: 0; width: 320px; background: #091420; border-right: 1px solid #39485a; display: flex; flex-direction: column; }
+          .dhead { display: flex; flex-direction: column; gap: 10px; padding: 8px 14px 12px; border-bottom: 1px solid #1c2836; }
+          .newbtn { height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: #38dbdb; color: #003737; font-size: 15px; font-weight: 600; }
+          .search { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #39485a; color: #5d6c80; font-size: 14px; }
+          .dlist { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+          .sec { display: flex; align-items: center; justify-content: space-between; padding: 14px 14px 6px; font-size: 11px; letter-spacing: .08em; color: #5d6c80; }
+          .row { height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 15px; color: #b8c8de; }
+          .row.on { background: #16202c; color: #d9e3f4; box-shadow: inset 2px 0 0 #38dbdb; }
+          .row .rt { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          .row .rm { font-size: 11px; color: #5d6c80; flex: none; }
+          .rdot { width: 6px; height: 6px; flex: none; background: transparent; }
+          .rdot.busy { background: #9b8cff; }
+          .rdot.unread { background: #38dbdb; }
+          .dfoot { display: flex; border-top: 1px solid #1c2836; padding: 4px 6px 30px; }
+          .fb { flex: 1; height: 48px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: #8392a7; }
+          .swipe { display: flex; height: 48px; overflow: hidden; }
+          .swipe .row { flex: none; width: 200px; box-sizing: border-box; background: #121c28; }
+          .sact { width: 60px; flex: none; display: grid; place-items: center; color: #003737; }
+          .sact.pin { background: #38dbdb; } .sact.arc { background: #8392a7; }
+
+          /* sheets */
+          .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: #091420; border-top: 1px solid #39485a; display: flex; flex-direction: column; padding-bottom: 30px; }
+          .grab { width: 36px; height: 4px; background: #39485a; margin: 8px auto 4px; }
+          .shead { padding: 8px 18px 12px; display: flex; flex-direction: column; gap: 3px; border-bottom: 1px solid #1c2836; }
+          .shead b { font-size: 16px; font-weight: 600; }
+          .shead span { font-size: 12px; color: #8392a7; }
+          .srow { min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid #1c2836; font-size: 15px; }
+          .srow .k { flex: 1; color: #b8c8de; }
+          .srow .v { color: #8392a7; font-size: 13px; }
+          .srow .msi { color: #8392a7; }
+          .srow.warn .k, .srow.warn .msi { color: #ff8a80; }
+          .meter { display: flex; flex-direction: column; gap: 4px; padding: 12px 18px; border-bottom: 1px solid #1c2836; }
+          .mrow { display: grid; grid-template-columns: 80px minmax(0, 1fr) 90px; align-items: center; gap: 10px; font-size: 12px; color: #8392a7; }
+          .bar { height: 4px; background: #16202c; } .bar i { display: block; height: 4px; background: #38dbdb; }
+          .bar.hi i { background: #e6c14d; }
+          .mrow .r { text-align: right; }
+          .lifted { position: absolute; left: 14px; right: 14px; top: 250px; border: 1px solid #38dbdb; background: #091420; padding: 12px 14px; }
+          .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: #1c2836; border-bottom: 1px solid #1c2836; }
+          .gb { background: #091420; height: 72px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: #b8c8de; }
+          .gb .msi { color: #38dbdb; }
+
+          /* empty new chat */
+          .empty { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px; padding: 0 28px; }
+          .crys { width: 64px; height: 110px; background: repeating-linear-gradient(135deg, #121c28 0 6px, #16202c 6px 12px); border: 1px solid #39485a; display: grid; place-items: center; font: 9px ui-monospace, Menlo, monospace; color: #5d6c80; text-align: center; }
+          .hello { font-family: "Poiret One", sans-serif; font-size: 28px; color: #d9e3f4; }
+          .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+          .chip { height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid #39485a; font-size: 13px; color: #b8c8de; }
+          .kbd { height: 290px; flex: none; background: repeating-linear-gradient(135deg, #0d1620 0 6px, #111b26 6px 12px); display: grid; place-items: center; font: 11px ui-monospace, Menlo, monospace; color: #5d6c80; }
+        </style>
+      </helmet>
+
+      <!-- labels -->
+      <div class="lbl" style="left: 40px; top: 30px;" data-drags-parent="1"><span class="lid">0 · NOW</span><span class="lnote">Today's phone layout, for comparison. Truncated title, a status chip and two icons fight for the top bar. Six action icons on every message. The crystal sits behind the text. New Chat is at the bottom of the drawer.</span></div>
+      <div class="lbl" style="left: 473px; top: 30px;" data-drags-parent="1"><span class="lid">1 · CHAT</span><span class="lnote">New Chat is the top-right button, one tap from any chat. The title gets the full center. Model and state shrink to one quiet line under it; context is the 2px line under the bar. No per-message icons, no watermark.</span></div>
+      <div class="lbl" style="left: 906px; top: 30px;" data-drags-parent="1"><span class="lid">2 · DRAWER</span><span class="lnote">New Chat leads the drawer too. Rows carry only a title, a state dot and a time. Pin and archive move to a swipe (row 3 shows it). Settings, bookmarks and the offline copy live in the footer.</span></div>
+      <div class="lbl" style="left: 1339px; top: 30px;" data-drags-parent="1"><span class="lid">3 · CHAT DETAILS</span><span class="lnote">Tap the title. Everything the badge strip showed, as a sheet: model, permissions, thinking, repo, usage. Share, diff, rename and delete live here as well.</span></div>
+      <div class="lbl" style="left: 1772px; top: 30px;" data-drags-parent="1"><span class="lid">4 · MESSAGE ACTIONS</span><span class="lnote">Long-press a message. The six icons become one sheet with labels. Copy stays first because it is the common one.</span></div>
+      <div class="lbl" style="left: 2205px; top: 30px;" data-drags-parent="1"><span class="lid">5 · NEW CHAT</span><span class="lnote">What the New Chat button opens: the keyboard is already up. The chips set the repo and model for this chat before the first message. Also reachable from the Home Screen icon's long-press menu and the existing widget.</span></div>
+
+      <!-- 0 · now -->
+      <div class="ph" style="left: 40px; top: 130px;" data-screen-label="Now"><img class="ref" src="./now-main.png" alt="current phone layout" /></div>
+
+      <!-- 1 · chat -->
+      <div class="ph" style="left: 473px; top: 130px;" data-screen-label="Chat">
+        <div class="sb"></div>
+        <div class="top">
+          <div class="ib"><span class="msi">menu</span></div>
+          <div class="title"><span class="tname">Cancel today's life debugging</span><span class="tsub"><span class="dot"></span>opus 5.5 · idle</span></div>
+          <div class="ib new"><span class="msi">edit_square</span></div>
+        </div>
+        <div class="ctx"><i></i></div>
+        <div class="log">
+          <div class="umsg">*Luma</div>
+          <div class="who m"><span>MIST</span><span style="color: #5d6c80;">10:00 AM</span></div>
+          <div class="msg">Unambiguous target. Check guests, then cancel.</div>
+          <div class="steps"><span class="msi sm">chevron_right</span>3 steps · Bash, thinking</div>
+          <div class="msg">I cancelled today's Life Debugging Over Coffee (11:00 AM) on Luma and on Meetup.</div>
+          <div class="msg"><b>Luma:</b> I cancelled <span class="code">evt-F9Bd4DZA</span> with no refund, because the event is free. It had 1 guest, and Luma sends the usual cancellation e-mail.</div>
+          <div class="jump"><span class="msi">arrow_downward</span></div>
+        </div>
+        <div class="comp">
+          <div class="cb"><span class="msi">add</span></div>
+          <div class="inp">Talk to MIST</div>
+          <div class="cb fill"><span class="msi">graphic_eq</span></div>
+        </div>
+      </div>
+
+      <!-- 2 · drawer -->
+      <div class="ph" style="left: 906px; top: 130px;" data-screen-label="Drawer">
+        <div class="sb"></div>
+        <div class="scrim"></div>
+        <div class="drawer">
+          <div class="sb"></div>
+          <div class="dhead">
+            <div class="newbtn"><span class="msi">edit_square</span>New chat</div>
+            <div class="search"><span class="msi sm">search</span>Search chats</div>
+          </div>
+          <div class="dlist">
+            <div class="sec"><span>PINNED</span><span class="msi sm">expand_more</span></div>
+            <div class="row"><span class="rdot"></span><span class="rt">Glasses</span><span class="rm">Fri</span></div>
+            <div class="row"><span class="rdot"></span><span class="rt">AI Blog Post</span><span class="rm">Thu</span></div>
+            <div class="swipe"><div class="row"><span class="rdot"></span><span class="rt">FF blog post</span><span class="rm">Wed</span></div><div class="sact pin"><span class="msi">keep_off</span></div><div class="sact arc"><span class="msi">archive</span></div></div>
+            <div class="sec"><span>TODAY</span></div>
+            <div class="row"><span class="rdot busy"></span><span class="rt">Please overhaul the UI of the MIST mobile app</span><span class="rm">now</span></div>
+            <div class="row"><span class="rdot unread"></span><span class="rt">Fantasy DM: The Chefs</span><span class="rm">10:41</span></div>
+            <div class="row"><span class="rdot"></span><span class="rt">Monte Carlo sims</span><span class="rm">10:20</span></div>
+            <div class="row on"><span class="rdot"></span><span class="rt">Cancel today's life debugging</span><span class="rm">10:00</span></div>
+            <div class="sec"><span>YESTERDAY</span></div>
+            <div class="row"><span class="rdot"></span><span class="rt">Civic 311 detection project</span><span class="rm">22:48</span></div>
+            <div class="row"><span class="rdot"></span><span class="rt">Conversation mode design</span><span class="rm">19:12</span></div>
+          </div>
+          <div class="dfoot">
+            <div class="fb"><span class="msi sm">bookmarks</span>Saved</div>
+            <div class="fb"><span class="msi sm">cloud_download</span>Offline</div>
+            <div class="fb"><span class="msi sm">settings</span>Settings</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3 · chat details -->
+      <div class="ph" style="left: 1339px; top: 130px;" data-screen-label="Chat details">
+        <div class="sb"></div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="shead"><b>Cancel today's life debugging</b><span>Exobrain harness · started 10:00 AM</span></div>
+          <div class="srow"><span class="msi">neurology</span><span class="k">Model</span><span class="v">Opus 5.5 · 1M</span><span class="msi sm">chevron_right</span></div>
+          <div class="srow"><span class="msi">shield</span><span class="k">Permissions</span><span class="v">Bypass</span><span class="msi sm">chevron_right</span></div>
+          <div class="srow"><span class="msi">psychology</span><span class="k">Thinking</span><span class="v">Default</span><span class="msi sm">chevron_right</span></div>
+          <div class="srow"><span class="msi">folder</span><span class="k">Repo</span><span class="v">Exobrain harness</span><span class="msi sm">chevron_right</span></div>
+          <div class="meter">
+            <div class="mrow"><span>Context</span><span class="bar"><i style="width: 6%;"></i></span><span class="r">6% · compact</span></div>
+            <div class="mrow"><span>5 hours</span><span class="bar"><i style="width: 8%;"></i></span><span class="r">8% · 1:00 PM</span></div>
+            <div class="mrow"><span>7 days</span><span class="bar hi"><i style="width: 51%;"></i></span><span class="r">51% · Wed</span></div>
+          </div>
+          <div class="grid4">
+            <div class="gb"><span class="msi">ios_share</span>Share</div>
+            <div class="gb"><span class="msi">difference</span>Diff</div>
+            <div class="gb"><span class="msi">edit</span>Rename</div>
+            <div class="gb"><span class="msi">push_pin</span>Pin</div>
+          </div>
+          <div class="srow warn"><span class="msi">delete</span><span class="k">Delete chat</span></div>
+        </div>
+      </div>
+
+      <!-- 4 · message actions -->
+      <div class="ph" style="left: 1772px; top: 130px;" data-screen-label="Message actions">
+        <div class="sb"></div>
+        <div class="scrim"></div>
+        <div class="lifted"><div class="msg">I cancelled today's Life Debugging Over Coffee (11:00 AM) on Luma and on Meetup.</div></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="srow"><span class="msi">content_copy</span><span class="k">Copy</span></div>
+          <div class="srow"><span class="msi">bookmark</span><span class="k">Save</span></div>
+          <div class="srow"><span class="msi">refresh</span><span class="k">Retry from here</span></div>
+          <div class="srow"><span class="msi">call_split</span><span class="k">Fork into a new chat</span></div>
+          <div class="srow"><span class="msi">thumb_up</span><span class="k">Good answer</span></div>
+          <div class="srow"><span class="msi">thumb_down</span><span class="k">Bad answer</span></div>
+        </div>
+      </div>
+
+      <!-- 5 · new chat -->
+      <div class="ph" style="left: 2205px; top: 130px;" data-screen-label="New chat">
+        <div class="sb"></div>
+        <div class="top">
+          <div class="ib"><span class="msi">menu</span></div>
+          <div class="title"><span class="tname">New chat</span></div>
+          <div class="ib" style="color: #39485a;"><span class="msi">edit_square</span></div>
+        </div>
+        <div class="ctx"></div>
+        <div class="empty">
+          <div class="crys">MIST<br />idle clip</div>
+          <div class="hello">What's up?</div>
+          <div class="chips">
+            <div class="chip"><span class="msi sm">folder</span>Exobrain harness</div>
+            <div class="chip"><span class="msi sm">neurology</span>Opus 5.5</div>
+          </div>
+        </div>
+        <div class="comp" style="padding-bottom: 8px;">
+          <div class="cb"><span class="msi">add</span></div>
+          <div class="inp typed">Remind me what</div>
+          <div class="cb fill"><span class="msi">arrow_upward</span></div>
+        </div>
+        <div class="kbd">keyboard</div>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

@@ -17,16 +17,22 @@ running.
   on and the caller holds the token. See the "iPhone app" section of the main
   README for the security model.
 - **Web UI** adapts itself under 760px (`static/style.css`, the "phone"
-  blocks) and when the app's user agent (`MISTShell/…`) is present: the chat
-  rail becomes a drawer (tap the menu or the chat title, or swipe in from the
-  left edge; swipe it or its backdrop leftward to close), the top bar is one
-  row (menu, the chat's title, a status chip mirroring status, model and
-  context use, settings) with the badge strip folding out under it when the
-  chip is tapped, the composer clears the home indicator, the return
-  key inserts a newline (the send button sends), the attach button opens the
-  photo library and the photo rides along as an image attachment, and the
-  close-x on chat rows is off (closing deletes the chat; there is no hover to
-  reveal it on intent).
+  blocks) and when the app's user agent (`MISTShell/…`) is present. The
+  layout follows `design/handoff/2026-10-04/`:
+  - The top bar is menu, the chat's title, and New Chat. One line below the
+    title shows the model and the state. A 2px line below the bar shows
+    context use.
+  - Tap the title for the chat-details sheet: model, permissions, thinking,
+    usage bars, share, diff, rename, pin, delete.
+  - Messages have no icon row. A long-press opens their actions as a sheet
+    (copy, select text, retry, fork, rate, save).
+  - The chat rail is a drawer (the menu, or a swipe in from the left edge).
+    New Chat is at its top. A long-press on a row opens pin, archive,
+    rename and delete. Its footer holds saved messages, the offline copy
+    and settings.
+  - The composer is `+` (attach), the field, and one button: voice while the
+    field is empty, send when it has text. The return key inserts a newline.
+    A photo from the library rides along as an image attachment.
 - **This directory** is the shell: `MIST/Sources` (Swift), `MIST/Resources`
   (icon, colors), `project.yml` (XcodeGen), `scripts/`.
 
@@ -41,6 +47,7 @@ Sources/Views/ConsoleScreen     web view + status overlay (finding / unreachable
 Sources/Views/PairView          first run: scan the QR, paste the link, or type url + token
 Sources/Views/QRScannerView     AVFoundation QR reader
 Sources/Views/SettingsView      the shell's own settings: addresses, re-pair, forget
+Sources/QuickActions.swift      the icon's long-press "New chat" item -> mist://new
 MISTWidget/Sources/MISTWidget   WidgetKit extension: the two launcher widgets
 ```
 
@@ -49,7 +56,9 @@ MISTWidget/Sources/MISTWidget   WidgetKit extension: the two launcher widgets
 `MISTWidget/` is a WidgetKit extension embedded in the app: two launchers,
 **MIST** (opens the Console) and **MIST: new chat** (opens straight into a
 fresh chat, via `mist://new`), in the Lock Screen circular, rectangular and
-inline forms plus a Home Screen small. Add them the usual way: long-press the
+inline forms plus a Home Screen small. The app icon's long-press menu has a
+**New chat** item too (`QuickActions.swift`, `UIApplicationShortcutItems` in
+`project.yml`). Add them the usual way: long-press the
 Lock Screen, Customize, tap the widget area, find MIST. Nothing runs on the
 phone, so there is nothing live to show; the widgets carry no shared state on
 purpose (an App Group would add an entitlement to the signing story for a

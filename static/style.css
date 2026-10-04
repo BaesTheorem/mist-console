@@ -1964,3 +1964,152 @@ body.design-open.pane-open:has(#voicePane:not([hidden])) #usage { right: calc(23
 #voiceBtn.on::after { content: ""; position: absolute; inset: 2px; border: 1px solid var(--teal); pointer-events: none; }
 #voiceBtn { position: relative; }
 @media (max-width: 760px) { #voicePane { display: none !important; } }
+
+/* ---- phone, fourth pass: the 2026-10-04 declutter (design/handoff/2026-10-04) ----
+   Top bar: menu, the title with one status line under it, New Chat. The chip,
+   the design button and the gear leave the bar; context use is a 2px line
+   under it. Messages lose their icon row (a long-press opens the actions as a
+   sheet) and the crystal wallpaper. The drawer leads with New Chat and ends in
+   a footer (saved, offline copy, settings). The composer is +, the field, and
+   one button: voice while the field is empty, send once it has text. */
+#phoneSheet[hidden] { display: none !important; }
+@media (max-width: 760px) {
+  #topbar { position: relative; flex-wrap: nowrap; gap: 4px; padding-top: calc(4px + env(safe-area-inset-top)); padding-bottom: 4px; }
+  #topbar .actions, #phoneStatus.phone-only, #designBtn, #settingsBtn { display: none !important; }
+  #railOpen, #phoneNew.phone-only { flex: 0 0 auto; width: 44px; height: 44px; }
+  #phoneNew.phone-only { --md-icon-button-icon-color: var(--teal); color: var(--teal); }
+  #phoneTitle.phone-only {
+    display: flex !important; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+    flex: 1 1 0; min-width: 0; padding: 4px 2px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  #phoneTitle .pt-name {
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 15px; font-weight: 600; color: var(--text);
+  }
+  #phoneTitle .pt-sub { display: flex; align-items: center; gap: 5px; max-width: 100%; font-size: 11px; color: var(--dim); }
+  #phoneTitle .pt-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #phoneTitle .ps-dot {
+    width: 6px; height: 10px; flex: 0 0 6px; background: var(--md-sys-color-outline-variant);
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  }
+  #phoneTitle[data-state="thinking"] .ps-dot { background: var(--violet); animation: dot-breathe 1.15s ease-in-out infinite; }
+  #phoneTitle[data-state="working"] .ps-dot { background: var(--teal); animation: dot-breathe 1.15s ease-in-out infinite; }
+  #phoneTitle[data-state="error"] .ps-dot { background: var(--err); }
+  #phoneTitle[data-state="paused"] .ps-dot { background: var(--warn); }
+  #phoneTitle:active .pt-name { color: var(--teal); }
+  #phoneCtx.phone-only { display: block !important; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; }
+  #phoneCtx i { display: block; height: 2px; width: 0; background: var(--teal); transition: width .3s ease; }
+  #phoneCtx.warn i { background: var(--warn); }
+  #phoneCtx.err i { background: var(--err); }
+  /* the anchored cards hang under the bar, whatever their (hidden) badge says */
+  #modelCard, #permCard, #thinkCard, #ctxCard, #usageCard, #shareCard {
+    top: calc(var(--topbar-h, 56px) + 6px) !important;
+    left: 8px !important; right: 8px !important; width: auto !important;
+  }
+
+  /* transcript */
+  #logs::after { display: none; }
+  /* a chat with nothing in it yet: the crystal and one line, centered */
+  .session-log:empty::before {
+    content: "What\2019s up?"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding-top: 150px; box-sizing: border-box;
+    background: url("MIST_nobg.png") center calc(50% - 40px) / auto 120px no-repeat;
+    font-family: "Poiret One", var(--font-display, sans-serif); font-size: 30px; color: var(--text); pointer-events: none;
+  }
+  .msg .msg-actions { display: none !important; }
+  .session-log .msg { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .session-log .msg.selectable { -webkit-user-select: text; user-select: text; }
+  .session-log .msg textarea { -webkit-user-select: text; user-select: text; }
+  .session-log .msg.pressed { background: var(--md-sys-color-surface-container); }
+  #jumpBtn {
+    left: auto; right: 14px; bottom: 10px; transform: none;
+    width: 40px; height: 40px; padding: 0; font-size: 0; display: grid; place-items: center;
+  }
+  #jumpBtn[hidden] { display: none; }
+  #jumpBtn .msi { font-size: 20px; margin: 0; vertical-align: 0; }
+
+  /* drawer */
+  #newTab {
+    order: -1; margin: 10px 12px 8px; min-height: 48px; display: flex; align-items: center; gap: 10px;
+    background: var(--teal); color: var(--md-sys-color-on-primary, #003737); border-color: var(--teal);
+    font-size: 15px; font-weight: 600; letter-spacing: 0; padding: 0 14px;
+  }
+  #newTab .msi { font-size: 20px; margin: 0; vertical-align: 0; }
+  #railSearch { order: 0; }
+  .tab .tpin, .tab .tarch, .tab .tclose { display: none !important; }
+  .tab.pressed { background: var(--md-sys-color-surface-container); }
+  #railFoot.phone-only {
+    display: flex !important; flex: 0 0 auto; border-top: 1px solid var(--line);
+    padding: 2px 4px calc(2px + env(safe-area-inset-bottom));
+  }
+  #railFoot button:not(.shell-only), html[data-shell="ios"] #railFoot button.shell-only {
+    display: flex !important; flex: 1 1 0; min-height: 48px; align-items: center; justify-content: center; gap: 6px;
+    background: none; border: 0; color: var(--dim); font: inherit; font-size: 12px; cursor: pointer;
+  }
+  #railFoot button .msi { font-size: 18px; }
+  #railFoot button.has-new { color: var(--teal); }
+  #tabrail { padding-bottom: 0; }
+
+  /* composer */
+  #bookmarksBtn { display: none; }
+  #composer { align-items: flex-end; }
+  #composer #fileBtn, #composer #voiceBtn, #composer #sendBtn { width: 44px; height: 44px; flex: 0 0 44px; }
+  #input { min-height: 44px; box-sizing: border-box; padding: 11px 12px; }
+  #composer:not(.has-text) #sendBtn[data-mode="send"] { display: none; }
+  #composer.has-text #voiceBtn:not([aria-pressed="true"]) { display: none; }
+  #composer.busy #voiceBtn:not([aria-pressed="true"]) { display: none; }
+}
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+  #phoneTitle .ps-dot { animation: none !important; }
+  #phoneCtx i { transition: none; }
+}
+
+/* the bottom sheet (phone only; the element stays hidden elsewhere) */
+#phoneSheet { position: fixed; inset: 0; z-index: 60; }
+#phoneSheet .sheet-scrim { position: absolute; inset: 0; background: rgba(2, 6, 10, .6); }
+#phoneSheet .sheet-body {
+  position: absolute; left: 0; right: 0; bottom: 0; max-height: 82%; overflow-y: auto;
+  background: var(--md-sys-color-surface-container-low); border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom); transform: translateY(0); transition: transform .2s ease;
+}
+#phoneSheet.enter .sheet-body { transform: translateY(100%); }
+#phoneSheet .sheet-grab { width: 36px; height: 4px; background: var(--line); margin: 8px auto 4px; }
+#phoneSheet .sh-head { display: flex; flex-direction: column; gap: 3px; padding: 8px 18px 12px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+#phoneSheet .sh-head b { font-size: 16px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+#phoneSheet .sh-head span { font-size: 12px; color: var(--dim); }
+#phoneSheet .sh-quote {
+  margin: 6px 14px 10px; padding: 10px 12px; border: 1px solid var(--teal); color: var(--text);
+  font-size: 14px; line-height: 1.45; max-height: 7.5em; overflow: hidden; white-space: pre-line;
+}
+#phoneSheet .sh-row {
+  width: 100%; min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 18px;
+  background: none; border: 0; border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--text); font: inherit; font-size: 15px; text-align: left; cursor: pointer;
+}
+#phoneSheet .sh-row:active { background: var(--md-sys-color-surface-container); }
+#phoneSheet .sh-row .msi { font-size: 22px; color: var(--dim); }
+#phoneSheet .sh-row .k { flex: 1; min-width: 0; }
+#phoneSheet .sh-row .v { color: var(--dim); font-size: 13px; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#phoneSheet .sh-row.on .msi { color: var(--teal); }
+#phoneSheet .sh-row.warn, #phoneSheet .sh-row.warn .msi { color: var(--err); }
+#phoneSheet .sh-row.static { cursor: default; }
+#phoneSheet .sh-meters { display: flex; flex-direction: column; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+#phoneSheet .sh-meter {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  min-height: 28px; background: none; border: 0; padding: 0; font: inherit; font-size: 12px; color: var(--dim); text-align: left; cursor: pointer;
+}
+#phoneSheet .sh-meter .bar { height: 4px; background: var(--md-sys-color-surface-container-high); }
+#phoneSheet .sh-meter .bar i { display: block; height: 4px; background: var(--teal); }
+#phoneSheet .sh-meter.warn .bar i { background: var(--warn); }
+#phoneSheet .sh-meter.err .bar i { background: var(--err); }
+#phoneSheet .sh-grid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+  background: var(--md-sys-color-outline-variant); border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+#phoneSheet .sh-grid button {
+  min-height: 72px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  background: var(--md-sys-color-surface-container-low); border: 0; color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+#phoneSheet .sh-grid button .msi { font-size: 22px; color: var(--teal); }
+#phoneSheet .sh-grid button:active { background: var(--md-sys-color-surface-container); }
+@media (prefers-reduced-motion: reduce) { #phoneSheet .sheet-body { transition: none; } }

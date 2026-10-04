@@ -37,8 +37,7 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
     <span class="logo" id="logoText" style="display:none">M I S T</span>
     <span class="sub">MIST</span>
   </div>
-  <span id="phoneTitle" class="phone-only" title="Chats" role="button"></span>
-  <button id="phoneStatus" class="phone-only" type="button" title="Model, permissions, context and usage" aria-expanded="false"><span class="ps-dot"></span><span class="ps-text">…</span></button>
+  <div id="phoneTitle" class="phone-only" role="button" tabindex="0" title="Chat details" aria-label="Chat details"><span class="pt-name"></span><span class="pt-sub"><span class="ps-dot"></span><span class="pt-text"></span></span></div>
   <div class="meta">
     <span class="badge repo clickable" id="repo" data-state="unknown" title="Repo MIST works in · click to change">repo —</span>
     <span class="badge clickable" id="model" title="Model in use · click to switch">model —</span>
@@ -54,6 +53,8 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
     <md-icon-button id="designBtn" touch-target="none" title="Claude Design · this chat's design project beside the chat" aria-label="Claude Design pane" aria-pressed="false"><md-icon>design_services</md-icon></md-icon-button>
     <md-icon-button id="settingsBtn" touch-target="none" title="Settings · active MCP servers + tools" aria-label="Settings"><md-icon>settings</md-icon></md-icon-button>
   </div>
+  <md-icon-button id="phoneNew" class="phone-only" touch-target="none" title="New chat" aria-label="New chat"><md-icon>edit_square</md-icon></md-icon-button>
+  <div id="phoneCtx" class="phone-only" aria-hidden="true"><i></i></div>
 </header>
 
 <aside id="shareCard" hidden>
@@ -117,6 +118,11 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
     <div id="searchResults" hidden></div>
     <div id="tabs"></div>
     <button id="newTab"><span class="msi">add</span> new chat</button>
+    <div id="railFoot" class="phone-only">
+      <button type="button" id="railSaved"><span class="msi">bookmarks</span>Saved</button>
+      <button type="button" id="railOffline" class="shell-only"><span class="msi">cloud_download</span>Offline</button>
+      <button type="button" id="railSettings"><span class="msi">settings</span>Settings</button>
+    </div>
   </nav>
   <div id="railBackdrop" hidden></div>
   <div id="railResize" title="Drag to resize · double-click to reset"></div>
@@ -337,6 +343,9 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
 </footer>
 
 <div id="usage"></div>
+
+<!-- phone: one bottom sheet, filled by app.js (chat details, message actions, chat-row actions) -->
+<div id="phoneSheet" hidden><div class="sheet-scrim"></div><div class="sheet-body" role="dialog" aria-modal="true"><div class="sheet-grab"></div><div class="sheet-content"></div></div></div>
 
 <script src="vendor/qrcode.js"></script>
 <script src="app.js"></script>
