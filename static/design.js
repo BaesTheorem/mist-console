@@ -29,7 +29,8 @@
     const r = body.getBoundingClientRect();
     const doc = root.getBoundingClientRect();
     const k = doc.width ? window.innerWidth / doc.width : 1;
-    return { x: r.left * k, y: r.top * k, w: r.width * k, h: r.height * k };
+    return { x: r.left * k, y: r.top * k, w: r.width * k, h: r.height * k,
+             vw: window.innerWidth, vh: window.innerHeight };
   }
 
   function push(force) {

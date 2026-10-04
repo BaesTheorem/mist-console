@@ -880,9 +880,30 @@ def _design_popup_close(child):
             pass
 
 
+def _design_main_webview(view):
+    """pywebview's own WKWebView (the Console page) inside `view`; the design
+    view is skipped. Depth-first, since pywebview may wrap it in a container."""
+    from WebKit import WKWebView
+    for sub in (view.subviews() or []):
+        if sub is _design_wv:
+            continue
+        if isinstance(sub, WKWebView):
+            return sub
+        hit = _design_main_webview(sub)
+        if hit is not None:
+            return hit
+    return None
+
+
 def _design_pane(spec):
-    """Main thread. spec: {show, url|None, x, y, w, h} in page points, top-left
-    origin; AppKit wants bottom-left, so flip against the content view's height."""
+    """Main thread. spec: {show, url|None, x, y, w, h, vw, vh}: the slot's rect
+    in page viewport px (top-left origin) plus the page's viewport size.
+
+    Placement goes through the Console's own web view, never the window's
+    content view: the content view can extend under the title bar (full-size
+    content), which put the pane ~28pt too high and over its own header. The
+    rect is scaled by the web view's real size over the page's viewport size,
+    so text-size zoom cannot skew it, then converted into the superview."""
     global _design_wv
     win = _main_nswindow()
     if win is None:
@@ -890,21 +911,30 @@ def _design_pane(spec):
     try:
         from AppKit import NSWindowAbove
         from Foundation import NSMakeRect, NSURL, NSURLRequest
-        content = win.contentView()
         wv = _design_wv or _design_build()
-        if wv.superview() is None:
-            content.addSubview_positioned_relativeTo_(wv, NSWindowAbove, None)
+        page = _design_main_webview(win.contentView())
+        host = page.superview() if page is not None else win.contentView()
+        if wv.superview() is not host:
+            if wv.superview() is not None:
+                wv.removeFromSuperview()
+            host.addSubview_positioned_relativeTo_(wv, NSWindowAbove, page)
         url = spec.get("url")
         if url:
             wv.loadRequest_(NSURLRequest.requestWithURL_(NSURL.URLWithString_(str(url))))
         show = bool(spec.get("show"))
         w, h = float(spec.get("w") or 0), float(spec.get("h") or 0)
-        if not show or w < 2 or h < 2:
+        if not show or w < 2 or h < 2 or page is None:
             wv.setHidden_(True)
             return
-        H = content.bounds().size.height
-        x, y = float(spec.get("x") or 0), float(spec.get("y") or 0)
-        wv.setFrame_(NSMakeRect(x, H - (y + h), w, h))
+        pb = page.bounds()
+        vw, vh = float(spec.get("vw") or 0), float(spec.get("vh") or 0)
+        sx = pb.size.width / vw if vw else 1.0
+        sy = pb.size.height / vh if vh else 1.0
+        x, y = float(spec.get("x") or 0) * sx, float(spec.get("y") or 0) * sy
+        w, h = w * sx, h * sy
+        top_down = page.isFlipped()
+        r = NSMakeRect(x, y if top_down else pb.size.height - (y + h), w, h)
+        wv.setFrame_(page.convertRect_toView_(r, host))
         wv.setHidden_(False)
     except Exception as e:
         print("design: pane failed:", e, flush=True)
