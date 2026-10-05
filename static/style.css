@@ -459,6 +459,7 @@ body.log-drag #jumpBtn, body.log-drag .msg-actions, body.log-drag .copy-btn { vi
 }
 .think > summary::-webkit-details-marker { display: none; }
 .think .think-body { padding: 6px 10px; color: var(--md-sys-color-on-surface-variant); white-space: pre-wrap; font-size: 12px; }
+.think .think-wait { color: var(--dim); font-style: italic; }   /* summary not here yet: elapsed clock */
 
 /* a run of thinking + tool cards folds into one collapsed row (appendStep) */
 details.steps { border: 1px solid var(--line-soft); margin: 6px 0; }

@@ -867,6 +867,10 @@ class ClaudeSession:
         # so the UI's thinking cards render blank. "summarized" opts into a
         # readable summary of the reasoning. Visibility only — thinking runs
         # and bills the same either way; raw chain of thought is never sent.
+        # The summary is per STRETCH of thought: while a stretch runs the API
+        # sends nothing (no deltas, no thinking_tokens ticks), then streams the
+        # summary the instant the next tool call or text begins. The UI covers
+        # that silent window with a clock (app.js tickThinking).
         cmd += ["--thinking-display", "summarized"]
         # MIST's persona is NOT injected from a side file. It lives in the
         # Exobrain's CLAUDE.md ("Identity & Voice: MIST"), which `claude`

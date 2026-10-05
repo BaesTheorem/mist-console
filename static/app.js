@@ -1259,6 +1259,13 @@ function refreshSteps(group) {
     counts.set(k, (counts.get(k) || 0) + 1);
   });
   const parts = [...counts].map(([k, n]) => (n > 1 ? k + " ×" + n : k));
+  // A thinking card still waiting on its summary shows its clock here too: the
+  // group is collapsed by default, so this row is what Alex actually sees.
+  const live = group.querySelector(":scope > .steps-body > details.think.live");
+  if (live && live.dataset.live) {
+    const i = parts.findIndex((p) => p.startsWith("thinking"));
+    if (i >= 0) parts[i] = parts[i].replace("thinking", live.dataset.live); else parts.push(live.dataset.live);
+  }
   group.firstElementChild.textContent = items.length + (items.length === 1 ? " step" : " steps") + " · " + parts.join(", ");
 }
 
@@ -1289,6 +1296,7 @@ class Session {
     this.current = null;
     this.blocks = {};
     this.toolInputs = {};
+    this._openThink = null;   // thinking card still waiting on its summary (tickThinking)
     // FIFO of user-message elements (.msg) awaiting their reply. Each assistant
     // turn slots in right after the oldest unanswered one, so a reply to an
     // earlier message can't land below a message you sent while it was working.
@@ -1373,7 +1381,7 @@ class Session {
   // lived in the log (a replayed permission/task event must not act as live).
   wipeForReplay() {
     this.logEl.innerHTML = "";
-    this.current = null; this.blocks = {}; this.toolInputs = {};
+    this.current = null; this.blocks = {}; this.toolInputs = {}; this._openThink = null;
     this.unansweredUsers = []; this.splitPending = false;
     this.spinnerEl = null;               // it lived inside logEl; gone now
     this.bgTasks.clear();
@@ -1388,7 +1396,7 @@ class Session {
     if (this.es) { this.es.close(); this.es = null; }
     this.connected = false;
     this.logEl.innerHTML = "";
-    this.current = null; this.blocks = {}; this.toolInputs = {};
+    this.current = null; this.blocks = {}; this.toolInputs = {}; this._openThink = null;
     this.unansweredUsers = []; this.splitPending = false;
     this.spinnerEl = null;
     this.bgTasks.clear(); this.progressBars.clear(); this.agentModels.clear();
@@ -2317,6 +2325,7 @@ class Session {
     this.current = { body: this.addMsg("mist", "MIST", tsMs(ts), this.takeAnchor()) };
     this.blocks = {};
     this.toolInputs = {};
+    this._openThink = null;
   }
   // Which model actually wrote this turn. When the API declines a request it
   // re-runs it on a fallback model (Opus 4.8, as of 2026-09) and keeps routing
@@ -2365,6 +2374,7 @@ class Session {
     this.current = { body: this.addMsg("mist", "MIST", tsMs(ts)) };
     this.blocks = {};
     this.toolInputs = {};
+    this._openThink = null;
   }
   makeToolCard(name) {
     const card = el("details", "tool");     // collapsed by default; click to expand
@@ -2431,6 +2441,26 @@ class Session {
       }
     });
   }
+  // Live state of the thinking card that is still open (see content_block_start).
+  // n is the CLI's running estimate of thinking tokens; it only starts arriving
+  // with the summary, so before that the card shows the elapsed clock alone.
+  tickThinking(n) {
+    const b = this._openThink;
+    if (!b) return;
+    if (n) b.tokens = Math.max(b.tokens || 0, n);
+    const secs = Math.round((Date.now() - b.startedAt) / 1000);
+    if (b.wait) b.wait.textContent = "thinking… " + secs + "s";
+    this.labelThinking(b, secs);
+    const group = b.card.closest("details.steps");
+    if (group) refreshSteps(group);
+  }
+  labelThinking(b, secs) {
+    const parts = ["thinking"];
+    if (secs != null) parts.push(secs + "s");
+    if (b.tokens) parts.push("~" + (b.tokens >= 1000 ? (b.tokens / 1000).toFixed(1) + "k" : b.tokens) + " tokens");
+    b.sum.textContent = parts.join(" · ");
+    b.card.dataset.live = secs != null ? "thinking… " + secs + "s" : "";
+  }
   handleStreamEvent(ev) {
     const e = ev.event;
     if (!e) return;
@@ -2440,12 +2470,25 @@ class Session {
       this.maybeSplit(ev.ts);
       const idx = e.index, cb = e.content_block || {};
       if (cb.type === "thinking") {
+        // Summarized thinking display (bridge.py): the API sends NOTHING for a
+        // stretch of thought while it runs (no deltas, no token ticks), then
+        // streams a readable summary once the stretch ends, which is the
+        // instant the next tool call or text starts. Without a placeholder the
+        // card sat blank for the whole stretch and looked broken. Show a live
+        // elapsed clock until the first real delta lands (tickThinking).
         const d = el("details", "think");
-        d.appendChild(el("summary", null, "thinking"));
+        const sum = el("summary", null, "thinking");
+        d.appendChild(sum);
         const tb = el("div", "think-body");
+        const txt = el("span", "think-text");
+        const wait = this._replaying ? null : el("span", "think-wait", "thinking…");
+        tb.appendChild(txt);
+        if (wait) tb.appendChild(wait);
         d.appendChild(tb);
         appendStep(this.current.body, d);
-        this.blocks[idx] = { type: "thinking", el: tb };
+        const b = { type: "thinking", el: txt, card: d, sum, wait, startedAt: Date.now(), tokens: 0 };
+        this.blocks[idx] = b;
+        if (wait) { d.classList.add("live"); this._openThink = b; this.tickThinking(); }
       } else if (cb.type === "text") {
         // Each text block gets its own div, appended at its real stream
         // position, so text interleaves correctly with tool/thinking cards
@@ -2460,8 +2503,15 @@ class Session {
     } else if (e.type === "content_block_delta") {
       const b = this.blocks[e.index], d = e.delta || {};
       if (!b) return;
-      if (d.type === "thinking_delta") b.el.textContent += d.thinking || "";
-      else if (d.type === "text_delta") {
+      if (d.type === "thinking_delta") {
+        const t = d.thinking || "";
+        // Leading whitespace-only ticks arrive before the summary; skip them so
+        // the body does not open with blank lines.
+        if (!t.trim() && !b.el.textContent) return;
+        b.el.textContent += t;
+        if (b.wait) { b.wait.remove(); b.wait = null; }
+        if (d.estimated_tokens) this.tickThinking(d.estimated_tokens);
+      } else if (d.type === "text_delta") {
         b.text += d.text || "";
         // Throttle: md() over the WHOLE accumulated text on every few-char delta
         // is quadratic and was the WebContent memory balloon (2026-08-14, 34GB).
@@ -2488,12 +2538,21 @@ class Session {
         if (window.VOICE && VOICE.on) VOICE.onText(this, b, true);
         if (!this._replaying) { const em = crystalEmotionFrom(b.text); if (em) this.emotion = em; }
         if (window.MODS && b.text) MODS.siteAssistant(this, b.el, b.text, e.index === 0);
-      } else if (b && b.type === "thinking" && !b.el.textContent.trim()) {
-        // Thinking arrived with empty text (display "omitted" — the model
-        // default before we opted into "summarized", still replayed from old
-        // chats). A hollow THINKING card is noise; drop it.
+      } else if (b && b.type === "thinking") {
+        if (this._openThink === b) this._openThink = null;
+        if (b.wait) { b.wait.remove(); b.wait = null; }
+        b.el.textContent = b.el.textContent.trim();   // the summary ends in blank lines
         const card = b.el.closest("details.think");
-        if (card) { const group = card.closest("details.steps"); card.remove(); refreshSteps(group); }
+        if (!b.el.textContent) {
+          // Thinking ended with no summary at all (display "omitted" replayed
+          // from old chats, or a stretch the API chose not to summarize). A
+          // hollow THINKING card is noise; drop it.
+          if (card) { const group = card.closest("details.steps"); card.remove(); refreshSteps(group); }
+        } else if (card) {
+          card.classList.remove("live");
+          this.labelThinking(b);
+          refreshSteps(card.closest("details.steps"));
+        }
       }
     }
     this.scroll();
@@ -2631,6 +2690,7 @@ class Session {
         else if (o.subtype === "status" && o.status === "requesting") this.setStatus("thinking", "thinking");
         else if (o.subtype === "status" && o.status === "compacting") this.setStatus("thinking", "compacting…");
         else if (o.subtype === "compact_boundary") this.renderCompactBoundary(o);
+        else if (o.subtype === "thinking_tokens") { if (!this._replaying) this.tickThinking(o.estimated_tokens); }
         else if (window.MODS && MODS.system(this, o)) { /* ui_status / ui_toast / ui_log / ui_panes / hook_* (mods.js) */ }
         else this.handleBgSystem(o);   // task_started / task_progress / task_notification / task_updated
         break;
@@ -2729,6 +2789,7 @@ class Session {
         break;
       case "result":
         this.current = null;
+        this._openThink = null;   // an interrupted stretch never gets its stop event
         if (!this._replaying && this.emotion) {   // how the reply felt: the header crystal acts it out for a moment
           if (this.active) { crystal.emotion = this.emotion; crystal.emotionAt = Date.now(); }
           this.emotion = null;
@@ -3150,6 +3211,8 @@ setInterval(() => {
   const s = activeId && sessions.get(activeId);
   if (s && s.bgActiveCount() > 0) renderBgMonitor();
 }, 1000);
+// Tick the clock on every thinking card still waiting for its summary.
+setInterval(() => { sessions.forEach((s) => { if (s._openThink) s.tickThinking(); }); }, 1000);
 /* cycle MIST's spinner verbs in any working session's chat spinner (slow) */
 setInterval(() => {
   if (!SPINNER_VERBS.length) return;
