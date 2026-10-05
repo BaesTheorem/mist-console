@@ -13,6 +13,27 @@
   `qrcode.js` (from jsDelivr). Draws the phone-pairing QR code in the settings
   panel (`renderRemote` in app.js); used as a plain global (`qrcode(...)`).
 
+- `three.js` — [three.js](https://threejs.org/) r186 (0.186.1), MIT, bundled
+  as an IIFE exposing the global `THREE` with `OrbitControls`, `STLLoader`,
+  `ThreeMFLoader`, `OBJLoader` and `GLTFLoader` attached. `../model.js` loads it
+  lazily the first time a chat embeds a 3D model (`![name](/abs/part.stl)`).
+
+## Rebuilding three.js
+
+```bash
+mkdir /tmp/threebuild && cd /tmp/threebuild
+npm init -y && npm install three esbuild
+cat > entry.js <<'ENTRY'
+export * from 'three';
+export { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+export { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+export { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
+export { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+export { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+ENTRY
+./node_modules/.bin/esbuild entry.js --bundle --minify --format=iife --global-name=THREE --legal-comments=none --outfile=three.js
+```
+
 ## Rebuilding md.js
 
 ```bash

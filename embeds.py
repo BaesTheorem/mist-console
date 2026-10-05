@@ -37,7 +37,11 @@ INDEX_PATH = os.path.join(SNAP_DIR, "index.jsonl")
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm"}
-MEDIA_EXTS = IMG_EXTS | AUDIO_EXTS | VIDEO_EXTS
+# 3D models render inline through static/model.js (three.js). None of these
+# formats can carry script: STL is triangles, 3MF is zipped XML, OBJ is text,
+# glTF/GLB is JSON plus buffers.
+MODEL_EXTS = {".stl", ".3mf", ".obj", ".glb", ".gltf"}
+MEDIA_EXTS = IMG_EXTS | AUDIO_EXTS | VIDEO_EXTS | MODEL_EXTS
 # Types the WebView may render in the app's origin. Everything else is served
 # Content-Disposition: attachment, so a stray .html/.svg under an allowlisted
 # root can never execute same-origin.

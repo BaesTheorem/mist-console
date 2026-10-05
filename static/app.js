@@ -901,6 +901,18 @@ function _md(src) {
                    'title="Save to Downloads" aria-label="Save to Downloads">' + DL + '</button>' +
                '</span>';
       }
+      // 3D models (STL / 3MF / OBJ / glTF) embed as an inline turntable viewer.
+      // model.js hydrates the wrap (loads three.js on first use, draws into the
+      // canvas); the caption is filled with the measured size once loaded.
+      if (/\.(stl|3mf|obj|glb|gltf)(\?|$)/i.test(path)) {
+        const nm = esc(fileBaseName(path));
+        return '<span class="genmodel-wrap" data-model="' + src + '" data-name="' + nm + '">' +
+                 '<canvas class="genmodel" width="960" height="640" aria-label="3D model ' + nm + '"></canvas>' +
+                 '<span class="genmodel-cap">' + (alt || nm) + ' \u00b7 loading\u2026</span>' +
+                 '<button class="genimg-dl genmodel-dl" type="button" data-dl="' + src + '" ' +
+                   'title="Save to Downloads" aria-label="Save to Downloads">' + DL + '</button>' +
+               '</span>';
+      }
       // Video embeds as an inline player; WKWebView plays h264/aac natively.
       if (/\.(mp4|m4v|mov|webm)(\?|$)/i.test(path)) {
         return '<span class="genvideo-wrap">' +
@@ -6202,7 +6214,7 @@ logs.addEventListener("contextmenu", (e) => {
   // Images and file cards already know how to save themselves; reuse that path.
   // On media the data-dl lives on the corner button, which is a sibling of the
   // <img>/<audio>, so closest() alone misses it when you right-click the media.
-  const dlHost = e.target.closest("[data-dl], .genimg-wrap, .genaudio-wrap, .genvideo-wrap");
+  const dlHost = e.target.closest("[data-dl], .genimg-wrap, .genaudio-wrap, .genvideo-wrap, .genmodel-wrap");
   const dl = dlHost && (dlHost.matches("[data-dl]") ? dlHost : dlHost.querySelector("[data-dl]"));
   if (dl) {
     const src = dl.getAttribute("data-dl");
@@ -6601,6 +6613,27 @@ async function buildShareSnapshot(s) {
   clone.querySelectorAll(".spinner, .perm-actions, .copy-btn, .rc-cook-btn, .genimg-dl, "
     + ".msg-actions, .msg-edit, .msg-confirm, .notice-actions")
     .forEach((e) => e.remove());
+  // 3D viewers: canvas pixels do not survive cloneNode, so ask the live viewer
+  // (same DOM order as the clone) for a PNG of its current view. One that has
+  // not finished loading gets the usual stub.
+  const liveModels = Array.from(s.logEl.querySelectorAll(".genmodel-wrap"));
+  Array.from(clone.querySelectorAll(".genmodel-wrap")).forEach((w, i) => {
+    const png = window.MistModel && liveModels[i] ? window.MistModel.snapshotPNG(liveModels[i]) : null;
+    const d = document.createElement("div");
+    if (png) {
+      d.className = "genmodel-still";
+      const img = document.createElement("img");
+      img.src = png; img.alt = w.dataset.name || "3D model";
+      img.style.maxWidth = "min(480px, 100%)"; img.style.border = "1px solid var(--line)";
+      const cap = w.querySelector(".genmodel-cap");
+      d.appendChild(img);
+      if (cap) { const c = document.createElement("div"); c.className = "share-omitted"; c.textContent = cap.textContent + " \u00b7 still image of the 3D view"; d.appendChild(c); }
+    } else {
+      d.className = "share-omitted";
+      d.textContent = "3D model \u00b7 not included in the shared copy";
+    }
+    w.replaceWith(d);
+  });
   // A loop player is a live Web Audio control (its fallback holds an <audio>):
   // the shared page gets the same stub as other media.
   clone.querySelectorAll(".genloop-wrap").forEach((w) => {

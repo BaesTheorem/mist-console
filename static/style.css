@@ -898,6 +898,34 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   border: 1px solid var(--line); background: #000;
 }
 .genvideo-wrap:hover .genvideo-dl { opacity: 1; }
+/* Inline 3D model viewer (model.js): a 2D canvas the shared WebGL renderer
+   blits into. Caption bottom-left, tools top-left on hover, same corner
+   download chrome as images. */
+.genmodel-wrap { position: relative; display: inline-block; line-height: 0; margin: 6px 0; max-width: 100%; }
+.genmodel {
+  display: block; width: min(480px, 100%); aspect-ratio: 3 / 2; height: auto;
+  border: 1px solid var(--line); background: var(--surface);
+  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.genmodel:active { cursor: grabbing; }
+.genmodel-wrap.is-loading .genmodel { cursor: progress; }
+.genmodel-cap {
+  position: absolute; left: 0; bottom: 0; max-width: 100%; box-sizing: border-box;
+  padding: 4px 8px; font-size: 11px; line-height: normal; color: var(--dim);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+.genmodel-wrap.is-error .genmodel-cap { color: var(--err); }
+.genmodel-tools { position: absolute; top: 6px; left: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.12s; }
+.genmodel-wrap:hover .genmodel-tools, .genmodel-wrap:focus-within .genmodel-tools { opacity: 1; }
+.genmodel-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--text); cursor: pointer;
+}
+.genmodel-btn:hover { background: var(--hover); }
+.genmodel-btn .msi { font-size: 16px; }
+.genmodel-wrap:hover .genmodel-dl { opacity: 1; }
 /* Any-file attachment card: the whole card is the save-to-Downloads button. */
 .genfile {
   display: inline-flex; align-items: center; gap: 8px;

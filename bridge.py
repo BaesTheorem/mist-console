@@ -589,6 +589,19 @@ CHECKLIST_PROMPT = (
     "yourself, and never pre-tick a box (`- [x]`) unless the item is already done."
 )
 
+# 3D models embed as an orbitable viewer (static/model.js + vendor/three.js);
+# this prompt is how the model learns to show a part instead of a render of it.
+MODEL_PROMPT = (
+    "This Console renders 3D models inline. `![name](/abs/path.stl)` (also .3mf, "
+    ".obj, .glb, .gltf) becomes a turntable viewer Alex can orbit, zoom and reset, "
+    "with the part's measured size in mm in the caption and a Save to Downloads "
+    "button. Use it whenever you design or inspect a printable part or any mesh: "
+    "embed the model file itself, not just a rendered PNG. The file must sit under "
+    "the harness root (for example `3dprint/out/`), and the path is written RAW with "
+    "literal spaces, never percent-encoded. Embed each part of a multi-part print "
+    "separately."
+)
+
 # The Console renders a real, in-place progress element (see /progress + the
 # `progress` event), so a long download/upload/install never looks like a hang.
 # Every session gets the `mist-progress` CLI on PATH plus the env vars it needs
@@ -885,7 +898,7 @@ class ClaudeSession:
         # are untouched, and we don't edit CLAUDE.md.
         cmd += ["--append-system-prompt",
                 NO_VOICE_PROMPT + "\n\n" + PROGRESS_PROMPT + "\n\n" + RECIPE_PROMPT
-                + "\n\n" + CHECKLIST_PROMPT]
+                + "\n\n" + CHECKLIST_PROMPT + "\n\n" + MODEL_PROMPT]
         return cmd
 
     def ensure_started(self):
