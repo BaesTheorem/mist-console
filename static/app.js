@@ -38,6 +38,18 @@ function shellStream(state) {
   } catch (_) {}
 }
 
+// On the phone "save" means the phone, not the Mac's Downloads folder: the
+// shell downloads the file itself (bearer auth, see ConsoleWebView.swift) and
+// opens the share sheet. True when the message was handed over.
+function shellSave(url, name) {
+  try {
+    const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mist;
+    if (!IS_SHELL || !h) return false;
+    h.postMessage({ type: "save", url: String(url), name: String(name || "") });
+    return true;
+  } catch (_) { return false; }
+}
+
 // Auto-grow the composer to fit its text, capped at 200px. Show the scrollbar
 // ONLY once we hit that cap. Without this, WebKit's custom (non-overlay)
 // scrollbar reserves a gutter even on a single line that already fits.
@@ -2780,10 +2792,6 @@ class Session {
         // A download/upload/install reporting itself. Same id = same element.
         this.handleProgress(o);
         break;
-      case "design":
-        // MIST (bin/mist-design) pointing this chat's Claude Design pane at a project.
-        if (window.DESIGN) DESIGN.event(this, o);
-        break;
       case "status_idle":
         // An out-of-band action (auth flow) finished; clear the thinking spinner.
         this.setStatus("idle", "idle");
@@ -3990,7 +3998,7 @@ function switchTo(id) {
   if (!isTouch()) input.focus();   // on a phone this would raise the keyboard on every switch
   reportActiveChat();   // AirDropped photos follow the chat you switch to
   if (window.MODS) MODS.switched(s);   // this chat's status lines, panes, band, suggestion
-  if (window.DESIGN) DESIGN.switched(s);   // this chat's Claude Design project in the pane
+  if (window.ARTIFACTS) ARTIFACTS.switched(s);   // this chat's artifacts in the drawer
 }
 async function createSession() {
   const r = await fetch("/sessions", { method: "POST" });
@@ -4193,20 +4201,25 @@ function jumpToBookmark(b) {
       s.notice("That bookmarked message isn't in this chat any more (it was rewound away, or the chat was imported without positions).");
       return;
     }
-    s.stick = false;   // stop following the bottom; the reader is going back
-    m.scrollIntoView({ block: "center" });
-    // content-visibility: auto sizes off-screen messages lazily, so a second
-    // pass after layout lands exactly on the message.
-    requestAnimationFrame(() => { m.scrollIntoView({ block: "center" }); updateJumpBtn(); });
-    m.classList.remove("bm-flash");
-    void m.offsetWidth;
-    m.classList.add("bm-flash");
-    setTimeout(() => m.classList.remove("bm-flash"), 1800);
+    revealMessage(s, m);
   };
   if (s._replaying) s._afterReplay.push(go); else go();
 }
+// Scroll a message of chat `s` to the centre and flash its outline.
+function revealMessage(s, m) {
+  s.stick = false;   // stop following the bottom; the reader is going back
+  m.scrollIntoView({ block: "center" });
+  // content-visibility: auto sizes off-screen messages lazily, so a second
+  // pass after layout lands exactly on the message.
+  requestAnimationFrame(() => { m.scrollIntoView({ block: "center" }); updateJumpBtn(); });
+  m.classList.remove("bm-flash");
+  void m.offsetWidth;
+  m.classList.add("bm-flash");
+  setTimeout(() => m.classList.remove("bm-flash"), 1800);
+}
 function openBookmarks() {
   $("#capPanel").hidden = true;
+  $("#artPanel").hidden = true;
   closeAnchoredCards();
   $("#bmPanel").hidden = false;
   renderBookmarks();      // instant, from the registry
@@ -4836,6 +4849,7 @@ $("#settingsBtn").addEventListener("click", () => {
   loadRemote();                            // phone section: remote access + pairing
   if (window.MODS) { MODS.loadModsPanel(); MODS.loadFlagsPanel(); }   // mods + claude flags sections
   $("#bmPanel").hidden = true;
+  $("#artPanel").hidden = true;
   refreshNotifsSection();                  // notifications live as a settings section
   closeAnchoredCards();
   $("#capPanel").hidden = false;
@@ -5583,7 +5597,7 @@ function closeTopOverlay() {
   if (closeRailDrawer()) return true;   // phone: the chat drawer sits over everything
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
-  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#usageCard", "#shareCard", "#diffCard", "#capPanel", "#bmPanel"]) {
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#usageCard", "#shareCard", "#diffCard", "#capPanel", "#bmPanel", "#artPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }
@@ -5764,6 +5778,14 @@ async function saveToDownloads(src, btn) {
   const qs = new URLSearchParams(src.slice(src.indexOf("?") + 1));
   const path = qs.get("path");
   if (!path) return;
+  if (IS_SHELL && shellSave(src, fileBaseName(path))) {
+    // the phone's share sheet takes it from here (Save Image, Save to Files, AirDrop)
+    if (btn && !btn.classList.contains("lightbox-btn")) {
+      btn.classList.add("saved");
+      setTimeout(() => btn.classList.remove("saved"), 1500);
+    }
+    return;
+  }
   const at = Number(qs.get("at")) || undefined;
   const isText = btn && btn.classList.contains("lightbox-btn");
   const orig = isText && btn ? btn.textContent : "";
@@ -7190,6 +7212,7 @@ function openChatSheet() {
       grid.appendChild(b);
     };
     cell("ios_share", "Share", () => openShareCard(anchor));
+    cell("perm_media", "Artifacts", () => { if (window.ARTIFACTS) ARTIFACTS.open(); });
     cell("difference", "Diff", () => { const b = $("#diffBtn"); if (b) b.click(); });
     cell("edit", "Rename", async () => {
       const v = window.prompt("Rename this chat", s.title || "");

@@ -55,6 +55,8 @@ targets:
         NSBonjourServices:
           - _http._tcp
         NSCameraUsageDescription: The camera reads the pairing QR code shown in the Console's settings on the Mac.
+        # "Save Image" in the share sheet (ArtifactSaver.swift) writes to Photos.
+        NSPhotoLibraryAddUsageDescription: Save Image in the share sheet puts an image MIST made into your photo library.
         # The icon's long-press menu (QuickActions.swift routes it).
         UIApplicationShortcutItems:
           - UIApplicationShortcutItemType: com.alexhedtke.mistconsole.new

@@ -287,6 +287,16 @@ The player keeps its data in a registry (`loopPlayers` in `app.js`) and not in t
 
 Each viewer renders straight into its own WebGL canvas. WebKit permits approximately 16 live contexts and a long chat can hold more embeds than that, so at most four viewers hold a context at one time. A viewer takes a context when it enters the viewport and gives it back when it leaves, when the pool is full, or after 20 seconds without a frame. A parked viewer shows a PNG still of its last frame. The turntable runs at 30 frames per second for 8 seconds after load or a reset, at pixel ratio 1 while it moves, then stops and draws one frame at full device resolution. An idle page draws nothing. Units are read as millimetres. STL and 3MF are Z-up; OBJ and glTF are Y-up and are rotated onto the same floor. A share snapshot replaces the viewer with a PNG of its current view (`window.MistModel.snapshotPNG`).
 
+### Artifacts drawer
+
+The `perm_media` button in the top bar opens a drawer of everything MIST made in the active chat: every image, audio clip, video, 3D model, HTML page and other file she embedded with `![name](/abs/path)`. `static/artifacts.js` reads the chat's own bubbles (the `.genimg-wrap`, `.genaudio-wrap`, `.genvideo-wrap`, `.genmodel-wrap` and `.genfile` elements the markdown pass emits), so the drawer needs no server state, follows the active chat, and stays correct through stream re-renders and replays (a `MutationObserver` on the transcript schedules a rescan). One tile per distinct file, newest first, with a filter row by kind and a count on the button.
+
+A tile's thumbnail opens the artifact: a lightbox for an image, a preview for an HTML page, the message itself for the rest. Its buttons jump to the message and save the file. A 3D tile shows the viewer's current frame (`MistModel.snapshotPNG`).
+
+HTML previews go through `GET /preview?path=...&at=...`, which serves `.html`, `.htm` and `.svg` with a CSP `sandbox` header (no `allow-same-origin`), inside an iframe that carries its own `sandbox` attribute. The page thus runs in an opaque origin: no Console cookies, no localStorage, and its requests arrive with `Origin: null`, which `_remote_guard` in `app.py` refuses for any state-changing method, from loopback too. `/file` keeps serving these types as attachments. Tests: `tests/test_preview.py`.
+
+On a phone the same panel is full width. It opens from the chat-details sheet (tap the title, then **Artifacts**) or with a swipe in from the right edge; a save there goes to the phone (see the iPhone section).
+
 ## Conversation mode (talk to MIST, hear her answer)
 
 The sound-wave button in the composer opens a column beside the chat (design:
@@ -486,6 +496,27 @@ What changed on the server for it (`remote.py`, the `/remote/*` routes):
   phone until the rule is changed in System Settings, Network, Firewall.
 - `MIST_CONSOLE_PORT` tells `remote.py` which port a test instance answers
   on, so its tunnel points at itself and not at the live Console.
+
+### Parity with the Mac
+
+The phone is the same page, so a feature is on the phone the moment it ships, unless the phone layout hides it or it depends on a Mac-only affordance (hover, a native window, the Mac's file system). **Every change to the Console ships with its phone path in the same commit**, and this table is where that path is recorded. A row with "gap" is a known hole, not a decision.
+
+| Feature | Mac | Phone (under 760px, or the iOS shell) |
+| --- | --- | --- |
+| Chat list | rail | drawer (menu button, swipe from the left edge) |
+| Model, permissions, thinking, usage, share, diff, rename, pin, delete | top-bar badges and cards | chat-details sheet (tap the title) |
+| Message actions | hover icons | long-press sheet |
+| Bookmarks | composer button | drawer footer, **Saved** |
+| Settings | gear | drawer footer, **Settings** |
+| Artifacts drawer | top-bar button | chat-details sheet, **Artifacts**, or swipe from the right edge |
+| Inline images, audio, video, recipe cards, task checkboxes, progress bars | inline | inline, same markup |
+| 3D models | drag orbits, wheel zooms, double-click resets, tools on hover | one finger orbits, pinch zooms, double-tap resets, tools always shown (`@media (hover: none)`) |
+| Save a file | copies into the Mac's `~/Downloads` | the shell downloads it over the pairing token and opens the share sheet (`ArtifactSaver.swift`, `shellSave` in app.js) |
+| HTML preview | sandboxed frame, plus "Open in browser" | sandboxed frame only (Safari has no cookie) |
+| Conversation mode | column beside the chat | gap: the pane is hidden on phones |
+| Mod panes | dock beside the chat | gap: the dock is hidden on phones |
+| Repo switching | repo badge | gap: needs a folder picker |
+| Quick access (double-tap Option) | always-on agent | widgets and the icon's long-press menu |
 
 ## Archive tier (data/ growth)
 

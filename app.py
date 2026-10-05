@@ -27,7 +27,6 @@ from flask import Flask, Response, abort, jsonify, redirect, request, send_file,
 
 import archive
 import bookmarks
-import design
 import notifchat
 import embeds
 import quickaccess
@@ -75,8 +74,27 @@ except Exception:
 # Loopback requests are what they always were (the desktop window, mist-progress,
 # notification replies, scripts inside a chat); anything else needs remote
 # access switched on AND the cookie/bearer from /remote/login.
+# Pages served by /preview (an HTML artifact in the drawer) run in an opaque
+# origin: a sandboxed frame plus a CSP sandbox header. Browsers mark anything
+# such a page sends as Origin: null (and Sec-Fetch-Site: cross-site), and a
+# loopback request would otherwise pass is_local(). State changes from there
+# are refused before any route sees them; the Console's own page is same-origin
+# and never carries either marker, and CLIs (curl, mist-progress) send neither.
+_MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _foreign_origin(req):
+    if req.method not in _MUTATING:
+        return False
+    if req.headers.get("Origin", "").strip().lower() == "null":
+        return True
+    return req.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site"
+
+
 @app.before_request
 def _remote_guard():
+    if _foreign_origin(request):
+        return jsonify({"error": "cross-origin request refused"}), 403
     if remote.is_local(request):
         return None
     if request.path in remote.PUBLIC_PATHS:
@@ -746,6 +764,35 @@ def serve_local_file():
                      as_attachment=(request.args.get("download") == "1" or not inline_ok),
                      download_name=name,
                      conditional=True)
+
+
+# What the artifacts drawer may show in a frame. /file serves these as
+# attachments on purpose (a same-origin page under an allowlisted root could
+# drive the Console); here the page lands in a sandboxed, opaque origin instead.
+_PREVIEW_EXTS = {".html", ".htm", ".svg"}
+
+
+@app.route("/preview")
+def preview_file():
+    """An HTML or SVG artifact rendered inside the Console, sandboxed.
+
+    Same path/at lookup as /file. The response carries a CSP `sandbox` (no
+    allow-same-origin), so the document runs in a unique origin: no cookies,
+    no localStorage of the Console, and its fetches arrive as Origin: null,
+    which _remote_guard refuses for anything that changes state. The frame in
+    artifacts.js adds its own sandbox attribute; both hold on their own."""
+    path, name = _versioned_path(request.args.get("path", ""),
+                                 request.args.get("at", type=float))
+    if not path or not name:
+        return abort(404)
+    if os.path.splitext(name)[1].lower() not in _PREVIEW_EXTS:
+        return abort(415)
+    resp = send_file(path, as_attachment=False, download_name=name, conditional=True)
+    resp.headers["Content-Security-Policy"] = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.route("/save-to-downloads", methods=["POST"])
@@ -1705,48 +1752,6 @@ def stop_bg_task(sid, task_id):
     if not s.stop_task(task_id):
         return jsonify({"ok": False, "error": "backend not running"}), 409
     return jsonify({"ok": True})
-
-
-@app.route("/design")
-def design_info():
-    """What the design pane shows for a chat: the Claude Design project linked
-    from that chat's working directory (design/claude-design.json), or the Design
-    home when the repo has none yet."""
-    sid = request.args.get("session")
-    s = _sessions.get(sid) if sid else None
-    return jsonify(design.pane_info(s.cwd if s else HARNESS))
-
-
-@app.route("/design/<sid>", methods=["POST"])
-def design_open(sid):
-    """Point chat <sid>'s design pane at a project and show it.
-
-    Body: {project?: "<id or claude.ai/design/p/<id> URL>", name?, show?: bool,
-           link?: bool}. With `link` the project is also recorded in the chat's
-    repo (design/claude-design.json), so later chats in that repo open the same
-    canvas. The address of the chat lives in $MIST_CONSOLE_SESSION inside every
-    session's shell; bin/mist-design is the front end."""
-    s = _sessions.get(sid)
-    if not s:
-        return jsonify({"ok": False, "error": "no such session"}), 404
-    body = request.get_json(silent=True) or {}
-    ref = body.get("project") or body.get("url")
-    if body.get("link") and ref:
-        try:
-            design.write_link(s.cwd, ref, name=body.get("name"),
-                              design_system=body.get("design_system"))
-        except ValueError as e:
-            return jsonify({"ok": False, "error": str(e)}), 400
-    info = design.pane_info(s.cwd)
-    if ref and not body.get("link"):
-        pid = design.parse_project(ref)
-        if not pid:
-            return jsonify({"ok": False, "error": "not a Claude Design project id or URL"}), 400
-        info["url"] = design.project_url(pid)
-        info["project"] = pid
-    s.design_pane({"url": info["url"], "project": info.get("project"),
-                   "name": info.get("name"), "show": body.get("show", True)})
-    return jsonify({"ok": True, **info})
 
 
 @app.route("/progress/<sid>", methods=["POST"])

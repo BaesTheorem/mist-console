@@ -42,6 +42,7 @@ Sources/Model/Pairing.swift     mist://pair?d=<base64url json> parser
 Sources/Model/ServerStore.swift the paired Mac: urls + name (UserDefaults), token (Keychain)
 Sources/Model/Probe.swift       ping / login / config / discovery requests
 Sources/Model/ConsoleLink.swift connection state machine (probe -> login -> load)
+Sources/Model/ArtifactSaver.swift a page "save" -> download with the token -> share sheet
 Sources/Views/ConsoleWebView    the page; logs in with a form POST so the cookie lands in WK's jar
 Sources/Views/ConsoleScreen     web view + status overlay (finding / unreachable / not paired)
 Sources/Views/PairView          first run: scan the QR, paste the link, or type url + token
@@ -50,6 +51,21 @@ Sources/Views/SettingsView      the shell's own settings: addresses, re-pair, fo
 Sources/QuickActions.swift      the icon's long-press "New chat" item -> mist://new
 MISTWidget/Sources/MISTWidget   WidgetKit extension: the two launcher widgets
 ```
+
+## Saving a file to the phone
+
+The page's save buttons (an image's corner button, the lightbox, the artifacts
+drawer) copy the file into the Mac's Downloads folder. In the shell that is the
+wrong device, so `app.js` posts `{type:"save", url, name}` to the `mist`
+message handler instead (`shellSave`), and `ArtifactSaver.swift` downloads the
+file with the pairing token as a bearer and opens the share sheet: Save Image,
+Save to Files, AirDrop, or any app that takes the type.
+
+## Parity with the Mac
+
+A Console feature must work here the day it ships. The table under "Parity
+with the Mac" in the main README records each feature's phone path, and a
+change to the Console updates that table in the same commit.
 
 ## Widgets (Lock Screen and Home Screen)
 

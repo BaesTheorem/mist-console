@@ -83,12 +83,26 @@ struct ConsoleWebView: UIViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
-            guard message.name == "mist",
-                  let body = message.body as? [String: Any],
-                  body["type"] as? String == "stream",
-                  let state = body["state"] as? String else { return }
-            let link = self.link
-            Task { @MainActor in link?.streamChanged(up: state == "up") }
+            guard message.name == "mist", let body = message.body as? [String: Any] else { return }
+            switch body["type"] as? String {
+            case "stream":
+                guard let state = body["state"] as? String else { return }
+                let link = self.link
+                Task { @MainActor in link?.streamChanged(up: state == "up") }
+            case "save":
+                // A "save" on the page (an image's corner button, the lightbox,
+                // the artifacts drawer): fetch the file from the Mac and hand it
+                // to the share sheet, so it lands on the phone (Photos, Files,
+                // AirDrop) instead of in the Mac's Downloads folder.
+                guard let path = body["url"] as? String, let wv = webView,
+                      let base = link?.base else { return }
+                let name = (body["name"] as? String) ?? ""
+                Task { @MainActor in
+                    await ArtifactSaver.save(path: path, name: name, base: base, over: wv)
+                }
+            default:
+                return
+            }
         }
 
         // mist: links are the page talking to the shell; foreign links go to Safari.

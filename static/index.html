@@ -50,7 +50,7 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
     <span class="badge usage clickable" id="r7d" title="7-day limit used · click for every window + this chat's cost">7d —</span>
   </div>
   <div class="actions">
-    <md-icon-button id="designBtn" touch-target="none" title="Claude Design · this chat's design project beside the chat" aria-label="Claude Design pane" aria-pressed="false"><md-icon>design_services</md-icon></md-icon-button>
+    <md-icon-button id="artBtn" touch-target="none" title="Artifacts · every image, audio clip, video, 3D model and file made in this chat" aria-label="Artifacts" aria-pressed="false"><md-icon>perm_media</md-icon></md-icon-button>
     <md-icon-button id="settingsBtn" touch-target="none" title="Settings · active MCP servers + tools" aria-label="Settings"><md-icon>settings</md-icon></md-icon-button>
   </div>
   <md-icon-button id="phoneNew" class="phone-only" touch-target="none" title="New chat" aria-label="New chat"><md-icon>edit_square</md-icon></md-icon-button>
@@ -166,27 +166,6 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
         <button id="voiceMic" type="button" class="voice-ib" aria-label="Microphone"><span id="voiceMicIcon" class="msi">mic</span></button>
         <span class="voice-spacer"></span>
         <button id="voiceEnd" type="button" class="voice-end" title="End conversation mode"><span class="msi">call_end</span>end</button>
-      </div>
-    </div>
-  </aside>
-  <!-- Claude Design beside the chat. The header is HTML; the body is an empty
-       slot a native WKWebView (desktop.py) covers, because claude.ai refuses to
-       be framed. In a browser or the iOS shell the slot shows a link instead. -->
-  <div id="designResize" title="Drag to resize the design pane · double-click to reset"></div>
-  <aside id="designDock" hidden>
-    <div id="designHead">
-      <span class="msi">design_services</span>
-      <span id="designTitle">claude design</span>
-      <span id="designName" class="design-name"></span>
-      <span class="design-spacer"></span>
-      <button id="designReload" class="xclose" title="Reload"><span class="msi">refresh</span></button>
-      <button id="designExt" class="xclose" title="Open in the browser"><span class="msi">open_in_new</span></button>
-      <button id="designClose" class="xclose" title="Close the design pane" aria-label="Close"><span class="msi">close</span></button>
-    </div>
-    <div id="designBody">
-      <div id="designFallback" class="design-fallback" hidden>
-        <p>The Claude Design pane needs the Mac app. Open the project in the browser instead.</p>
-        <a id="designFallbackLink" href="https://claude.ai/design" target="_blank" rel="noopener">claude.ai/design</a>
       </div>
     </div>
   </aside>
@@ -317,6 +296,22 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
   <div class="capBody" id="bmList"></div>
 </aside>
 
+<!-- Artifacts: everything MIST made in the active chat (images, audio, video,
+     3D models, HTML and other files), as a side drawer. artifacts.js fills it
+     from the chat's own bubbles, so it needs no server and stays per chat. -->
+<aside id="artPanel" hidden>
+  <div class="capHead">artifacts <span class="count" id="nArtifacts"></span><button id="artClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
+  <div class="art-filters" id="artFilters" role="tablist">
+    <button class="art-tab sel" role="tab" data-kind="all" aria-selected="true">all</button>
+    <button class="art-tab" role="tab" data-kind="image" aria-selected="false">images</button>
+    <button class="art-tab" role="tab" data-kind="audio" aria-selected="false">audio</button>
+    <button class="art-tab" role="tab" data-kind="video" aria-selected="false">video</button>
+    <button class="art-tab" role="tab" data-kind="model" aria-selected="false">3D</button>
+    <button class="art-tab" role="tab" data-kind="file" aria-selected="false">files</button>
+  </div>
+  <div class="capBody" id="artList"></div>
+</aside>
+
 <aside id="bgMonitor" hidden></aside>
 
 <!-- Right-click menu for the transcript. Built by app.js on each open; lives here
@@ -355,6 +350,6 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
 <script src="vendor/vad/bundle.min.js"></script>
 <script src="voice.js"></script>
 <script src="mods.js"></script>
-<script src="design.js"></script>
+<script src="artifacts.js"></script>
 </body>
 </html>

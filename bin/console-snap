@@ -9,11 +9,12 @@ system WKWebView (the desktop app's real engine; Playwright's WebKit is not).
     bin/console-snap OUTDIR 1440,1240,1040 [ZOOM] [JS] [SELECTOR]
 
 ZOOM defaults to the value in data/textsize.json. JS, if given, runs once
-after load (inject a busy status, a long badge, whatever the bug needs).
+after load (inject a busy status, a long badge, whatever the bug needs);
+CONSOLE_SNAP_SETTLE=<seconds> is how long the page then gets to settle.
 SELECTOR defaults to #topbar. Renders off screen, no focus steal; the window
 sits at x=-4000 with a Prohibited activation policy.
 """
-import sys, json, pathlib
+import os, sys, json, pathlib
 from Foundation import NSURL, NSURLRequest, NSRunLoop, NSDate, NSMakeRect
 from AppKit import NSApplication, NSWindow, NSBitmapImageRep, NSPNGFileType, NSApplicationActivationPolicyProhibited
 from WebKit import WKWebView, WKWebViewConfiguration, WKSnapshotConfiguration
@@ -63,7 +64,8 @@ pump(4)
 js(wv, f"document.documentElement.style.zoom='{ZOOM}'")
 pump(1.5)
 if len(sys.argv) > 4:
-    js(wv, sys.argv[4]); pump(0.5)
+    # CONSOLE_SNAP_SETTLE (seconds) gives a chat switch or replay time to land
+    js(wv, sys.argv[4]); pump(float(os.environ.get("CONSOLE_SNAP_SETTLE", "0.5")))
 for w in WIDTHS:
     win.setFrame_display_(NSMakeRect(-4000, 0, w, 500), True)
     wv.setFrame_(NSMakeRect(0, 0, w, 500))

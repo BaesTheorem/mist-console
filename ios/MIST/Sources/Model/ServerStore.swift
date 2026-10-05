@@ -20,6 +20,10 @@ final class ServerStore: ObservableObject {
 
     init() { load() }
 
+    /// The pairing token for code outside the SwiftUI tree (ArtifactSaver's
+    /// download). Same Keychain item the store reads on launch.
+    nonisolated static func currentToken() -> String? { Keychain.get("pairing-token") }
+
     private func load() {
         guard let data = UserDefaults.standard.data(forKey: key),
               let s = try? JSONDecoder().decode(Stored.self, from: data),

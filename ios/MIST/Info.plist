@@ -44,6 +44,8 @@
 	<array>
 		<string>_http._tcp</string>
 	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save Image in the share sheet puts an image MIST made into your photo library.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>The camera reads the pairing QR code shown in the Console's settings on the Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>

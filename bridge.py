@@ -1852,12 +1852,6 @@ class ClaudeSession:
                 "here as is.")
 
     # ---- progress bars -----------------------------------------------------
-    def design_pane(self, payload):
-        """Tell the page to show this chat's design pane at a URL. Live only
-        (not recorded): the pane's state is the repo's link file, not the
-        transcript, so a replay never reopens it."""
-        self._broadcast({"type": "design", **payload}, record=False)
-
     def progress(self, payload):
         """Update one in-place progress bar in this chat. `payload` is the parsed
         body of POST /progress/<sid>: {id, label, status, pct, current, total,

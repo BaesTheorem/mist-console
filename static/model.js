@@ -4,7 +4,8 @@
    data-name="part.stl"> around a <canvas>. This file hydrates every such wrap
    it sees (a MutationObserver on the document, so it works for streamed,
    replayed and imported bubbles alike), loads the mesh through three.js and
-   draws it as a slow turntable. Drag orbits, wheel zooms, double-click resets.
+   draws it as a slow turntable. Drag orbits, wheel (or pinch) zooms, a
+   double-click or double-tap resets.
 
    Cost model. Each viewer renders straight into its own WebGL canvas (no
    readback, no blit). WebKit allows about 16 live contexts, so at most
@@ -263,6 +264,17 @@
       controls.addEventListener("change", () => schedule(st));
       st.controls = controls;
       stage.addEventListener("dblclick", () => resetView(st));
+      // Touch: WebKit sends no dblclick on a touch-action:none stage, so two
+      // taps within 300 ms (and no drag between) reset the view, same as a
+      // double-click on the Mac.
+      let lastTap = 0, tapX = 0, tapY = 0;
+      stage.addEventListener("pointerdown", (e) => { if (e.pointerType === "touch") { tapX = e.clientX; tapY = e.clientY; } });
+      stage.addEventListener("pointerup", (e) => {
+        if (e.pointerType !== "touch") return;
+        if (Math.abs(e.clientX - tapX) > 12 || Math.abs(e.clientY - tapY) > 12) { lastTap = 0; return; }
+        const now = performance.now();
+        if (now - lastTap < 300) { lastTap = 0; resetView(st); } else lastTap = now;
+      });
       const tools = document.createElement("span");
       tools.className = "genmodel-tools";
       tools.appendChild(toolButton("center_focus_weak", "Reset view", () => resetView(st)));
