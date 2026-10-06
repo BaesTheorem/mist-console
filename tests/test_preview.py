@@ -63,3 +63,9 @@ def test_opaque_origin_cannot_mutate():
     r = client.post("/sessions", headers={"Sec-Fetch-Site": "same-origin"})
     assert r.status_code == 200
     client.delete("/sessions/" + r.get_json()["id"])
+
+
+def test_phone_login_with_null_origin_reaches_the_token_check():
+    # The iPhone app's WKWebView sends its login form POST as Origin: null.
+    r = client.post("/remote/login", headers={"Origin": "null"}, data={"token": "wrong", "next": "/"})
+    assert r.status_code != 403 or b"cross-origin" not in r.data

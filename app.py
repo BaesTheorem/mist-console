@@ -83,8 +83,15 @@ except Exception:
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
 
+# /remote/login is exempt: the iPhone app logs in by loading a form POST into a
+# fresh WKWebView, and WebKit sends a navigation with no initiating page as
+# Origin: null. The login needs the pairing token in its body, so a sandboxed
+# page gains nothing from reaching it.
+_ORIGIN_EXEMPT = {"/remote/login"}
+
+
 def _foreign_origin(req):
-    if req.method not in _MUTATING:
+    if req.method not in _MUTATING or req.path in _ORIGIN_EXEMPT:
         return False
     if req.headers.get("Origin", "").strip().lower() == "null":
         return True
