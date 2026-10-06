@@ -252,7 +252,7 @@ the other macOS 26 landmines live in the harness `mist-notifier/README.md`.
 
 ## Inline media (versioned embeds)
 
-A reply embeds a local file as `![alt](/abs/path.png)`; the page loads it through
+A reply embeds a local file as `![alt](/abs/path.png)`. A `.pdf` embed renders in the WebView's own PDF viewer inside the bubble, with the attachment card under it as the caption and save button; the page loads it through
 `GET /file?path=...` (allowlisted roots and extension rules in `embeds.py`).
 Two kinds of root: full roots (Downloads, the vault's Attachments, the harness)
 serve any non-hidden, non-credential file, and media-only roots (`~/Documents`,
@@ -522,6 +522,7 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | Artifacts drawer | top-bar button | chat-details sheet, **Artifacts**, or swipe from the right edge |
 | Inline images, audio, video, recipe cards, task checkboxes, progress bars, per-turn time stamps | inline | inline, same markup |
 | 3D models | drag orbits, wheel zooms, double-click resets, tools on hover | one finger orbits, pinch zooms, double-tap resets, tools always shown (`@media (hover: none)`) |
+| PDFs | inline viewer in the bubble, 520px tall, attachment card under it; drawer tile opens a full-size preview | same viewer at 60vh; scrolling inside the frame scrolls the PDF, outside it scrolls the chat |
 | Save a file | copies into the Mac's `~/Downloads` | the shell downloads it over the pairing token and opens the share sheet (`ArtifactSaver.swift`, `shellSave` in app.js) |
 | HTML preview | sandboxed frame, plus "Open in browser" | sandboxed frame only (Safari has no cookie) |
 | Conversation mode | column beside the chat | gap: the pane is hidden on phones |

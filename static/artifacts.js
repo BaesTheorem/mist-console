@@ -99,7 +99,7 @@
   function thumb(it) {
     const b = el("button", "art-thumb");
     b.type = "button";
-    b.title = it.kind === "image" ? "Open" : it.html ? "Preview" : "Show in the chat";
+    b.title = it.kind === "image" ? "Open" : (it.html || it.ext === "pdf") ? "Preview" : "Show in the chat";
     if (it.kind === "image") {
       const img = el("img"); img.loading = "lazy"; img.alt = ""; img.src = it.src;
       b.appendChild(img);
@@ -139,13 +139,13 @@
     const nm = el("div", "art-name", esc(it.name)); nm.title = it.path || it.name;
     meta.appendChild(nm);
     const sub = el("div", "art-sub");
-    sub.appendChild(el("span", null, esc(it.kind === "model" ? "3D model" : it.html ? "HTML" : it.kind)));
+    sub.appendChild(el("span", null, esc(it.kind === "model" ? "3D model" : it.html ? "HTML" : it.ext === "pdf" ? "PDF" : it.kind)));
     if (it.ts) sub.appendChild(el("span", null, esc(fmtWhen(it.ts))));
     meta.appendChild(sub);
     t.appendChild(meta);
     const acts = el("div", "art-acts");
     acts.appendChild(act("my_location", "Show in the chat", () => reveal(it)));
-    if (it.html) acts.appendChild(act("preview", "Preview", () => openPreview(it)));
+    if (it.html || it.ext === "pdf") acts.appendChild(act("preview", "Preview", () => openPreview(it)));
     else if (it.kind === "image") acts.appendChild(act("open_in_full", "Open", () => openLightbox(it.src)));
     acts.appendChild(act("download", IS_SHELL ? "Save to this phone" : "Save to Downloads", (b) => saveToDownloads(it.src, b)));
     t.appendChild(acts);
@@ -197,14 +197,17 @@
   }
   function openItem(it) {
     if (it.kind === "image") openLightbox(it.src);
-    else if (it.html) openPreview(it);
+    else if (it.html || it.ext === "pdf") openPreview(it);
     else reveal(it);
   }
   /* An HTML (or SVG) file in a sandboxed frame: /preview serves it with a
      CSP sandbox, and the frame has no allow-same-origin, so the page runs in
-     an opaque origin with no reach into the Console. */
+     an opaque origin with no reach into the Console. A PDF opens from /file
+     in an unsandboxed frame, because the WebView's PDF viewer does not run in
+     a sandboxed one and a PDF carries no script into the page. */
   function openPreview(it) {
-    const url = "/preview" + it.src.slice(it.src.indexOf("?"));
+    const pdf = it.ext === "pdf";
+    const url = pdf ? it.src : "/preview" + it.src.slice(it.src.indexOf("?"));
     const ov = el("div", "lightbox artprev");
     const bar = el("div", "lightbox-bar");
     bar.appendChild(el("span", "artprev-name", esc(it.name)));
@@ -217,7 +220,7 @@
     }
     bar.appendChild(dlBtn); bar.appendChild(closeBtn);
     const frame = el("iframe");
-    frame.setAttribute("sandbox", "allow-scripts allow-popups allow-popups-to-escape-sandbox");
+    if (!pdf) frame.setAttribute("sandbox", "allow-scripts allow-popups allow-popups-to-escape-sandbox");
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.title = it.name;
     frame.src = url;

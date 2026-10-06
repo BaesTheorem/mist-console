@@ -943,6 +943,20 @@ function _md(src) {
                    'title="Save to Downloads" aria-label="Save to Downloads">' + DL + '</button>' +
                '</span>';
       }
+      // PDF: the WebView's own PDF viewer in a frame (scroll, zoom, select), with
+      // the usual attachment card under it as the caption and save button. The
+      // card is also what the artifacts drawer collects. /file serves .pdf
+      // inline (embeds.INLINE_EXTS); a PDF cannot run script in the app origin.
+      if (/\.pdf(\?|$)/i.test(path)) {
+        return '<span class="genpdf-wrap">' +
+                 '<iframe class="genpdf" src="' + src + '" title="' + esc(fileBaseName(path)) + '" loading="lazy"></iframe>' +
+                 '<span class="genfile" role="button" tabindex="0" data-dl="' + src + '" title="Save to Downloads">' +
+                   '<span class="msi genfile-icon" aria-hidden="true">picture_as_pdf</span>' +
+                   '<span class="genfile-name">' + esc(fileBaseName(path)) + '</span>' +
+                   '<span class="genfile-glyph" aria-hidden="true">' + DL + '</span>' +
+                 '</span>' +
+               '</span>';
+      }
       // Any other local file: an attachment card. The whole card is the button;
       // click saves to Downloads via the same data-dl contract.
       return '<span class="genfile" role="button" tabindex="0" data-dl="' + src + '" ' +
