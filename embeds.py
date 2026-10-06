@@ -16,6 +16,7 @@ past the bubble's `ts` is the one made for that very message. No index entry
 
 INVARIANTS
 - `safe_path` is the single allowlist for anything /file serves; SNAP_DIR is in it.
+- MEDIA_ROOTS serve only MEDIA_ROOT_EXTS; other files there return None.
 - Snapshot files are immutable: same content -> same name, never rewritten.
 - The index only ever grows; entries are appended in recording order.
 """
@@ -51,6 +52,14 @@ INLINE_EXTS = MEDIA_EXTS | {".pdf"}
 SECRET_EXTS = {".env", ".pem", ".key", ".p12", ".keychain"}
 ROOTS = [os.path.realpath(os.path.expanduser(p)) for p in (
     "~/Downloads", "~/Exobrain/Attachments", "~/Documents/Exobrain harness", SNAP_DIR)]
+# Media-only roots: MIST builds in many project folders (~/Documents/<repo>)
+# and renders into the vault, and an embed from there showed as a broken
+# image (the rule lived only in memory notes and kept being missed). Under
+# these roots /file serves only what a chat embed or the artifacts drawer can
+# show, never other files, so a private document there stays unreachable.
+MEDIA_ROOTS = [os.path.realpath(os.path.expanduser(p)) for p in (
+    "~/Documents", "~/Exobrain", "~/Desktop", "~/Pictures", "~/Movies")]
+MEDIA_ROOT_EXTS = MEDIA_EXTS | {".pdf", ".html", ".htm", ".svg"}
 
 # Above this a snapshot costs more disk than it is worth (a long video); the
 # embed then keeps resolving to the live file, as before.
@@ -80,7 +89,9 @@ def safe_path(raw, must_exist=True):
     but hidden files/dirs and credential-shaped extensions stay unreachable,
     and only INLINE_EXTS render in the page (see app.py /file)."""
     path = realpath(raw)
-    for root in ROOTS:
+    ext = os.path.splitext(path)[1].lower()
+    roots = list(ROOTS) + ([r for r in MEDIA_ROOTS] if ext in MEDIA_ROOT_EXTS else [])
+    for root in roots:
         if path == root or path.startswith(root + os.sep):
             rel = path[len(root):]
             if any(part.startswith(".") for part in rel.split(os.sep) if part):

@@ -250,6 +250,13 @@ the other macOS 26 landmines live in the harness `mist-notifier/README.md`.
 
 A reply embeds a local file as `![alt](/abs/path.png)`; the page loads it through
 `GET /file?path=...` (allowlisted roots and extension rules in `embeds.py`).
+Two kinds of root: full roots (Downloads, the vault's Attachments, the harness)
+serve any non-hidden, non-credential file, and media-only roots (`~/Documents`,
+the vault, Desktop, Pictures, Movies) serve only what a bubble or the
+artifacts drawer can show: images, audio, video, 3D models, PDF, HTML, SVG. So
+a render saved in any project folder embeds as is, and a private document
+there stays unreachable. The phone loads the same route, so it gets the same
+rule.
 Because that lookup happens when the bubble renders, a file overwritten in a
 later turn (the same image edited five times, always saved to one name) used to
 rewrite every earlier bubble and lightbox on reload, and the phone always loads
