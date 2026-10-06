@@ -596,10 +596,10 @@ MODEL_PROMPT = (
     ".obj, .glb, .gltf) becomes a turntable viewer Alex can orbit, zoom and reset, "
     "with the part's measured size in mm in the caption and a Save to Downloads "
     "button. Use it whenever you design or inspect a printable part or any mesh: "
-    "embed the model file itself, not just a rendered PNG. The file must sit under "
-    "the harness root (for example `3dprint/out/`), and the path is written RAW with "
-    "literal spaces, never percent-encoded. Embed each part of a multi-part print "
-    "separately."
+    "embed the model file itself, not just a rendered PNG. The file can sit in any "
+    "project under ~/Documents, the vault, Desktop, or the harness (for example "
+    "`3dprint/out/`), never /tmp, and the path is written RAW with literal spaces, "
+    "never percent-encoded. Embed each part of a multi-part print separately."
 )
 
 # The Console renders a real, in-place progress element (see /progress + the
