@@ -1237,6 +1237,26 @@ function makeTs(ts) {
   }
   return span;
 }
+/* Per-turn stamps. One MIST bubble spans every API turn of a reply (a long
+   agentic run can take an hour), and the bubble header only says when the
+   first turn began. So each text block, step group and step card that starts
+   after the bubble's first element carries the time it began, with seconds so
+   two steps in the same minute still read apart. The stamp lives in data-ts
+   on the element CSS draws it on (the block itself, or a card's summary):
+   a streaming text block's innerHTML is rebuilt on every delta, and the step
+   labels are rewritten by refreshSteps / labelThinking, but attributes keep. */
+function fmtClockS(ms) {
+  const d = new Date(ms);
+  const s = d.getSeconds();
+  return fmtClock(ms).replace(" ", ":" + (s < 10 ? "0" + s : s) + " ");
+}
+// Stamp `node` with the turn time `sec` (epoch seconds, as server events carry it).
+// With `body` given, the bubble's first element is skipped: the header has it.
+function stampTurn(node, sec, body) {
+  if (!node || sec == null) return;
+  if (body && !body.childElementCount) return;
+  node.dataset.ts = fmtClockS(sec * 1000);
+}
 
 /* ---------- session registry ---------- */
 const sessions = new Map();
@@ -1266,7 +1286,12 @@ function appendStep(body, node) {
   let group = body.lastElementChild;
   if (!group || !group.matches("details.steps")) {
     group = el("details", "steps");
-    group.appendChild(el("summary", null, ""));
+    const sum = el("summary", null, "");
+    sum.appendChild(el("span", "steps-label", ""));
+    // the group's own stamp is its first card's time (the card's summary holds it)
+    const first = node.querySelector(":scope > summary");
+    if (first && first.dataset.ts && body.childElementCount) sum.dataset.ts = first.dataset.ts;
+    group.appendChild(sum);
     group.appendChild(el("div", "steps-body"));
     body.appendChild(group);
   }
@@ -1290,7 +1315,8 @@ function refreshSteps(group) {
     const i = parts.findIndex((p) => p.startsWith("thinking"));
     if (i >= 0) parts[i] = parts[i].replace("thinking", live.dataset.live); else parts.push(live.dataset.live);
   }
-  group.firstElementChild.textContent = items.length + (items.length === 1 ? " step" : " steps") + " · " + parts.join(", ");
+  const label = group.querySelector(":scope > summary > .steps-label") || group.firstElementChild;
+  label.textContent = items.length + (items.length === 1 ? " step" : " steps") + " · " + parts.join(", ");
 }
 
 class Session {
@@ -2400,9 +2426,10 @@ class Session {
     this.toolInputs = {};
     this._openThink = null;
   }
-  makeToolCard(name) {
+  makeToolCard(name, ts) {
     const card = el("details", "tool");     // collapsed by default; click to expand
     const head = el("summary", "tool-head");
+    stampTurn(head, ts);
     head.appendChild(el("span", "tname", esc(name || "tool")));
     const summary = el("span", "tsummary", "");
     head.appendChild(summary);
@@ -2502,6 +2529,7 @@ class Session {
         // elapsed clock until the first real delta lands (tickThinking).
         const d = el("details", "think");
         const sum = el("summary", null, "thinking");
+        stampTurn(sum, ev.ts);
         d.appendChild(sum);
         const tb = el("div", "think-body");
         const txt = el("span", "think-text");
@@ -2518,10 +2546,11 @@ class Session {
         // position, so text interleaves correctly with tool/thinking cards
         // and the final summary lands last instead of buried up top.
         const te = el("div", "md");
+        stampTurn(te, ev.ts, this.current.body);
         this.current.body.appendChild(te);
         this.blocks[idx] = { type: "text", el: te, text: "", ts: ev.ts };
       } else if (cb.type === "tool_use") {
-        this.blocks[idx] = this.makeToolCard(cb.name);
+        this.blocks[idx] = this.makeToolCard(cb.name, ev.ts);
         this.toolInputs[idx] = "";
       }
     } else if (e.type === "content_block_delta") {

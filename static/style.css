@@ -474,6 +474,24 @@ details.steps > summary::before {
 }
 details.steps[open] > summary::before { content: "expand_more"; }
 details.steps > .steps-body { padding: 0 8px 4px; }
+details.steps > summary > .steps-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* per-turn stamps (app.js stampTurn): a MIST bubble is one reply but many API
+   turns, so every text block, step group and step card after the bubble's first
+   element says when it began. Drawn from data-ts, which outlives the innerHTML
+   and label rewrites those nodes get while streaming. */
+.msg.mist .body > .md[data-ts]::before {
+  content: attr(data-ts); display: block; color: var(--dim); font-size: 10px;
+  letter-spacing: 0; margin: 10px 0 2px; font-weight: 400; font-style: normal;
+}
+details.steps > summary[data-ts]::after, details.tool > summary.tool-head[data-ts]::after {
+  content: attr(data-ts); margin-left: auto; flex: 0 0 auto; color: var(--dim);
+  font-size: 10px; font-weight: 400; letter-spacing: 0; text-transform: none;
+}
+.think > summary[data-ts]::after {
+  content: attr(data-ts); float: right; color: var(--dim);
+  font-size: 10px; font-weight: 400; letter-spacing: 0; text-transform: none;
+}
 
 /* tool cards — collapsed by default (click the header to expand the code) */
 .tool { border: 1px solid var(--line); margin: 8px 0; }

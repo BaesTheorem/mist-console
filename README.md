@@ -113,6 +113,10 @@ The CLI's auto-compact does run headlessly, and `/compact` typed as input works 
 
 Hover a message (or right-click it) for **edit & resend**, **regenerate**, **branch from here** and **copy**. Edit and regenerate rewind THIS chat in place: the transcript is truncated at that user message and the next spawn resumes the CLI session truncated at the same point (`--resume-session-at <uuid of the last assistant entry before it> --fork-session`, confirmed against claude 2.1.278). The tail is gone for good, so the message shows a confirm strip first. Branch creates a new chat holding the conversation up to that point (through a MIST reply, or up to a user message with its text pre-filled in the composer) and leaves the original untouched; a branch at the end is a plain `--fork-session`. Limits, all reported inline: the CLI only addresses entries after the last compaction (a compaction summary is a valid anchor, so "regenerate the first reply after compacting" works), and the CLI's session file must still hold the anchor.
 
+### Time stamps (every turn, not only every message)
+
+Each bubble's header carries the time it began. A MIST bubble is one reply but many API turns (an agentic run can take an hour), so every text block, step group and step card after the bubble's first element also carries the time it began, with seconds (`stampTurn` in app.js). The stamp is a `data-ts` attribute that CSS draws, because a streaming text block's innerHTML is rebuilt on every delta and the step labels are rewritten as cards arrive. Condensed history already has one `mist_msg` bubble per API turn, so it needs nothing extra.
+
 ### Bookmarks
 
 Hover a message (or right-click it) and hit the **bookmark** icon; the message gets a small marker in its header and lands in the **bookmarks** panel (the bookmark button in the composer, count badge included). The panel has two scopes: **this chat**, in transcript order, and **all chats**, newest first and grouped by chat. Clicking a bookmark jumps to the message, switching chats first if it lives elsewhere and waiting for that chat's replay to finish, then flashes it; the × on a row removes it.
@@ -516,7 +520,7 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | Bookmarks | composer button | drawer footer, **Saved** |
 | Settings | gear | drawer footer, **Settings** |
 | Artifacts drawer | top-bar button | chat-details sheet, **Artifacts**, or swipe from the right edge |
-| Inline images, audio, video, recipe cards, task checkboxes, progress bars | inline | inline, same markup |
+| Inline images, audio, video, recipe cards, task checkboxes, progress bars, per-turn time stamps | inline | inline, same markup |
 | 3D models | drag orbits, wheel zooms, double-click resets, tools on hover | one finger orbits, pinch zooms, double-tap resets, tools always shown (`@media (hover: none)`) |
 | Save a file | copies into the Mac's `~/Downloads` | the shell downloads it over the pairing token and opens the share sheet (`ArtifactSaver.swift`, `shellSave` in app.js) |
 | HTML preview | sandboxed frame, plus "Open in browser" | sandboxed frame only (Safari has no cookie) |
