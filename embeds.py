@@ -71,7 +71,9 @@ SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
 AT_SLACK = 2.0
 
 log = logging.getLogger(__name__)
-_EMBED_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+# One level of balanced parens inside the path, so ".../IT Analyst (Remote)/x.pdf"
+# keeps its tail instead of ending at the first ")".
+_EMBED_RE = re.compile(r"!\[[^\]]*\]\(((?:[^()]|\([^()]*\))+)\)")
 # `#loop` / `#loop=START,END` after an audio path asks app.js for the gapless loop
 # player (LOOP_FRAG_RE there). It is not part of the file name.
 _LOOP_FRAG_RE = re.compile(r"#loop(?:=\s*\d*\.?\d+\s*,\s*\d*\.?\d+\s*)?\s*$", re.I)
@@ -125,8 +127,8 @@ def _load():
 
 
 def _unescape_md(p):
-    # Paths in recorded text are raw markdown, but a `)` inside a path can't
-    # appear there anyway; only whitespace trimming is needed.
+    # Paths in recorded text are raw markdown (_EMBED_RE already admits balanced
+    # parens); only whitespace trimming is needed.
     return p.strip()
 
 

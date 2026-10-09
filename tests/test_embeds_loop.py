@@ -23,3 +23,9 @@ def test_plain_embeds_and_other_fragments_are_unchanged():
     # Only the loop fragment is special; any other `#` stays part of the name.
     assert embeds.embedded_paths(f"![a]({ROOT}/take#2.mp3)") == [f"{ROOT}/take#2.mp3"]
     assert embeds.embedded_paths(f"![a]({ROOT}/x.mp3#loopy)") == []
+
+
+def test_balanced_parens_stay_in_the_path():
+    d = "/Users/x/Exobrain/Job Listings/Acme - IT Analyst (Remote)"
+    text = f"![r]({d}/shot.png) then ![s]({ROOT}/a.mp3) (aside)"
+    assert embeds.embedded_paths(text) == [f"{d}/shot.png", f"{ROOT}/a.mp3"]

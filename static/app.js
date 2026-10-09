@@ -890,8 +890,9 @@ function _md(src) {
     .replace(/^\s*(\d+)\. (.*)$/gm, '<li class="oli" value="$1">$2</li>')
     // images first, so ![alt](path) isn't half-eaten by the link pass below.
     // Local paths route through /file; click opens a lightbox (see click handler).
-    // [^)]+ (not [^)\s]+) so paths with spaces work, e.g. ".../Exobrain harness/...".
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, path) => {
+    // The path allows spaces (".../Exobrain harness/...") and one level of balanced
+    // parens (".../IT Analyst (Remote)/x.pdf"); [^)]+ cut those at the first ")".
+    .replace(/!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)/g, (m, alt, path) => {
       // `#loop` / `#loop=START,END` asks for the gapless loop player. Split it
       // off first: imgSrc() would percent-encode it into the path, and the
       // extension tests below anchor on the end of the path.
