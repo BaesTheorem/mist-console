@@ -31,7 +31,7 @@ targets:
       properties:
         CFBundleDisplayName: MIST
         CFBundleShortVersionString: "1.3"
-        CFBundleVersion: "5"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen:
           UIColorName: LaunchBackground
         # The Console is a dark surface; keep the status bar and keyboard on it.
@@ -93,7 +93,7 @@ targets:
       properties:
         CFBundleDisplayName: MIST
         CFBundleShortVersionString: "1.3"
-        CFBundleVersion: "5"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
