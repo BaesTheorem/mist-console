@@ -519,6 +519,7 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | Message actions | hover icons | long-press sheet |
 | Bookmarks | composer button | drawer footer, **Saved** |
 | Settings | gear | drawer footer, **Settings** |
+| Text size | `textSize`, saved to the server so a wiped store keeps it | `textSizePhone`, local to the phone, default 100%; the Mac's size never reaches the phone |
 | Artifacts drawer | top-bar button | chat-details sheet, **Artifacts**, or swipe from the right edge |
 | Inline images, audio, video, recipe cards, task checkboxes, progress bars, per-turn time stamps | inline | inline, same markup |
 | 3D models | drag orbits, wheel zooms, double-click resets, tools on hover | one finger orbits, pinch zooms, double-tap resets, tools always shown (`@media (hover: none)`) |

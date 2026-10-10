@@ -5097,6 +5097,10 @@ renderFontList();
    instant pre-paint, and the server (data/textsize.json) so a wiped WebView
    store still opens at the size you chose. */
 const TSIZE_MIN = 70, TSIZE_MAX = 200, TSIZE_STEP = 5;
+// A phone keeps its own size under its own key and never writes the server
+// copy, so the Mac's choice does not shrink the phone layout, and the reverse.
+const TSIZE_PHONE = matchMedia("(max-width: 760px)").matches;
+const TSIZE_KEY = TSIZE_PHONE ? "textSizePhone" : "textSize";
 function currentTextSize() {
   const z = parseFloat(document.documentElement.style.zoom);
   return z ? Math.round(z * 100) : 100;
@@ -5109,8 +5113,8 @@ function applyTextSize(pct, persist) {
   window.dispatchEvent(new Event("mist:zoom"));   // phone metrics derive from the zoom
   const val = $("#tsizeVal");
   if (val) val.textContent = pct + "%";
-  try { localStorage.setItem("textSize", String(pct)); } catch (_) {}
-  if (persist) {
+  try { localStorage.setItem(TSIZE_KEY, String(pct)); } catch (_) {}
+  if (persist && !TSIZE_PHONE) {
     fetch("/textsize", { method: "POST", headers: { "Content-Type": "application/json" },
                          body: JSON.stringify({ pct }) }).catch(() => {});
   }

@@ -15,8 +15,10 @@ if(!_fs&&window.__mistFont){_fs=window.__mistFont.stack;_fid=window.__mistFont.i
 if(_fs){_d.style.setProperty("--mono",_fs);_d.style.setProperty("--head",_fs);}
 if(_fid)_d.dataset.font=_fid;}catch(e){}
 /* text size, applied before first paint so it never flashes at 100% */
-try{var _z=parseInt(localStorage.getItem("textSize"),10);
-if(!_z&&window.__mistZoom)_z=window.__mistZoom;
+/* a phone keeps its own size: the Mac's 125% on a 320pt screen leaves a 256px layout */
+try{var _ph=matchMedia("(max-width: 760px)").matches;
+var _z=parseInt(localStorage.getItem(_ph?"textSizePhone":"textSize"),10);
+if(!_z&&!_ph&&window.__mistZoom)_z=window.__mistZoom;
 if(_z&&_z!==100)document.documentElement.style.zoom=(_z/100);}catch(e){}
 /* chat-list width, same two lanes: localStorage first, the server copy when that is empty */
 try{var _rw=parseInt(localStorage.getItem("railW"),10);

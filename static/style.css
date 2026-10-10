@@ -2133,6 +2133,9 @@ body.pane-open:has(#voicePane:not([hidden])) #usage { right: calc(232px + var(--
   #railFoot button .msi { font-size: 18px; }
   #railFoot button.has-new { color: var(--teal); }
   #tabrail { padding-bottom: 0; }
+  /* a closed drawer is not painted at all: under a root zoom WKWebView left its
+     footer ("Settings") showing at the left edge of the composer */
+  #mid:not(.rail-open) #tabrail:not(.dragging) { visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
 
   /* composer */
   #bookmarksBtn { display: none; }
