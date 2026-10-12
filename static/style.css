@@ -261,6 +261,11 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab .dot.live, #phoneStatus .ps-dot.live { clip-path: none; background: none !important; animation: none !important; overflow: visible; }
 .tab .dot.live img, #phoneStatus .ps-dot.live img { width: 26px; height: 26px; margin: -5px; display: block; }
 .crystal-hdr { width: 36px; height: 36px; display: block; margin: -6px 0; }
+.crystal-slot { display: block; }
+/* the animated wallpaper, when on: one <img> per clip, shown by display toggle (app.js slotShow) */
+#wallSlot { position: absolute; inset: 0; z-index: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; }
+#wallSlot img { height: 70%; width: auto; opacity: .22; mix-blend-mode: var(--wp-blend); }
+
 .spinner .crystal-sp { width: 28px; height: 28px; display: block; margin: -7px -4px; }
 .crystalrow { display: flex; align-items: center; gap: 6px; }
 .crystalrow img { width: 22px; height: 22px; margin: -4px 0; }

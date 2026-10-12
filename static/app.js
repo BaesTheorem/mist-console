@@ -1143,21 +1143,57 @@ const crystalSrc = (anim, look) => "anims/" + (look || crystal.look) + "/" + ani
    Opacity is measured, not eyeballed, like the still one: composited over black the
    clips peak at luma 204-250 (celebrate the brightest), and .22 keeps the painted peak
    near the still logo's (#112635 at .40), so the contrast figures in style.css hold. */
+const WALL_DEFAULT_ON = false;   // the 256 px wallpaper is the largest animated surface; see the memory note above
 const WALL_OPACITY = 0.22;
 const wallSrc = (src) => src.replace(/^anims\//, "anims/256/");
+/* Memory. Each animated WebP the page points at is decoded into frame buffers
+   in the WebContent process (72-120 frames; 19-31 MB for a 256 px clip), and
+   re-pointing an <img> src or a CSS background url at a different clip on
+   every thinking<->working flip left the old frames behind: the web view grew
+   ~1.5 GB per active chat hour and only a reload gave it back (2026-10-11,
+   graphics category of `footprint`). So no element ever changes its src again:
+   a slot holds one <img> per clip it has shown, created on first use and kept,
+   and showing a clip is a display toggle. The set is bounded by the number of
+   clips (11 states, a look or two). The wallpaper is the biggest surface and
+   is off unless crystalWall=1 in localStorage (see renderCrystalList). */
+crystal.wall = (() => { try { return localStorage.getItem("crystalWall") === "1"; } catch (_) { return WALL_DEFAULT_ON; } })();
+function slotShow(slot, src, cls, title) {
+  if (!slot) return null;
+  let want = null;
+  slot.querySelectorAll("img").forEach((im) => {
+    if (im.dataset.src === src) want = im; else im.style.display = "none";
+  });
+  if (!want && src) {
+    want = el("img"); want.alt = ""; want.draggable = false; want.className = cls || "";
+    want.dataset.src = src; want.src = src;
+    slot.appendChild(want);
+  }
+  if (want) { want.style.display = ""; if (title != null) want.title = title; }
+  return want;
+}
+function slotHide(slot) {
+  if (slot) slot.querySelectorAll("img").forEach((im) => { im.style.display = "none"; });
+}
+function wallSlot() {
+  const logs = $("#logs");
+  if (!logs) return null;
+  let w = logs.querySelector("#wallSlot");
+  if (!w) { w = el("div"); w.id = "wallSlot"; logs.insertBefore(w, logs.firstChild); }
+  return w;
+}
 function wallSync() {
   const logs = $("#logs");
   if (!logs) return;
-  const show = crystal.avail && crystal.wallAvail && crystal.on && crystal.cur;
+  const show = crystal.avail && crystal.wallAvail && crystal.on && crystal.wall && crystal.cur;
   if (!show) {
-    if (crystal.wallCur) { crystal.wallCur = ""; logs.style.removeProperty("--wp-image"); logs.style.removeProperty("--wp-opacity"); }
+    if (crystal.wallCur) { crystal.wallCur = ""; slotHide(wallSlot()); logs.style.removeProperty("--wp-opacity"); }
     return;
   }
   const src = wallSrc(crystal.cur);
   if (crystal.wallCur === src) return;
   crystal.wallCur = src;
-  logs.style.setProperty("--wp-image", 'url("' + src + '")');
-  logs.style.setProperty("--wp-opacity", String(WALL_OPACITY));
+  slotShow(wallSlot(), src, "wall-clip");
+  logs.style.setProperty("--wp-opacity", "0");   // the still logo yields to the clip
 }
 function crystalEmotionFrom(text) {
   const head = (text || "").trimStart().slice(0, 24);
@@ -1180,23 +1216,35 @@ function crystalResolve() {
   if (now - crystal.lastActivity > SLEEP_AFTER_MS) return { anim: "sleeping" };
   return { anim: "idle" };
 }
+const BUSY_CLIPS = new Set(["thinking", "loading"]);
+const FLAP_HOLD_MS = 2500;   // thinking<->loading flips per tool call: hold before the header follows
 function crystalRefresh() {
-  const img = crystal.header, logo = $("#logoImg");
-  if (!img) return;
+  const slot = crystal.header, logo = $("#logoImg");
+  if (!slot) return;
   const show = crystal.avail && crystal.on;
   // style, not the hidden attribute: both marks carry an author display:block that would beat it
-  img.style.display = show ? "" : "none"; if (logo) logo.style.display = show ? "none" : "";
+  slot.style.display = show ? "" : "none"; if (logo) logo.style.display = show ? "none" : "";
   if (!show || crystal._oneshotUntil > Date.now()) { wallSync(); return; }
-  const r = crystalResolve(), src = crystalSrc(r.anim, r.look);
-  if (crystal.cur !== src) { crystal.cur = src; img.src = src; img.title = "MIST · " + r.anim; }
+  const r = crystalResolve(), src = crystalSrc(r.anim, r.look), now = Date.now();
+  if (crystal.cur !== src) {
+    // A turn flips thinking<->loading on every tool call; the header only follows
+    // a flip that holds. Everything else (idle, alert, error, moods) is immediate.
+    if (BUSY_CLIPS.has(r.anim) && BUSY_CLIPS.has(crystal.curAnim || "")) {
+      if (crystal._pending !== src) { crystal._pending = src; crystal._pendingAt = now; }
+      if (now - crystal._pendingAt < FLAP_HOLD_MS) { wallSync(); return; }
+    }
+    crystal._pending = null;
+    crystal.cur = src; crystal.curAnim = r.anim;
+    slotShow(slot, src, "crystal-hdr", "MIST · " + r.anim);
+  }
   wallSync();
   if (window.VOICE) VOICE.syncCrystal();   // the conversation pane's crystal mirrors the header's
 }
 // Play a one-shot (appear) on the header, then fall back to whatever the state says.
 function crystalOneshot(anim) {
-  const img = crystal.header;
-  if (!img || !crystal.avail || !crystal.on) return;
-  crystal.cur = crystalSrc(anim); img.src = crystal.cur; img.title = "MIST";
+  const slot = crystal.header;
+  if (!slot || !crystal.avail || !crystal.on) return;
+  crystal.cur = crystalSrc(anim); crystal.curAnim = anim; slotShow(slot, crystal.cur, "crystal-hdr", "MIST");
   wallSync();
   crystal._oneshotUntil = Date.now() + (CRYSTAL_ONESHOT_MS[anim] || 2000);
   setTimeout(() => { crystal._oneshotUntil = 0; crystalRefresh(); }, CRYSTAL_ONESHOT_MS[anim] || 2000);
@@ -1207,15 +1255,17 @@ function crystalDot(dot, state) {
   const live = crystal.avail && crystal.on && (state === "thinking" || state === "working" || state === "bg" || state === "error");
   let img = dot.querySelector("img");
   if (!live) { if (img) img.remove(); dot.classList.remove("live"); return; }
-  const anim = state === "error" ? "error" : state === "thinking" ? "thinking" : "loading";
+  // One clip for every live state at 26 px (thinking and loading are not told
+  // apart at that size), so a turn's tool-call flips never re-point the image.
+  const anim = state === "error" ? "error" : "thinking";
   const src = crystalSrc(anim, state === "error" ? "ember" : crystal.look);
-  if (!img) { img = el("img"); img.alt = ""; img.draggable = false; dot.appendChild(img); }
+  if (img && img.getAttribute("src") !== src) { img.remove(); img = null; }
+  if (!img) { img = el("img"); img.alt = ""; img.draggable = false; img.src = src; dot.appendChild(img); }
   dot.classList.add("live");   // every time: setStatus rewrites className around this call
-  if (img.getAttribute("src") !== src) img.src = src;
 }
 function crystalGlyph(state) {
   if (!crystal.avail || !crystal.on) return MIST_MARK;
-  return '<img class="crystal-sp" alt="" draggable="false" src="' + crystalSrc(state === "working" ? "loading" : "thinking") + '">';
+  return '<img class="crystal-sp" alt="" draggable="false" src="' + crystalSrc("thinking") + '">';   // one clip: a src swap per tool call leaked frames
 }
 function setCrystalLook(look, on) {
   if (look) crystal.look = CRYSTAL_LOOKS[look] ? look : "classic";
@@ -1525,8 +1575,6 @@ class Session {
       this.spinnerEl = el("div", "spinner",
         '<span class="sv-glyph">' + crystalGlyph(this.statusState) + '</span> <span class="sv"></span>');
     }
-    const g = this.spinnerEl.querySelector(".crystal-sp");
-    if (g) { const want = crystalSrc(this.statusState === "working" ? "loading" : "thinking"); if (g.getAttribute("src") !== want) g.src = want; }
     this.spinnerEl.querySelector(".sv").textContent =
       (SPINNER_VERBS[spinnerIdx % SPINNER_VERBS.length] || "Thinking") + "…";
     this.logEl.appendChild(this.spinnerEl);   // move to bottom
@@ -3583,9 +3631,13 @@ function renderTabs() {
   // day rollover (and a collapse toggle) forces a rebuild. The active tab used
   // to be in it too, so every chat switch rebuilt every row; a plain switch now
   // just moves the .active class.
+  // A chat's status is NOT in the signature: setStatus() moves that chat's
+  // own marker in place. With it in, every thinking<->working flip of a turn
+  // (one per tool call) tore down every row and gave each live dot a brand-new
+  // animated <img>; decoded WebP frames from those stacked up in the WebContent
+  // process (the 2026-10 web view leak, 1.5 GB per active chat hour).
   const sig = list.map((s) =>
-    s.id + "|" + s.title + "|" + railKey(s, today)
-    + "|" + (s.bgActiveCount() > 0 ? "bg" : s.statusState)).join("\n")
+    s.id + "|" + s.title + "|" + railKey(s, today)).join("\n")
     + "\n#" + [...collapsedSections].join(",") + "#" + _railLimit;
   if (sig === _tabsSig) {
     if (activeId === _tabsActive) return;
@@ -4950,9 +5002,31 @@ function renderCrystalList() {
   const tog = el("div", "modelrow" + (crystal.on ? "" : " sel"), crystal.on ? "Animated · click for the still logo" : "Still logo · click to animate");
   tog.addEventListener("click", () => setCrystalLook(null, !crystal.on));
   list.appendChild(tog);
+  if (crystal.wallAvail) {
+    const wall = el("div", "modelrow" + (crystal.wall ? " sel" : ""),
+      crystal.wall ? "Animated wallpaper · on (uses graphics memory) · click for the still one" : "Wallpaper · still · click to animate it");
+    wall.addEventListener("click", () => {
+      crystal.wall = !crystal.wall;
+      try { localStorage.setItem("crystalWall", crystal.wall ? "1" : "0"); } catch (_) {}
+      crystal.cur = ""; crystal.wallCur = ""; crystalRefresh(); renderCrystalList();
+    });
+    list.appendChild(wall);
+  }
 }
 (function () {
-  crystal.header = $("#crystalImg");
+  // The header <img> becomes the first clip inside a slot (see slotShow): clips are
+  // shown and hidden, never re-pointed.
+  const first = $("#crystalImg");
+  if (first && first.parentNode) {
+    const slot = el("span"); slot.id = "crystalSlot"; slot.className = "crystal-slot";
+    first.parentNode.insertBefore(slot, first);
+    slot.appendChild(first);
+    first.dataset.src = first.getAttribute("src") || "";
+    first.style.display = "none"; first.removeAttribute("hidden");
+    crystal.header = slot;
+  } else {
+    crystal.header = first;
+  }
   const probe = new Image();
   probe.onload = () => {
     crystal.avail = true;
