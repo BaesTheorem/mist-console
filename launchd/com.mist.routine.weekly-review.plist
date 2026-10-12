@@ -13,9 +13,9 @@
 	<key>RunAtLoad</key>
 	<false/>
 	<key>StandardErrorPath</key>
-	<string>/Users/alexhedtke/Documents/mist-console/routine-runs.log</string>
+	<string>/Users/alexhedtke/Library/Logs/mist-routines.log</string>
 	<key>StandardOutPath</key>
-	<string>/Users/alexhedtke/Documents/mist-console/routine-runs.log</string>
+	<string>/Users/alexhedtke/Library/Logs/mist-routines.log</string>
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>
