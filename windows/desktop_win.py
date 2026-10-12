@@ -281,7 +281,8 @@ def main():
             _main_window.events.closed += _on_closed
         except Exception:
             pass
-        webview.start()
+        # pywebview's default private mode clears the page's localStorage and cookies at every launch
+        webview.start(private_mode=False)
         # webview.start returning means the window closed; _on_closed handles
         # shutdown, but cover the path where the event never fired.
         _on_closed()
