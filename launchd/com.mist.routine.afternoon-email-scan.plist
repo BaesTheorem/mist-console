@@ -6,6 +6,7 @@
 	<string>com.mist.routine.afternoon-email-scan</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>/Users/alexhedtke/.local/bin/mist-launch</string>
 		<string>/bin/bash</string>
 		<string>/Users/alexhedtke/Documents/mist-console/run-routine.sh</string>
 		<string>afternoon-email-scan</string>
@@ -58,6 +59,12 @@
 			<key>Weekday</key>
 			<integer>5</integer>
 		</dict>
+	</array>
+	<!-- Login Items shows the job under this app instead of its executable's name;
+	     only honored because mist-launch is signed by the same team. -->
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+	    <string>com.exobrain.mist-console</string>
 	</array>
 </dict>
 </plist>

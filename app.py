@@ -2512,6 +2512,7 @@ SCHED_DIR = os.path.expanduser("~/.claude/scheduled-tasks")
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROUTINES_META = os.path.join(HERE, "routines-meta")   # Console-owned schedule state
 LAUNCH_AGENTS = os.path.expanduser("~/Library/LaunchAgents")
+MIST_LAUNCH = os.path.expanduser("~/.local/bin/mist-launch")   # harness maintenance/mist-launch
 RUNNER = os.path.join(HERE, "run-routine.sh")
 # Keep the routine log OUTSIDE ~/Documents. Documents is TCC-protected, and a
 # file created there by the Console app (Python, with the app's own TCC grant)
@@ -2668,9 +2669,17 @@ def _apply_schedule(d, cron, enabled):
         intervals = cron_to_calendar(cron)
     except ValueError as e:
         return False, str(e)
+    # Declared through mist-launch when it is installed (harness
+    # maintenance/mist-launch): Login Items then shows the job under MIST
+    # Console instead of a row called "bash", and the job's file access is
+    # the launcher's Full Disk Access rather than bash's. Plain bash otherwise.
+    argv = ["/bin/bash", RUNNER, d]
+    if os.access(MIST_LAUNCH, os.X_OK):
+        argv = [MIST_LAUNCH] + argv
     spec = {
         "Label": label,
-        "ProgramArguments": ["/bin/bash", RUNNER, d],
+        "ProgramArguments": argv,
+        "AssociatedBundleIdentifiers": ["com.exobrain.mist-console"],
         "StartCalendarInterval": intervals if len(intervals) > 1 else intervals[0],
         "StandardOutPath": ROUTINE_LOG,
         "StandardErrorPath": ROUTINE_LOG,

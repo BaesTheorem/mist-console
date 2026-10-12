@@ -5,6 +5,7 @@ set -e
 
 PROJ="/Users/alexhedtke/Documents/mist-console"
 UV="/Users/alexhedtke/.local/bin/uv"
+[ -x "$HOME/.local/bin/mist-launch" ] || { echo "install mist-launch first (harness maintenance/mist-launch/install.sh)" >&2; exit 1; }
 AGENT="$PROJ/mist-hotkey-agent.py"
 LABEL="com.exobrain.mist-hotkey-agent"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -20,8 +21,13 @@ cat > "$PLIST" <<EOF
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
+    <string>$HOME/.local/bin/mist-launch</string>
     <string>$UV</string><string>run</string><string>--script</string><string>$AGENT</string>
   </array>
+  <!-- Login Items shows the job under MIST Console (the launcher is signed by the
+       same team); see the harness's maintenance/mist-launch. -->
+  <key>AssociatedBundleIdentifiers</key>
+  <array><string>com.exobrain.mist-console</string></array>
   <key>WorkingDirectory</key><string>$PROJ</string>
   <key>EnvironmentVariables</key>
   <dict>

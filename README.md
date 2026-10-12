@@ -447,6 +447,7 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 - The overlay joins all Spaces / floats over fullscreen apps, so it appears on whatever Space you're on.
 - Enable/disable + the gesture live in MIST **settings → quick access** (the agent re-reads the config every 10s).
 - Uninstall: `launchctl unload ~/Library/LaunchAgents/com.exobrain.mist-hotkey-agent.plist`.
+- Every launchd job this repo installs (the hotkey agent, console-watch, autocommit, and the routine plists `app.py` generates) is declared through `~/.local/bin/mist-launch`, the harness's team-signed launcher, with `AssociatedBundleIdentifiers` naming this app: Login Items shows them under MIST Console instead of as rows called "bash" or "uv", and their file access is the launcher's Full Disk Access. Build it with the harness's `maintenance/mist-launch/install.sh`; `sweep.py --repo ~/Documents/mist-console` re-declares existing plists.
 
 ## Roadmap (bolt-on order)
 
