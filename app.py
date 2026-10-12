@@ -972,6 +972,95 @@ def session_transcript(sid):
     return jsonify(doc)
 
 
+# --- memory relief for the web view (mem-watchdog <-> page) --------------------
+# The Console's WebContent process grows with rendered content (~1.5 GB per
+# active chat hour, measured 2026-10-11) and only a page reload gives it back.
+# The memory watchdog asks here; the page reloads once no chat is mid-turn and
+# nobody has typed for a minute, stashing the composer draft first.
+WEBVIEW_PID_FN = None   # desktop.py installs a callable -> the WKWebView's process pid
+_ui_reload_lock = threading.Lock()
+_ui_reload = {"pending": None, "last": None, "seq": 0}
+_webview_pid_cache = {"t": 0.0, "pid": None}
+
+
+def _any_turn_active():
+    for s in list(_sessions.values()):
+        if getattr(s, "alive", False) and getattr(s, "_turn_active", False):
+            return True
+    return False
+
+
+def _webview_pid():
+    """The web view's process pid, cached for a minute (the lookup walks the
+    native view hierarchy; see desktop._webview_process_pid)."""
+    fn = WEBVIEW_PID_FN
+    if fn is None:
+        return None
+    now = time.time()
+    if now - _webview_pid_cache["t"] < 60:
+        return _webview_pid_cache["pid"]
+    pid = None
+    try:
+        pid = fn()
+        pid = int(pid) if pid else None
+    except Exception:
+        pid = None
+    _webview_pid_cache.update(t=now, pid=pid)
+    return pid
+
+
+@app.route("/ui/webview")
+def ui_webview():
+    """What the memory watchdog needs: the web view's process pid (to tell the
+    Console's WebContent from any other app's), whether a chat is mid-turn, and
+    the reload bookkeeping."""
+    with _ui_reload_lock:
+        pending, last = _ui_reload["pending"], _ui_reload["last"]
+    return jsonify({"app_pid": os.getpid(), "webview_pid": _webview_pid(),
+                    "streaming": _any_turn_active(), "pending": pending, "last": last})
+
+
+@app.route("/ui/reload", methods=["POST"])
+def ui_reload():
+    """Ask the page to reload itself when idle. Fields (JSON body or query):
+    reason, gb, pid, force. force means a human pressed the banner button, so
+    the page waits only for a streaming turn, not for a quiet minute."""
+    body = request.get_json(silent=True) or {}
+
+    def pick(key, cast, default=None):
+        v = body.get(key, request.args.get(key))
+        if v is None or v == "":
+            return default
+        try:
+            return cast(v)
+        except (TypeError, ValueError):
+            return default
+
+    with _ui_reload_lock:
+        _ui_reload["seq"] += 1
+        req = {"id": _ui_reload["seq"], "ts": time.time(),
+               "reason": pick("reason", str, "watchdog"), "gb": pick("gb", float),
+               "pid": pick("pid", int),
+               "force": pick("force", lambda v: str(v).lower() in ("1", "true", "yes"), False)}
+        _ui_reload["pending"] = req
+    ev = dict(req)
+    ev["type"] = "ui_reload"
+    _registry_publish(ev)
+    return jsonify({"ok": True, "request": req, "streaming": _any_turn_active()})
+
+
+@app.route("/ui/reloaded", methods=["POST"])
+def ui_reloaded():
+    """The page reports a completed reload (after restoring the draft)."""
+    body = request.get_json(silent=True) or {}
+    with _ui_reload_lock:
+        _ui_reload["last"] = {"ts": time.time(), "id": body.get("id"), "gb": body.get("gb")}
+        pend = _ui_reload["pending"]
+        if pend and (body.get("id") is None or pend.get("id") == body.get("id")):
+            _ui_reload["pending"] = None
+    return jsonify({"ok": True})
+
+
 @app.route("/events")
 def registry_events():
     """Live registry feed (SSE): session_created / session_updated /

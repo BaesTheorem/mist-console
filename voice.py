@@ -33,6 +33,7 @@ INVARIANTS (do not break these in an edit):
 import json
 import logging
 import os
+import signal
 import shutil
 import socket
 import subprocess
@@ -247,6 +248,7 @@ def ensure_stt_server():
     until it answers. Returns True when the server is listening now."""
     global _stt_proc, _stt_started_at
     if _port_open(STT_PORT) and not _stop_stale_stt_server():
+        _touch("stt")
         return True
     if not (WHISPER_SERVER and os.path.exists(MODEL)):
         return False
@@ -258,6 +260,7 @@ def ensure_stt_server():
                                  "--port", str(STT_PORT), "-t", THREADS, "-nt", "-l", "en"],
                                 "mist-console-stt.log")
             log.info("whisper-server started (pid %s)", _stt_proc.pid)
+            _touch("stt")
     return False
 
 
@@ -389,6 +392,7 @@ def engine_start(name):
             _engine_started_at[name] = time.time()
             _engine_procs[name] = _detach(ENGINES[name][1], ENGINES[name][2])
             log.info("%s voice service started (pid %s)", name, _engine_procs[name].pid)
+            _touch(name)
     return "warming"
 
 
@@ -396,8 +400,11 @@ def tts_engine(name, text):
     """A cloned engine's voice as PCM16 WAV bytes. Raises RuntimeError("warming")
     or ("down") when the service cannot answer yet."""
     st = engine_state(name)
+    if st == "down" and engine_available(name):
+        st = engine_start(name)   # idle-reaped or never started: bring it back, answer "warming"
     if st != "up":
         raise RuntimeError(st)
+    _touch(name)
     req = urllib.request.Request(ENGINES[name][0] + "/say", method="POST",
                                  data=json.dumps({"text": text}).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -407,3 +414,68 @@ def tts_engine(name, text):
 
 def tts(text, which="live"):
     return tts_engine(which, text) if which in ENGINES else tts_live(text)
+
+
+# ------------------------------------------------------------ idle reaping --
+# A cloned engine (Chatterbox 3.2 GB, the XTTS voice) and the whisper-server
+# (1.7 GB) used to stay resident from first use until the next reboot: five
+# days straight on 2026-10-03..09, on an 8 GB machine. Each is stopped after
+# IDLE_SEC without a request and comes back on demand (the page already shows
+# "warming" and polls until the engine answers). Engines found running at
+# Console start count as unused from that moment. MIST_VOICE_IDLE_SEC=0
+# disables the reaper.
+IDLE_SEC = int(os.environ.get("MIST_VOICE_IDLE_SEC", "1200"))
+_boot_t = time.time()
+_last_use = {}   # engine name or "stt" -> epoch of the last request we served
+
+
+def _touch(name):
+    _last_use[name] = time.time()
+
+
+def _listener_pids(port):
+    try:
+        out = subprocess.run(["lsof", "-tiTCP:{}".format(port), "-sTCP:LISTEN"],
+                             capture_output=True, text=True, check=False, timeout=5).stdout
+        return [int(p) for p in out.split()]
+    except Exception:  # noqa: BLE001 -- lsof missing or slow reads as no listener
+        return []
+
+
+def _stop_service(name, port, proc):
+    pids = []
+    if proc is not None and proc.poll() is None:
+        pids.append(proc.pid)
+    pids += [p for p in _listener_pids(port) if p not in pids]
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    if pids:
+        log.info("%s idle for %ss; stopped pid %s", name, IDLE_SEC, pids)
+    return bool(pids)
+
+
+def _idle_reaper():
+    global _stt_proc
+    while True:
+        time.sleep(60)
+        try:
+            now = time.time()
+            for name, (url, _cmd, _logname) in ENGINES.items():
+                port = int(url.rsplit(":", 1)[-1])
+                if now - _last_use.get(name, _boot_t) < IDLE_SEC or not _port_open(port):
+                    continue
+                with _lock:
+                    _stop_service(name, port, _engine_procs.pop(name, None))
+            if now - _last_use.get("stt", _boot_t) >= IDLE_SEC and _port_open(STT_PORT):
+                with _lock:
+                    _stop_service("whisper-server", STT_PORT, _stt_proc)
+                    _stt_proc = None
+        except Exception:  # noqa: BLE001 -- the reaper must outlive any one bad read
+            log.exception("voice idle reaper")
+
+
+if IDLE_SEC > 0:
+    threading.Thread(target=_idle_reaper, daemon=True, name="voice-idle-reaper").start()

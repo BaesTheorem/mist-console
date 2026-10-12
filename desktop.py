@@ -103,6 +103,30 @@ def _set_dock_icon():
         print("dock icon set skipped:", e, flush=True)
 
 
+def _webview_process_pid():
+    """The pid of the WKWebView's WebContent process (WebKit SPI
+    _webProcessIdentifier), so the memory watchdog can tell the Console's web
+    view from any other app's. None when the view is not up or the SPI is gone.
+    Read-only walk of the view tree; app.py caches the answer for a minute."""
+    try:
+        from WebKit import WKWebView
+        win = _main_nswindow()
+        if win is None:
+            return None
+        stack = [win.contentView()]
+        while stack:
+            v = stack.pop()
+            if v is None:
+                continue
+            if v.isKindOfClass_(WKWebView):
+                pid = int(v._webProcessIdentifier())
+                return pid if pid > 0 else None
+            stack.extend(list(v.subviews() or []))
+    except Exception:
+        return None
+    return None
+
+
 def _main_nswindow():
     """The main console's native NSWindow. pywebview stashes it on the Window object
     as `.native`, which is far more reliable than matching by title — a WKWebView
@@ -1060,6 +1084,7 @@ def main():
         "MIST Console", f"http://127.0.0.1:{PORT}",
         js_api=Api(), width=1120, height=800, min_size=(720, 520),
         background_color="#0E1C2B", hidden=quiet, text_select=True)
+    appmod.WEBVIEW_PID_FN = _webview_process_pid   # GET /ui/webview, for the memory watchdog
     # Closing the window FULLY shuts the server down — no lingering "windowless
     # zombie" that keeps port 5014 (and stale code) alive. Stop every ClaudeSession
     # child first so nothing is orphaned on the 8 GB machine, then hard-exit:

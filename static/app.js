@@ -6401,6 +6401,56 @@ function bootChat() {
   const list = sortedSessions();
   return list.find((s) => !s.archived) || list[0];
 }
+/* ---------- memory relief: reload the page when the watchdog asks ----------
+   The WebContent process grows with rendered content (every viewed chat's log
+   stays in the DOM, hidden) and only a reload gives it back. The memory
+   watchdog POSTs /ui/reload; the server relays it here as a ui_reload event.
+   We reload once no chat is mid-turn and nobody has typed for a minute (five
+   seconds when a human pressed the banner button), stash the composer draft
+   first and restore it after. */
+const UI_RELOAD = (() => {
+  let req = null, timer = null, lastInput = Date.now();
+  const KEY = "uiReloadStash";
+  ["keydown", "pointerdown", "wheel", "touchstart"].forEach((t) =>
+    document.addEventListener(t, () => { lastInput = Date.now(); }, { passive: true, capture: true }));
+  const anyBusy = () => {
+    for (const s of sessions.values()) if (s.statusState === "thinking" || s.statusState === "working") return true;
+    return false;
+  };
+  function attempt() {
+    timer = null;
+    if (!req) return;
+    if (Date.now() - req.ts * 1000 > 3600 * 1000) { req = null; return; }   // stale request
+    const quietFor = req.force ? 5000 : 60000;
+    if (anyBusy() || Date.now() - lastInput < quietFor) { timer = setTimeout(attempt, 15000); return; }
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ id: req.id, gb: req.gb, reason: req.reason, draft: input.value, sid: activeId }));
+    } catch (_) {}
+    location.reload();
+  }
+  function request(ev) {
+    if (!window.pywebview) return;   // only the desktop web view leaks; the phone's Safari and other browsers ignore it
+    req = ev;
+    clearTimeout(timer);
+    timer = setTimeout(attempt, ev.force ? 300 : 3000);
+  }
+  function afterBoot() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); localStorage.removeItem(KEY); } catch (_) {}
+    if (!saved) return;
+    if (saved.draft) { input.value = saved.draft; growInput(); }
+    setTimeout(() => {
+      const s = sessions.get(saved.sid) || sessions.get(activeId);
+      if (s) s.notice("Console reloaded to free memory" +
+        (saved.gb ? " (the web view was at " + Number(saved.gb).toFixed(1) + " GB)" : "") +
+        (saved.draft ? "; your draft is back in the box" : "") + ".", false);
+    }, 1500);
+    fetch("/ui/reloaded", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: saved.id, gb: saved.gb }) }).catch(() => {});
+  }
+  return { request, afterBoot };
+})();
+
 async function boot() {
   try {
     const cfg = await (await fetch("/config")).json();
@@ -6417,6 +6467,7 @@ async function boot() {
     await createSession();
   }
   bootGreeting();
+  UI_RELOAD.afterBoot();   // a watchdog-requested reload restores the draft and says so
   if (!isTouch()) input.focus();   // a phone would open with the keyboard up
 }
 boot();
@@ -6495,6 +6546,7 @@ async function syncSessions() {
       let changed = false;
       if (ev.type === "session_created" || ev.type === "session_updated") changed = applySessionMeta(ev.session);
       else if (ev.type === "session_deleted") changed = dropSession(ev.id);
+      else if (ev.type === "ui_reload") UI_RELOAD.request(ev);
       if (typeof ev.now === "number" && ev.now > (_syncSince || 0)) _syncSince = ev.now;
       if (changed) renderTabs();
     };

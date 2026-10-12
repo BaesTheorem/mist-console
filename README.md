@@ -463,6 +463,38 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 - [x] **Message actions**: edit & resend, regenerate, branch (truncating fork resume).
 - [x] **Compaction**: compact-now on the cost notices and the ctx card; boundary divider.
 
+## Memory relief: web view reload, voice idle reaping
+
+The WebContent process behind the window grows with rendered content (every
+viewed chat's log stays in the DOM, hidden) at about 1.5 GB per active chat
+hour, and only a page reload gives it back (measured 2026-10-11: 2.5 to 7.1 GB
+in three hours, flat while idle). Two routes let the harness memory watchdog
+(`mem-watchdog/` in the Exobrain harness) act on that:
+
+- `GET /ui/webview` answers `{app_pid, webview_pid, streaming, pending, last}`.
+  `webview_pid` is the WKWebView's process (WebKit's `_webProcessIdentifier`,
+  read by desktop.py and cached for a minute), so the watchdog can tell this web
+  view from any other app's. `streaming` is true while any chat has a turn in
+  flight.
+- `POST /ui/reload` (JSON or query: `reason`, `gb`, `pid`, `force`) records the
+  request and relays it to every open page over `/events` as a `ui_reload`
+  event. The desktop page reloads once no chat is mid-turn and nobody has typed
+  for a minute (five seconds with `force`, which the banner button sends),
+  stashing the composer draft in localStorage first. After the reload it
+  restores the draft, posts a notice in the active chat and reports
+  `POST /ui/reloaded`. The phone and any other browser ignore the event: only
+  the desktop web view (`window.pywebview` present) is the process that leaks.
+  The watchdog measures the footprint three minutes later and, when a reload did
+  not help, offers `bin/restart-server-when-idle` on its next banner instead.
+
+The voice engines are reaped when idle. The cloned voices (Chatterbox, 3.2 GB;
+the XTTS voice) and the resident whisper-server (1.7 GB) used to stay up from
+first use until the next reboot (five days straight on 2026-10-03..09). voice.py
+stops any of them after `MIST_VOICE_IDLE_SEC` (default 1200) without a request,
+including engines found running when the Console started, and brings one back
+on demand: a request for a stopped engine starts it and answers "warming", which
+the page already handles. `MIST_VOICE_IDLE_SEC=0` keeps them resident.
+
 ## iPhone app (ios/)
 
 `ios/` is a native iPhone shell (SwiftUI + WKWebView) around this same web UI,
