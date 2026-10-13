@@ -1208,7 +1208,7 @@ function crystalResolve() {
   if (s.permCards && s.permCards.size) return { anim: "alert" };
   if (s.statusState === "error") return { anim: "error", look: "ember" };
   if (s.statusState === "thinking") return { anim: "thinking" };
-  if (s.statusState === "working" || s.bgActiveCount() > 0) return { anim: "loading" };
+  if (s.statusState === "working" || s.activeCount() > 0) return { anim: "loading" };
   if (crystal.audioPlaying > 0) return { anim: "speaking" };
   if (window.VOICE && VOICE.crystalAnim()) return { anim: VOICE.crystalAnim() };   // conversation mode: mic open
   if (now - crystal.typingAt < TYPING_HOLD_MS) return { anim: "listening" };
@@ -2223,10 +2223,34 @@ class Session {
     this.statusState = state;
     this.statusLabel = label || state;
     if (busy) this.showSpinner(); else this.hideSpinner();
-    // the rail rebuilds on its own 1.5 s tick; move this chat's marker now so the state reads at once
-    const d = document.querySelector('.tab[data-sid="' + this.id + '"] .dot');
-    if (d) { const bg = this.bgActiveCount() > 0; d.className = "dot " + (bg ? "working bg" : state); crystalDot(d, bg ? "bg" : state); }
+    this.refreshDot();
     if (this.active) applyStatus(this);
+  }
+  // The rail rebuilds only on structural change, so this chat's marker is moved
+  // in place: on a status flip, and when background work (tasks or live
+  // progress bars) starts or stops. Untouched when the state is unchanged, so a
+  // live dot keeps its animated <img> (see the leak note in renderTabs).
+  refreshDot() {
+    const d = document.querySelector('.tab[data-sid="' + this.id + '"] .dot');
+    if (!d) return;
+    const n = this.activeCount();
+    const st = n > 0 ? "bg" : this.statusState;
+    const cls = "dot " + (n > 0 ? "working bg" : this.statusState);
+    if (d.className !== cls) { d.className = cls; crystalDot(d, st); }
+    d.title = n > 0 ? n + " running in background" : "";
+  }
+  // Background work the chat is doing right now: SDK background tasks plus
+  // progress bars that a detached script still updates. A detached downloader or
+  // OCR worker keeps posting long after the turn ended, and without this the
+  // chat read as idle while it worked.
+  activeCount() { return this.bgActiveCount() + this.liveProgressCount(); }
+  liveProgressCount() {
+    let n = 0;
+    const now = Date.now();
+    this.progressBars.forEach((p) => {
+      if (p.data.status === "running" && now - (p.data.lastTs || 0) < PROG_LIVE_MS) n++;
+    });
+    return n;
   }
 
   /* ---- background-task monitor ---- */
@@ -2354,7 +2378,10 @@ class Session {
       d.endedAt = null;      // a "stale" bar that starts moving again is live
     }
     this.paintProgress(p);
-    if (this.active && !this._replaying) renderProgDock();
+    if (!this._replaying) {
+      this.refreshDot();
+      if (this.active) { renderProgDock(); applyStatus(this); }
+    }
   }
   makeProgressBar(o) {
     const card = el("div", "prog running");
@@ -2388,7 +2415,7 @@ class Session {
     const indet = live && d.pct == null;
     p.el.className = "prog " + d.status + (indet ? " indet" : "");
     p.glyph.textContent = PROG_GLYPH[d.status] || "progress_activity";
-    p.label.textContent = d.label || "working";
+    p.label.textContent = progLabel(d);
     p.pct.textContent = d.pct != null ? Math.round(d.pct) + "%" : "";
     // An indeterminate bar still fills its track — the motion (or, under reduced
     // motion, the hatching) is what carries "alive", not the width.
@@ -2417,6 +2444,7 @@ class Session {
     if (this._replaying) return;
     if (this.active) { renderBgMonitor(); applyStatus(this); }
     renderTabs();
+    this.refreshDot();
   }
 
   /* ---- assistant turn ---- */
@@ -3023,7 +3051,7 @@ class Session {
 
 /* ---------- top-bar reflectors (active session) ---------- */
 function applyStatus(s) {
-  const n = s.bgActiveCount();
+  const n = s.activeCount();
   if (n > 0) {
     // Keep the badge lit while background work runs, even when the foreground
     // turn has ended — this is the "chat looks idle but agents are running" fix.
@@ -3048,6 +3076,17 @@ const PROG_FIELDS = ["label", "detail", "rate", "unit", "pct", "current", "total
                      "eta", "status"];
 const PROG_GLYPH = { running: "progress_activity", done: "check", error: "close",
                      canceled: "block", stale: "pause" };
+// A progress bar counts as chat activity while its sender posted within this
+// window. mist-progress run/pipe heartbeat every 60 s; a sender that died
+// without `done` stops lighting the chat after this.
+const PROG_LIVE_MS = 5 * 60 * 1000;
+// A bar with no label falls back to its id ("aa-get~3" reads "aa-get"), which
+// names the script that posts it, instead of an anonymous "working".
+function progLabel(d) {
+  if (d.label) return d.label;
+  const base = String(d.id || "").replace(/~\d+$/, "").replace(/-\d+-[0-9a-f]+$/, "");
+  return base || "working";
+}
 function isProgTerminal(s) { return s === "done" || s === "error" || s === "canceled"; }
 function clampPct(v) { return Math.max(0, Math.min(100, v == null ? 0 : v)); }
 function fmtBytes(n) {
@@ -3085,6 +3124,17 @@ function progSubline(d) {
 // even when no update has arrived for a while — a stalled transfer should look
 // stalled, not frozen at a stale number.
 setInterval(() => {
+  // A bar whose sender went silent drops out of the activity count with no
+  // event to say so: re-check every chat that has bars and move its marker.
+  sessions.forEach((x) => {
+    if (!x.progressBars.size) return;
+    const n = x.liveProgressCount();
+    if (n !== x._liveProg) {
+      x._liveProg = n;
+      x.refreshDot();
+      if (x.active) applyStatus(x);
+    }
+  });
   const s = activeId && sessions.get(activeId);
   if (!s || !s.progressBars.size) return;
   let live = false;
@@ -3122,7 +3172,7 @@ function renderProgDock() {
     row.appendChild(el("span", "pd-glyph msi", "progress_activity"));
     const main = el("div", "pd-main");
     const top = el("div", "pd-top");
-    top.appendChild(el("span", "pd-label", esc(d.label || "working")));
+    top.appendChild(el("span", "pd-label", esc(progLabel(d))));
     top.appendChild(el("span", "pd-pct", d.pct != null ? Math.round(d.pct) + "%" : ""));
     main.appendChild(top);
     const track = el("div", "pd-track");
@@ -3695,7 +3745,7 @@ function renderTabs() {
     t.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); switchTo(s.id); }
     });
-    const bg = s.bgActiveCount();
+    const bg = s.activeCount();
     const dot = el("span", "dot " + (bg > 0 ? "working bg" : s.statusState));
     crystalDot(dot, bg > 0 ? "bg" : s.statusState);
     if (bg > 0) dot.title = bg + " running in background";

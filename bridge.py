@@ -1877,8 +1877,12 @@ class ClaudeSession:
                 # (`--id model-download`, run daily) must get a fresh bar, not
                 # silence forever. A running post well clear of the settle is a
                 # new generation — new element in the UI via a suffixed id. Posts
-                # right after the terminal frame are stragglers and stay ignored.
-                if not terminal and now - st["last"] > 5:
+                # right after the terminal frame are stragglers and stay ignored,
+                # except an explicit `start` (mist-progress start sends start:
+                # true): a downloader that opens the next file's bar the instant
+                # the last one closes lost its label to this window, and every
+                # later bar then rendered as an anonymous "working".
+                if not terminal and (payload.get("start") or now - st["last"] > 5):
                     st["done"] = False
                     st["gen"] += 1
                     first = True     # record the new bar's opening frame
@@ -1888,6 +1892,14 @@ class ClaudeSession:
                 return True          # coalesce: the next tick is milliseconds away
             st["last"] = now
             gen = st["gen"]
+            label = payload.get("label")
+            if label:
+                st["label"] = str(label)
+            elif first and st.get("label"):
+                # A reused id's new generation opened on a `set` tick that has
+                # no label: carry the last known one so the bar still says what
+                # it is.
+                payload = dict(payload, label=st["label"])
             if terminal:
                 st["done"] = True
                 # Settled bars stay registered to absorb late stragglers, but a

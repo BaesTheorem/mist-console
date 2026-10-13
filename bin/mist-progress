@@ -46,6 +46,7 @@ import urllib.request
 DEFAULT_URL = "http://127.0.0.1:5014"
 POST_INTERVAL = 0.2      # seconds; the server coalesces further
 GIVE_UP_AFTER = 3        # consecutive POST failures before we stop trying
+HEARTBEAT = 60           # seconds; re-post an unchanged bar so it reads as alive
 
 
 # ---- talking to the Console --------------------------------------------------
@@ -61,6 +62,7 @@ class Bar:
         if label:
             self.state["label"] = label
         self._dirty = bool(label)
+        self._opening = True     # the first post of run/pipe is a `start`
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._fails = 0
@@ -105,13 +107,21 @@ class Bar:
         self._post(payload)
 
     def _loop(self):
+        last = time.time()
         while not self._stop.is_set():
             self._stop.wait(POST_INTERVAL)
             with self._lock:
-                if not self._dirty:
+                # A command that prints nothing for a while still posts a
+                # heartbeat, so the Console keeps counting the chat as active
+                # (it stops counting a bar after PROG_LIVE_MS of silence).
+                if not self._dirty and time.time() - last < HEARTBEAT:
                     continue
                 payload = dict(self.state)
+                if self._opening:
+                    payload["start"] = True
+                    self._opening = False
                 self._dirty = False
+            last = time.time()
             self._post(payload)
 
     def _post(self, payload):
@@ -506,7 +516,9 @@ def main():
     fields = {k: getattr(args, k) for k in
               ("label", "detail", "pct", "current", "total", "unit", "eta", "rate")}
     if args.mode == "start":
-        bar.update(status="running", **fields)
+        # start: true lets the Console open a new bar for a reused --id even
+        # when the previous one closed a moment ago (see Session.progress).
+        bar.update(status="running", start=True, **fields)
         # The id is the handle for every later call, so hand it back for `ID=$(…)`.
         print(bar_id)
         return 0
