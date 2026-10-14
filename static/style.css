@@ -339,7 +339,16 @@ body.tab-dragging .tab:not(.dragging):hover { background: inherit; color: inheri
 
 #logs { flex: 1; min-width: 0; position: relative; }
 /* top padding clears the rail-toggle button pinned at the logs' top-left corner */
-.session-log { position: absolute; inset: 0; overflow-y: auto; padding: 40px 18px 40px; }
+.session-log { position: absolute; inset: 0; overflow-y: auto; padding: 40px 18px 40px;
+  /* Layout variables JS writes on <html> or #logs, which nothing inside a chat
+     reads. A changed custom property restyles every node that inherits it, and
+     a long chat is 77k nodes: a --composer-h change cost 435 ms per layout in
+     WebKit (chat switch, composer growth, rail and pane drags). Pinning them
+     here stops the change at the log: 22 ms. Fonts (--mono, --head) are read
+     inside chats and stay inherited. */
+  --topbar-h: 0px; --composer-h: 0px; --vvh: 0px; --zoom: 1; --rail-w: 0px; --pane-w: 0px;
+  --wp-image: none; --wp-opacity: 0; --wp-size: auto; --wp-repeat: no-repeat; --wp-pos: center; --wp-blend: normal;
+}
 
 /* floating "jump to present" pill — only shown when scrolled up off the bottom */
 #jumpBtn {
@@ -367,6 +376,8 @@ body.tab-dragging .tab:not(.dragging):hover { background: inherit; color: inheri
 #mid.rail-collapsed #tabrail { width: 0; flex-basis: 0; overflow: hidden; border-right: 0; }
 #mid.rail-collapsed #railResize { display: none; }
 .session-log[hidden] { display: none; }
+/* History replay (Session._replaying): no layout until the log is complete. */
+.session-log.replaying { display: none; }
 .msg {
   /* Full width on purpose: no max-width column. Wide windows used to dump every
      spare pixel into a dead right margin, since the margin shorthand below sets
@@ -379,9 +390,9 @@ body.tab-dragging .tab:not(.dragging):hover { background: inherit; color: inheri
   content-visibility: auto;
   contain-intrinsic-size: auto 140px;
 }
-/* Session.primeHeights(): render every message once so each one's real height
+/* Session.primeHeights(): render each message once, in steps, so its real height
    is remembered (see `auto` above) and scrolling up never meets a placeholder */
-.session-log.prime .msg { content-visibility: visible; }
+.msg.prime { content-visibility: visible; }
 .msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
   display: flex; align-items: baseline; gap: 8px; }
 .msg.user .who   { color: var(--user); font-weight: 700; }
@@ -1949,8 +1960,8 @@ body.pane-open #usage { right: calc(var(--pane-w, 380px) + 20px); }
 @media (max-width: 760px) { #paneDock, #paneResize { display: none !important; } }
 
 /* the conversation pane sits between the chat and the mod dock; keep the usage line out of it */
-body:has(#voicePane:not([hidden])) #usage { right: calc(232px + 20px); }
-body.pane-open:has(#voicePane:not([hidden])) #usage { right: calc(232px + var(--pane-w, 380px) + 20px); }
+body.voice-open #usage { right: calc(232px + 20px); }
+body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20px); }
 
 /* --- settings: mods + flags --- */
 .mod-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--line-soft); font-size: 12px; flex-wrap: wrap; }

@@ -99,10 +99,9 @@
   function syncComposerHeight() {
     // #composer's height var drives the log padding; the band and status
     // strip sit above it, so fold them into the same measurement.
-    const root = document.documentElement;
     const c = $("#composer"), b = $("#aboveBand"), m = $("#modStatus");
     const h = (c ? c.offsetHeight : 0) + (b && !b.hidden ? b.offsetHeight : 0) + (m && !m.hidden ? m.offsetHeight : 0);
-    root.style.setProperty("--composer-h", h + "px");
+    setRootVar("--composer-h", h + "px");   // app.js: writes only a changed value
   }
   function toast(text, plugin, ms) {
     const box = $("#toasts");
@@ -211,7 +210,8 @@
     const comp = $("#composer");
     const st = s ? state(s) : null;
     const show = st && st.suggestion && !input.value;
-    input.placeholder = show ? "⇥ Tab:  " + st.suggestion : DEFAULT_PLACEHOLDER;
+    const ph = show ? "⇥ Tab:  " + st.suggestion : DEFAULT_PLACEHOLDER;
+    if (input.placeholder !== ph) input.placeholder = ph;   // an unchanged write still relaid the page out on every switch
     if (comp) comp.classList.toggle("has-suggest", !!show);
   }
   function acceptSuggestion() {
@@ -606,7 +606,10 @@
     const dock = $("#paneDock"), tabs = $("#paneTabs"), body = $("#paneBody");
     if (!dock) return;
     const roster = st.panes && Array.isArray(st.panes.panes) ? st.panes.panes : [];
-    if (!roster.length) { dock.hidden = true; body.innerHTML = ""; tabs.innerHTML = ""; document.body.classList.remove("pane-open"); return; }
+    if (!roster.length) {
+      if (dock.hidden) return;   // already closed: rewriting it relaid the page out on every switch
+      dock.hidden = true; body.innerHTML = ""; tabs.innerHTML = ""; document.body.classList.remove("pane-open"); return;
+    }
     dock.hidden = false;
     document.body.classList.add("pane-open");
     const shown = st.panes.shown_id || roster[roster.length - 1].id;

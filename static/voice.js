@@ -122,7 +122,7 @@
   function render() {
     if (!ui) return;
     const d = STATES[st.state] || STATES.error;
-    ui.pane.hidden = !st.on;
+    showPane(st.on);
     ui.pane.dataset.state = st.state;
     ui.btn.setAttribute("aria-pressed", st.on ? "true" : "false");
     ui.btn.classList.toggle("on", st.on);
@@ -366,7 +366,7 @@
   function onSwitch() {
     // Conversation mode belongs to the chat it was started in. Switching away
     // leaves it running there; the pane follows the active chat.
-    if (ui) ui.pane.hidden = !(st.on && activeId === st.sid);
+    if (ui) showPane(st.on && activeId === st.sid);
     syncCrystal();
   }
   function crystalAnim() {
@@ -457,6 +457,13 @@
   }
 
   /* ---------- wiring ---------- */
+  // body.voice-open moves the usage line clear of the pane (style.css). It was
+  // body:has(#voicePane:not([hidden])), which made WebKit re-check <body> on
+  // every hidden toggle anywhere, chat switches included, and restyle the page.
+  function showPane(on) {
+    ui.pane.hidden = !on;
+    document.body.classList.toggle("voice-open", !!on);
+  }
   function init() {
     const pane = $("#voicePane"), btn = $("#voiceBtn");
     if (!pane || !btn) return;

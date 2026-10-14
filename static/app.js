@@ -50,6 +50,15 @@ function shellSave(url, name) {
   } catch (_) { return false; }
 }
 
+// Set a custom property on <html> only when its value changes. Any write to
+// the root's inline style restyles every node in every chat log (custom
+// properties inherit), and switching chats wrote --composer-h unchanged: the
+// next layout read paid 490 ms for a 77k-node chat in WebKit.
+function setRootVar(name, value) {
+  const st = document.documentElement.style;
+  if (st.getPropertyValue(name) !== value) st.setProperty(name, value);
+}
+
 // Auto-grow the composer to fit its text, capped at 200px. Show the scrollbar
 // ONLY once we hit that cap. Without this, WebKit's custom (non-overlay)
 // scrollbar reserves a gutter even on a single line that already fits.
@@ -62,6 +71,16 @@ function growInput() {
 
 // Show the "jump to present" pill whenever the visible chat is scrolled up
 // off the bottom (so MIST's live output isn't yanking us back down).
+const PRIME_STEP = 150;   // messages per primeHeights() step
+// The first message whose box reaches below y (offsetTop is log-relative).
+function topVisibleMsg(msgs, y) {
+  let lo = 0, hi = msgs.length - 1, hit = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1, m = msgs[mid];
+    if (m.offsetTop + m.offsetHeight > y) { hit = m; hi = mid - 1; } else lo = mid + 1;
+  }
+  return hit;
+}
 function updateJumpBtn() {
   if (!jumpBtn) return;
   const s = activeId && sessions.get(activeId);
@@ -91,9 +110,9 @@ function updateJumpBtn() {
 // to start the side panels below it — that keeps their trigger buttons visible
 // and clickable, so clicking a button again toggles its panel closed.
 (function () {
-  const tb = $("#topbar"), root = document.documentElement;
+  const tb = $("#topbar");
   if (!tb) return;
-  const sync = () => root.style.setProperty("--topbar-h", tb.offsetHeight + "px");
+  const sync = () => setRootVar("--topbar-h", tb.offsetHeight + "px");
   sync();
   if (window.ResizeObserver) new ResizeObserver(sync).observe(tb);
   window.addEventListener("resize", sync);
@@ -172,12 +191,12 @@ function updateJumpBtn() {
 // The fixed overlays that sit above it (#usage, #bgMonitor) anchor to
 // --composer-h instead of assuming a one-line row.
 (function () {
-  const c = $("#composer"), root = document.documentElement;
+  const c = $("#composer");
   if (!c) return;
   // The mods' band (#aboveBand) and status strip (#modStatus) sit above the
   // composer and belong to the same measurement (mods.js).
   const extras = () => ["#aboveBand", "#modStatus"].reduce((n, id) => { const e = $(id); return n + (e && !e.hidden ? e.offsetHeight : 0); }, 0);
-  const sync = () => root.style.setProperty("--composer-h", (c.offsetHeight + extras()) + "px");
+  const sync = () => setRootVar("--composer-h", (c.offsetHeight + extras()) + "px");
   sync();
   if (window.ResizeObserver) {
     const ro = new ResizeObserver(sync);
@@ -1548,16 +1567,42 @@ class Session {
   // scrolling up through a chat jerked by 50-500px a step. Rendering every
   // message for two frames when the chat first opens lets
   // `contain-intrinsic-size: auto` remember each real height, so later skipped
-  // layout uses true sizes. One full layout per chat open, then cheap again.
+  // layout uses true sizes.
   primeHeights() {
     if (this._primed || this._replaying || !this.active) return;
     this._primed = true;
-    this.logEl.classList.add("prime");
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      this.logEl.classList.remove("prime");
-      this.scroll();
-    }));
+    // In steps of PRIME_STEP messages, newest first, between frames: priming
+    // all 2300 messages of a long chat in one go froze the window for 450 to
+    // 560 ms (WebKit). A step renders its messages for two frames, which is when
+    // contain-intrinsic-size: auto records their heights. Following the bottom,
+    // a step re-pins it; scrolled up, it keeps the top visible message at the
+    // same place, since WKWebView has no scroll anchoring of its own. Leaving
+    // the chat stops the run, and the next visit starts again.
+    const gen = this._primeGen = (this._primeGen || 0) + 1;
+    const msgs = [...this.logEl.children].filter((n) => n.classList.contains("msg"));
+    let end = msgs.length;
+    const raf2 = (f) => requestAnimationFrame(() => requestAnimationFrame(f));
+    const step = () => {
+      if (gen !== this._primeGen) return;
+      if (!this.active || this._replaying) { this._primed = false; return; }
+      if (end <= 0) return;
+      const batch = msgs.slice(Math.max(0, end - PRIME_STEP), end);
+      end -= batch.length;
+      const log = this.logEl;
+      const anchor = this.stick ? null : topVisibleMsg(msgs, log.scrollTop);
+      const was = anchor ? anchor.offsetTop : 0;
+      batch.forEach((m) => m.classList.add("prime"));
+      if (this.stick) log.scrollTop = log.scrollHeight;
+      else if (anchor) log.scrollTop += anchor.offsetTop - was;
+      raf2(() => {
+        batch.forEach((m) => m.classList.remove("prime"));
+        if (end <= 0) this.scroll();
+        setTimeout(step, 30);
+      });
+    };
+    step();
   }
+
   // Only auto-scroll when we're following the bottom. Pass force=true (user send,
   // tab switch, "jump to present") to re-arm following and snap down regardless.
   // Skipped while history replays: each scrollHeight read forces a full layout
@@ -2683,8 +2728,16 @@ class Session {
         const t = d.thinking || "";
         // Leading whitespace-only ticks arrive before the summary; skip them so
         // the body does not open with blank lines.
-        if (!t.trim() && !b.el.textContent) return;
-        b.el.textContent += t;
+        if (!t.trim() && !b.el.textContent && !b.pending) return;
+        // Batched like text deltas: one DOM write per 150 ms, not one per delta.
+        b.pending = (b.pending || "") + t;
+        if (!b._thTimer) {
+          b._thTimer = setTimeout(() => {
+            b._thTimer = null;
+            if (b.pending) { b.el.textContent += b.pending; b.pending = ""; }
+            this.scroll();
+          }, 150);
+        }
         if (b.wait) { b.wait.remove(); b.wait = null; }
         if (d.estimated_tokens) this.tickThinking(d.estimated_tokens);
       } else if (d.type === "text_delta") {
@@ -2708,7 +2761,9 @@ class Session {
         // grew with its length.
         if (!b._inTimer) {
           const idx = e.index;
-          b._inTimer = setTimeout(() => { b._inTimer = null; b.pre.textContent = this.toolInputs[idx] || ""; }, 150);
+          b._inTimer = setTimeout(() => {   // skipped once finalizeToolInputs filled the real body (b.id)
+            b._inTimer = null; if (!b.id) b.pre.textContent = this.toolInputs[idx] || "";
+          }, 150);
         }
       }
     } else if (e.type === "content_block_stop") {
@@ -2720,6 +2775,8 @@ class Session {
         if (!this._replaying) { const em = crystalEmotionFrom(b.text); if (em) this.emotion = em; }
         if (window.MODS && b.text) MODS.siteAssistant(this, b.el, b.text, e.index === 0);
       } else if (b && b.type === "thinking") {
+        if (b._thTimer) { clearTimeout(b._thTimer); b._thTimer = null; }
+        if (b.pending) { b.el.textContent += b.pending; b.pending = ""; }
         if (this._openThink === b) this._openThink = null;
         if (b.wait) { b.wait.remove(); b.wait = null; }
         b.el.textContent = b.el.textContent.trim();   // the summary ends in blank lines
@@ -4139,13 +4196,6 @@ async function toggleArchive(id) {
   }
   try { await fetch("/sessions/" + id + "/archive", { method: "POST" }); } catch (_) {}
 }
-// The last few chats keep their style and layout while hidden
-// (content-visibility: hidden, style.css) so switching back to one costs no
-// relayout. A display:none log dropped all of it, and WebKit restyled every
-// node on the way back: 250 ms+ per switch into a 2000-message chat. Capped,
-// because each warm log holds its render tree in memory.
-const WARM_LOGS = 4;
-let warmLogs = [];
 function switchTo(id) {
   crystal.emotion = null; crystal.lastActivity = Date.now();
   const s = sessions.get(id);
@@ -4157,11 +4207,7 @@ function switchTo(id) {
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
   syncPhoneTitle();
   s.connect();   // lazy: open the stream + replay this transcript on first view
-  warmLogs = [id, ...warmLogs.filter((x) => x !== id && sessions.has(x))].slice(0, WARM_LOGS);
-  sessions.forEach((x) => {
-    x.logEl.hidden = x.id !== id;
-    x.logEl.classList.toggle("warm", x.id !== id && warmLogs.includes(x.id));
-  });
+  sessions.forEach((x) => { x.logEl.hidden = x.id !== id; });
   // reflect this session into the top bar
   if (s.init) fillCaps(s.init, s);
   else {   // dormant chat, no init yet — still show its own selections
@@ -4171,12 +4217,23 @@ function switchTo(id) {
     $("#think").textContent = "think: " + effortLabel(s.effort);
   }
   applyStatus(s);
-  renderBgMonitor();   // repaint the background-task panel for THIS chat
-  renderProgDock();    // …and this chat's own progress bars
+  renderProgDock();    // this chat's own progress bars
   setCtxBadge(s.ctxPct, s.ctxUsed, s.ctxWindow);
   $("#usage").textContent = s.lastUsage || "";
   refreshRepo();   // repaint the repo badge for THIS chat's cwd
   renderTabs();
+  // restore this chat's own draft + image attachment (neither bleeds across chats)
+  input.value = s.draft || "";
+  setPendingImage(s.draftImage || null);
+  hideSlash();
+  reportActiveChat();   // AirDropped photos follow the chat you switch to
+  if (window.MODS) MODS.switched(s);   // this chat's status lines, panes, band, suggestion
+  if (window.ARTIFACTS) ARTIFACTS.switched(s);   // this chat's artifacts in the drawer
+  // Everything below reads layout, so it comes after the writes above: each
+  // read that followed a write paid a full layout of the incoming chat, three
+  // per switch (WebKit, 2300-message chat: 450 ms in switchTo alone).
+  renderBgMonitor();   // repaint the background-task panel for THIS chat
+  growInput();
   // Keep the chat you just entered on screen: with a long pinned section the tab
   // rail can be scrolled such that the active tab sits below the fold, so a new or
   // switched-to chat would otherwise be invisible until you hunt for it.
@@ -4185,15 +4242,7 @@ function switchTo(id) {
   s.scroll(true);   // entering a chat lands on its latest message
   s.primeHeights();   // no-op until the replay is done (replay_done calls it too)
   updateJumpBtn();
-  // restore this chat's own draft + image attachment (neither bleeds across chats)
-  input.value = s.draft || "";
-  setPendingImage(s.draftImage || null);
-  growInput();
-  hideSlash();
   if (!isTouch()) input.focus();   // on a phone this would raise the keyboard on every switch
-  reportActiveChat();   // AirDropped photos follow the chat you switch to
-  if (window.MODS) MODS.switched(s);   // this chat's status lines, panes, band, suggestion
-  if (window.ARTIFACTS) ARTIFACTS.switched(s);   // this chat's artifacts in the drawer
 }
 async function createSession() {
   const r = await fetch("/sessions", { method: "POST" });
@@ -7654,8 +7703,8 @@ if (isTouch()) input.placeholder = "Talk to MIST…";
     // zoomed, so the visual height is divided by the zoom or a 125% Console
     // gets a body 25% taller than the screen (the top bar scrolled off it).
     const zoom = parseFloat(document.documentElement.style.zoom) || 1;
-    document.documentElement.style.setProperty("--zoom", String(zoom));   // vw-sized things divide by it (style.css)
-    document.documentElement.style.setProperty("--vvh", Math.round(vv.height / zoom) + "px");
+    setRootVar("--zoom", String(zoom));   // vw-sized things divide by it (style.css)
+    setRootVar("--vvh", Math.round(vv.height / zoom) + "px");
     if (window.scrollY) window.scrollTo(0, 0);
     const a = activeId && sessions.get(activeId);
     if (a) a.scroll();   // keep following the bottom while the log area resizes
