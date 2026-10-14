@@ -152,11 +152,20 @@ function updateJumpBtn() {
       meta.classList.toggle("scrolls", overflows());
     } finally { busy = false; }
   };
+  // One fit per frame. Measuring inside the observer forced a layout of the
+  // whole page on every badge write (status changes during a replay, every
+  // switch): 650 ms of a cold boot.
+  let queued = false;
+  const later = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; fit(); });
+  };
   fit();
-  if (window.ResizeObserver) new ResizeObserver(fit).observe(meta);
-  window.addEventListener("resize", fit);
-  new MutationObserver(fit).observe(meta, { childList: true, characterData: true, subtree: true });
-  PHONE_MQ.addEventListener("change", fit);
+  if (window.ResizeObserver) new ResizeObserver(later).observe(meta);
+  window.addEventListener("resize", later);
+  new MutationObserver(later).observe(meta, { childList: true, characterData: true, subtree: true });
+  PHONE_MQ.addEventListener("change", later);
 })();
 
 // Track the composer's height too (it grows to ~220px with a multi-line draft).
@@ -1488,6 +1497,7 @@ class Session {
       try { this.onEvent(ev); } catch (_) {}
     };
     this.es.onerror = () => {
+      this.logEl.classList.remove("replaying");   // show what arrived; a reconnect wipes and replays
       this.setStatus("error", "disconnected");
       if (this.active) shellStream("down");   // the shell may need to move to another address
     };
@@ -1521,6 +1531,14 @@ class Session {
   }
 
   get active() { return this.id === activeId; }
+  // While history replays the log is display:none (.replaying): thousands of
+  // appended messages then cost no style or layout until replay_done shows the
+  // finished log once. Laying the log out as it grew was most of a chat open.
+  get _replaying() { return this.__replaying; }
+  set _replaying(v) {
+    this.__replaying = !!v;
+    if (this.logEl) this.logEl.classList.toggle("replaying", !!v);
+  }
 
   /* ---- dom helpers (scoped to this tab) ---- */
   atBottom() { return this.logEl.scrollHeight - this.logEl.scrollTop - this.logEl.clientHeight < 60; }
@@ -1546,9 +1564,18 @@ class Session {
   // of the growing log, so one per replayed event made opening a chat quadratic
   // (4.5 s for 786 messages in Chromium, minutes at 100% CPU in WKWebView).
   // replay_done scrolls once.
+  // A plain follow scroll waits for the next frame and coalesces: during a
+  // stream every delta asked for one, and each read of scrollHeight forced a
+  // layout. force (user send, tab switch) still snaps at once.
   scroll(force) {
     if (force) this.stick = true;
     if (this._replaying) return;
+    if (force) { this._scrollNow(); return; }
+    if (this._scrollQueued) return;
+    this._scrollQueued = true;
+    requestAnimationFrame(() => { this._scrollQueued = false; if (!this._replaying) this._scrollNow(); });
+  }
+  _scrollNow() {
     if (this.active && this.stick) this.logEl.scrollTop = this.logEl.scrollHeight;
     if (this.active) updateJumpBtn();
   }
@@ -2677,7 +2704,12 @@ class Session {
         if (window.VOICE && VOICE.on) VOICE.onText(this, b, false);   // read finished sentences aloud as they stream
       } else if (d.type === "input_json_delta") {
         this.toolInputs[e.index] += d.partial_json || "";
-        b.pre.textContent = this.toolInputs[e.index];
+        // Same 150 ms coalescing as text: rewriting the whole input per delta
+        // grew with its length.
+        if (!b._inTimer) {
+          const idx = e.index;
+          b._inTimer = setTimeout(() => { b._inTimer = null; b.pre.textContent = this.toolInputs[idx] || ""; }, 150);
+        }
       }
     } else if (e.type === "content_block_stop") {
       const b = this.blocks[e.index];
@@ -4107,6 +4139,13 @@ async function toggleArchive(id) {
   }
   try { await fetch("/sessions/" + id + "/archive", { method: "POST" }); } catch (_) {}
 }
+// The last few chats keep their style and layout while hidden
+// (content-visibility: hidden, style.css) so switching back to one costs no
+// relayout. A display:none log dropped all of it, and WebKit restyled every
+// node on the way back: 250 ms+ per switch into a 2000-message chat. Capped,
+// because each warm log holds its render tree in memory.
+const WARM_LOGS = 4;
+let warmLogs = [];
 function switchTo(id) {
   crystal.emotion = null; crystal.lastActivity = Date.now();
   const s = sessions.get(id);
@@ -4118,7 +4157,11 @@ function switchTo(id) {
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
   syncPhoneTitle();
   s.connect();   // lazy: open the stream + replay this transcript on first view
-  sessions.forEach((x) => { x.logEl.hidden = x.id !== id; });
+  warmLogs = [id, ...warmLogs.filter((x) => x !== id && sessions.has(x))].slice(0, WARM_LOGS);
+  sessions.forEach((x) => {
+    x.logEl.hidden = x.id !== id;
+    x.logEl.classList.toggle("warm", x.id !== id && warmLogs.includes(x.id));
+  });
   // reflect this session into the top bar
   if (s.init) fillCaps(s.init, s);
   else {   // dormant chat, no init yet — still show its own selections
