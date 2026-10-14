@@ -1542,8 +1542,13 @@ class Session {
   }
   // Only auto-scroll when we're following the bottom. Pass force=true (user send,
   // tab switch, "jump to present") to re-arm following and snap down regardless.
+  // Skipped while history replays: each scrollHeight read forces a full layout
+  // of the growing log, so one per replayed event made opening a chat quadratic
+  // (4.5 s for 786 messages in Chromium, minutes at 100% CPU in WKWebView).
+  // replay_done scrolls once.
   scroll(force) {
     if (force) this.stick = true;
+    if (this._replaying) return;
     if (this.active && this.stick) this.logEl.scrollTop = this.logEl.scrollHeight;
     if (this.active) updateJumpBtn();
   }
@@ -2844,6 +2849,7 @@ class Session {
         // backend is dormant), so drop it. A genuinely-live task re-appears from
         // its next task_progress tick (handleBgSystem recreates on unknown id).
         this._replaying = false;
+        this.scroll();
         this.primeHeights();
         this.paintAllBookmarks();
         hydrateTaskBoxes(this.logEl, this);
