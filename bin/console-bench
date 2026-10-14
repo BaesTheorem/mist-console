@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Time the Console page boot in a headless WebKit: chat list, chat open, main-thread stalls.
+
+    bin/console-bench                      # boot chat = the Mac's last chat
+    bin/console-bench --chat s1628         # boot on this chat
+    bin/console-bench --runs 5 --origin http://127.0.0.1:5099
+    bin/console-bench --engine wk          # the system WKWebView, the app's real engine
+
+Every request that is not a GET is aborted, so a run cannot change the live
+Console (/last-chat, /active-chat and the other POSTs never reach it). The
+default engine is Playwright's WebKit, which differs from the shipped one in a
+few places (see reference_console_webkit_perf); --engine wk loads the page in
+an off-screen WKWebView under the app's own bundled Python instead. Prints
+the median of each mark over the runs, in ms from navigation start:
+
+    dcl        DOMContentLoaded
+    sessions   the boot GET /sessions resolved
+    rail       the first chat row is in the DOM
+    railPaint  the first frame after that row (what Alex sees)
+    fonts      document.fonts.ready: the web fonts the page asked for are in
+    chat       the boot chat finished its replay (.replaying removed)
+    load       the window load event
+
+and the main-thread stalls over 50 ms (a MessageChannel heartbeat) up to the
+chat mark. Playwright's WebKit must be installed once:
+`python3 -m playwright install webkit`.
+"""
+import argparse
+import json
+import os
+import statistics
+import sys
+import time
+
+APP_PY = "/Applications/MIST Console.app/Contents/MacOS/python-bin"
+
+PROBE = r"""
+(() => {
+  const T = (window.__bench = { marks: {}, stalls: [], fetches: [] });
+  const mark = (k) => { if (!(k in T.marks)) T.marks[k] = Math.round(performance.now()); };
+  document.addEventListener("DOMContentLoaded", () => mark("dcl"));
+  // every web font the first render asked for (the icon font among them) is in
+  document.fonts && document.fonts.ready.then(() => mark("fonts"));
+  window.addEventListener("load", () => mark("load"));
+  const of = window.fetch;
+  window.fetch = function (u, o) {
+    // Never let a benchmark change the live Console: writes resolve empty.
+    if (o && o.method && o.method !== "GET") return Promise.resolve(new Response("{}", { status: 200 }));
+    const t0 = performance.now();
+    const p = of.apply(this, arguments);
+    p.then(() => {
+      const t1 = performance.now();
+      T.fetches.push([String(u).slice(0, 60), Math.round(t0), Math.round(t1)]);
+      if (String(u) === "/sessions" && !(o && o.method)) mark("sessions");
+    }, () => {});
+    return p;
+  };
+  // Heartbeat: a gap between two MessageChannel ticks is a main-thread stall.
+  const ch = new MessageChannel();
+  let last = performance.now();
+  ch.port1.onmessage = () => {
+    const now = performance.now();
+    if (now - last > 50) T.stalls.push([Math.round(last), Math.round(now - last)]);
+    last = now;
+    if (!("chat" in T.marks) || now - T.marks.chat < 2000) ch.port2.postMessage(0);
+  };
+  ch.port2.postMessage(0);
+  const mo = new MutationObserver(() => {
+    if (!("rail" in T.marks) && document.querySelector("#tabs .tab")) {
+      mark("rail");
+      requestAnimationFrame(() => setTimeout(() => mark("railPaint"), 0));
+    }
+    const log = document.querySelector(".session-log:not([hidden])");
+    if (log && "rail" in T.marks && !log.classList.contains("replaying")) mark("chat");
+  });
+  mo.observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "hidden"] });
+})();
+"""
+
+
+def run(origin, chat):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.webkit.launch(headless=True)
+        ctx = browser.new_context(viewport={"width": 1400, "height": 900})
+        ctx.route("**/*", lambda r: r.abort() if r.request.method != "GET" else r.continue_())
+        if chat:
+            ctx.add_init_script("try{localStorage.setItem('lastChat'," + json.dumps(chat) + ")}catch(e){}")
+        ctx.add_init_script(PROBE)
+        page = ctx.new_page()
+        page.goto(origin + "/", wait_until="domcontentloaded", timeout=30000)
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            m = page.evaluate("() => window.__bench.marks")
+            if "chat" in m and "railPaint" in m:
+                break
+            time.sleep(0.1)
+        time.sleep(0.3)
+        out = page.evaluate("""() => ({...window.__bench,
+            rows: document.querySelectorAll('#tabs .tab').length,
+            logs: document.querySelectorAll('.session-log').length,
+            nodes: document.getElementsByTagName('*').length})""")
+        browser.close()
+        return out
+
+
+def run_wk(origin, chat):
+    """One boot in the system WKWebView, off screen (same approach as console-snap)."""
+    from AppKit import NSApplication, NSApplicationActivationPolicyProhibited, NSWindow
+    from Foundation import NSDate, NSMakeRect, NSRunLoop, NSURL, NSURLRequest
+    from WebKit import (WKUserScript, WKUserScriptInjectionTimeAtDocumentStart, WKWebView,
+                        WKWebViewConfiguration, WKWebsiteDataStore)
+    app = NSApplication.sharedApplication()
+    app.setActivationPolicy_(NSApplicationActivationPolicyProhibited)
+    cfg = WKWebViewConfiguration.alloc().init()
+    cfg.setWebsiteDataStore_(WKWebsiteDataStore.nonPersistentDataStore())
+    pre = ("try{localStorage.setItem('lastChat'," + json.dumps(chat) + ")}catch(e){}\n") if chat else ""
+    ucc = cfg.userContentController()
+    ucc.addUserScript_(WKUserScript.alloc().initWithSource_injectionTime_forMainFrameOnly_(
+        pre + PROBE, WKUserScriptInjectionTimeAtDocumentStart, True))
+    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        NSMakeRect(-4000, 0, 1400, 900), 0, 2, False)
+    wv = WKWebView.alloc().initWithFrame_configuration_(NSMakeRect(0, 0, 1400, 900), cfg)
+    win.setContentView_(wv)
+    win.orderBack_(None)
+
+    def pump(sec):
+        NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(sec))
+
+    def js(code):
+        box = {}
+        wv.evaluateJavaScript_completionHandler_(code, lambda r, e: box.update(r=r, e=e))
+        for _ in range(200):
+            if box:
+                break
+            pump(0.02)
+        return box.get("r")
+
+    wv.loadRequest_(NSURLRequest.requestWithURL_(NSURL.URLWithString_(origin + "/")))
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        pump(0.1)
+        m = json.loads(js("JSON.stringify(window.__bench ? window.__bench.marks : {})") or "{}")
+        if "chat" in m and "rail" in m:
+            break
+    pump(0.3)
+    out = json.loads(js("""JSON.stringify({...window.__bench,
+        rows: document.querySelectorAll('#tabs .tab').length,
+        logs: document.querySelectorAll('.session-log').length,
+        nodes: document.getElementsByTagName('*').length})"""))
+    win.close()
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--origin", default="http://127.0.0.1:5014")
+    ap.add_argument("--chat", default=None)
+    ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--engine", choices=["webkit", "wk"], default="webkit")
+    ap.add_argument("--json", action="store_true", help="print every run in full")
+    a = ap.parse_args()
+    if a.engine == "wk":
+        try:
+            import WebKit  # noqa: F401
+        except ImportError:   # system python3 has no PyObjC; the app bundle's Python does
+            os.execv(APP_PY, [APP_PY, *sys.argv])
+        runs = [run_wk(a.origin, a.chat) for _ in range(a.runs)]
+    else:
+        runs = [run(a.origin, a.chat) for _ in range(a.runs)]
+    if a.json:
+        print(json.dumps(runs, indent=1))
+    keys = ["dcl", "sessions", "rail", "railPaint", "fonts", "chat", "load"]
+    print("median ms over", len(runs), "runs:")
+    for k in keys:
+        vals = [r["marks"][k] for r in runs if k in r["marks"]]
+        if vals:
+            print(f"  {k:10s} {statistics.median(vals):7.0f}   ({', '.join(str(v) for v in vals)})")
+    last = runs[-1]
+    print(f"rows {last['rows']}  session logs {last['logs']}  elements {last['nodes']}")
+    end = last["marks"].get("chat", 1e9)
+    big = [s for s in last["stalls"] if s[0] <= end]
+    print("stalls > 50 ms before the chat mark (start, length):", big[:20])
+    print("total stalled:", sum(s[1] for s in big), "ms")
+
+
+if __name__ == "__main__":
+    main()

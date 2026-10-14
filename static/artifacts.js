@@ -64,21 +64,24 @@
       seen.set(key, out.length);
       out.push(item);
     };
-    const body = s.logEl;
-    body.querySelectorAll(".genimg-wrap").forEach((w) => {
-      const a = w.querySelector("a.imglink");
-      push(w, "image", (a && (a.getAttribute("data-full") || a.getAttribute("href"))) || "");
-    });
-    body.querySelectorAll(".genaudio-wrap").forEach((w) => {
-      const a = w.querySelector("audio"), d = w.querySelector("[data-dl]");
-      push(w, "audio", (d && d.getAttribute("data-dl")) || (a && a.getAttribute("src")) || "");
-    });
-    body.querySelectorAll(".genvideo-wrap").forEach((w) => {
-      const d = w.querySelector("[data-dl]"), v = w.querySelector("video");
-      push(w, "video", (d && d.getAttribute("data-dl")) || (v && v.getAttribute("src")) || "");
-    });
-    body.querySelectorAll(".genmodel-wrap").forEach((w) => push(w, "model", w.dataset.model || ""));
-    body.querySelectorAll(".genfile[data-dl]").forEach((w) => push(w, "file", w.getAttribute("data-dl")));
+    // A long chat keeps its older messages folded out of the live log (app.js
+    // Session.foldOlder); their embeds still belong in the drawer.
+    for (const body of (s.msgRoots ? s.msgRoots() : [s.logEl])) {
+      body.querySelectorAll(".genimg-wrap").forEach((w) => {
+        const a = w.querySelector("a.imglink");
+        push(w, "image", (a && (a.getAttribute("data-full") || a.getAttribute("href"))) || "");
+      });
+      body.querySelectorAll(".genaudio-wrap").forEach((w) => {
+        const a = w.querySelector("audio"), d = w.querySelector("[data-dl]");
+        push(w, "audio", (d && d.getAttribute("data-dl")) || (a && a.getAttribute("src")) || "");
+      });
+      body.querySelectorAll(".genvideo-wrap").forEach((w) => {
+        const d = w.querySelector("[data-dl]"), v = w.querySelector("video");
+        push(w, "video", (d && d.getAttribute("data-dl")) || (v && v.getAttribute("src")) || "");
+      });
+      body.querySelectorAll(".genmodel-wrap").forEach((w) => push(w, "model", w.dataset.model || ""));
+      body.querySelectorAll(".genfile[data-dl]").forEach((w) => push(w, "file", w.getAttribute("data-dl")));
+    }
     out.sort((x, y) => (y.ts - x.ts) || 0);
     return out;
   }
@@ -191,7 +194,7 @@
   // ---- actions ------------------------------------------------------------
   function reveal(it) {
     const s = activeId && sessions.get(activeId);
-    if (!s || !it.msg.isConnected) return;
+    if (!s || !(it.msg.isConnected || (s._older && s._older.contains(it.msg)))) return;
     if (isTouch()) close();   // on a phone the drawer covers the chat
     revealMessage(s, it.msg);
   }

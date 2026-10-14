@@ -399,6 +399,17 @@ body.tab-dragging .tab:not(.dragging):hover { background: inherit; color: inheri
 /* Session.primeHeights(): render each message once, in steps, so its real height
    is remembered (see `auto` above) and scrolling up never meets a placeholder */
 .msg.prime { content-visibility: visible; }
+/* Session.foldOlder(): the row at the top of a long chat whose older entries
+   wait outside the live log. Scrolling near it (or a click) brings them back. */
+.older-more {
+  display: flex; align-items: center; gap: 6px; margin: 4px auto 18px;
+  background: var(--md-sys-color-surface-container-high); border: 1px solid var(--line);
+  color: var(--md-sys-color-on-surface-variant); padding: 5px 12px; font-size: 12px; letter-spacing: .3px;
+  cursor: pointer;
+}
+.older-more:hover { color: var(--teal); border-color: var(--teal); }
+.older-more:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
+.older-more .msi { font-size: 15px; }
 .msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
   display: flex; align-items: baseline; gap: 8px; }
 .msg.user .who   { color: var(--user); font-weight: 700; }

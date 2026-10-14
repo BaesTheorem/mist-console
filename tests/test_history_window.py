@@ -106,3 +106,25 @@ def test_first_open_does_not_duplicate_events_recorded_before_it(tmp_path):
     hist = s.snapshot_history()
     assert [o["text"] for o in hist if o.get("type") == "user_text"] == ["seed"]
     assert len(hist) == 1
+
+
+def test_parse_free_fold_matches_full_parse(tmp_path, monkeypatch):
+    """_iter_jsonl_for_fold skips parsing the lines the condenser drops anyway.
+    Its fold must equal the fold of every line parsed: a compact_boundary in
+    the skipped zone survives, blank and corrupt lines change nothing."""
+    import json
+    ev = _chat(40, 30)
+    ev.insert(200, {"type": "system", "subtype": "compact_boundary", "seq": 99999})
+    ev.insert(300, {"type": "system", "subtype": "status", "status": "requesting", "seq": 99998})
+    lines = [json.dumps(o) for o in ev]
+    lines.insert(150, "")
+    lines.insert(250, '{"type": "stream_event", broken')
+    p = tmp_path / "chat.jsonl"
+    p.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(bridge, "FOLD_MARGIN", 5)
+    for cap in (50, 200, 5000):
+        full = bridge.fold_history(bridge._iter_jsonl(str(p)), cap)
+        fast = bridge.fold_history(bridge._iter_jsonl_for_fold(str(p), cap), cap)
+        assert fast == full
+    assert any(o.get("subtype") == "compact_boundary" for o in
+               bridge.fold_history(bridge._iter_jsonl_for_fold(str(p), 50), 50))

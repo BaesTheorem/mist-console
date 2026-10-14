@@ -72,6 +72,13 @@ function growInput() {
 // Show the "jump to present" pill whenever the visible chat is scrolled up
 // off the bottom (so MIST's live output isn't yanking us back down).
 const PRIME_STEP = 150;   // messages per primeHeights() step
+// Folded log (Session.foldOlder): entries kept live after a replay, the least
+// worth folding, how many come back per step, and how close to the top a
+// scroll has to come before they do.
+const LOG_WINDOW = 150;
+const LOG_FOLD_MIN = 100;
+const LOG_CHUNK = 150;
+const LOG_UNFOLD_PX = 1500;
 // The first message whose box reaches below y (offsetTop is log-relative).
 function topVisibleMsg(msgs, y) {
   let lo = 0, hi = msgs.length - 1, hit = null;
@@ -1375,7 +1382,9 @@ try { lastInit = JSON.parse(localStorage.getItem("lastInit") || "null"); } catch
 // A run of thinking and tool cards with no text between them folds into one
 // collapsed "steps" row, so a 28-call turn takes one line, not 28. Text
 // blocks end a run: the reply stays visible between its steps.
-function appendStep(body, node) {
+// `defer`: the caller labels the group itself once its run is complete
+// (refreshSteps walks every card, so labelling per append was quadratic).
+function appendStep(body, node, defer) {
   let group = body.lastElementChild;
   if (!group || !group.matches("details.steps")) {
     group = el("details", "steps");
@@ -1389,7 +1398,8 @@ function appendStep(body, node) {
     body.appendChild(group);
   }
   group.lastElementChild.appendChild(node);
-  refreshSteps(group);
+  if (!defer) refreshSteps(group);
+  return group;
 }
 function refreshSteps(group) {
   if (!group) return;
@@ -1434,11 +1444,15 @@ class Session {
     this.logEl.addEventListener("scroll", () => {
       this.stick = this.atBottom();
       if (this.active) { updateJumpBtn(); renderProgDock(); }
+      // Scrolled up near the top of a folded log: bring the next older chunk back.
+      if (this._older && !this.stick && this.logEl.scrollTop < LOG_UNFOLD_PX) this.unfoldOlder(LOG_CHUNK);
     });
     logs.appendChild(this.logEl);
     this.current = null;
     this.blocks = {};
     this.toolInputs = {};
+    this._older = null;       // entries folded out of the live log (foldOlder), oldest first
+    this._moreEl = null;      // the "earlier messages" row at the top of a folded log
     this._openThink = null;   // thinking card still waiting on its summary (tickThinking)
     // FIFO of user-message elements (.msg) awaiting their reply. Each assistant
     // turn slots in right after the oldest unanswered one, so a reply to an
@@ -1525,6 +1539,7 @@ class Session {
   // lived in the log (a replayed permission/task event must not act as live).
   wipeForReplay() {
     this.logEl.innerHTML = "";
+    this._older = null; this._moreEl = null;
     this.current = null; this.blocks = {}; this.toolInputs = {}; this._openThink = null;
     this.unansweredUsers = []; this.splitPending = false;
     this.spinnerEl = null;               // it lived inside logEl; gone now
@@ -1540,6 +1555,7 @@ class Session {
     if (this.es) { this.es.close(); this.es = null; }
     this.connected = false;
     this.logEl.innerHTML = "";
+    this._older = null; this._moreEl = null;
     this.current = null; this.blocks = {}; this.toolInputs = {}; this._openThink = null;
     this.unansweredUsers = []; this.splitPending = false;
     this.spinnerEl = null;
@@ -1568,6 +1584,73 @@ class Session {
   // message for two frames when the chat first opens lets
   // `contain-intrinsic-size: auto` remember each real height, so later skipped
   // layout uses true sizes.
+  /* ---- folded log ----
+     A long chat keeps only its newest LOG_WINDOW entries in the live log; the
+     older ones wait in this._older (a detached element, document order) and
+     come back LOG_CHUNK at a time when the reader scrolls near the top, or all
+     at once for a bookmark jump. WebKit restyles and lays out every element of
+     a log it shows: for a 2450-message chat (84k elements) that was 350 ms per
+     open, and 11 ms with the newest 200 entries live. Everything that needs the
+     whole transcript (findMsg, bookmarks, task boxes, the artifacts drawer, a
+     share snapshot) also looks in this._older. */
+  foldOlder() {
+    const log = this.logEl;
+    const start = this._moreEl && this._moreEl.parentNode === log ? 1 : 0;
+    const n = log.childElementCount - start - LOG_WINDOW;
+    if (n < LOG_FOLD_MIN) return;
+    const r = document.createRange();
+    r.setStartBefore(log.children[start]);
+    r.setEndAfter(log.children[start + n - 1]);
+    if (!this._older) this._older = document.createElement("div");
+    this._older.appendChild(r.extractContents());   // newer than everything already folded
+    this._primed = false;
+    this.paintMore();
+  }
+  // Move the newest `n` folded entries back above the live log, keeping the
+  // entry the reader is looking at in place (WKWebView has no scroll anchoring).
+  unfoldOlder(n) {
+    const older = this._older, log = this.logEl;
+    if (!older) return;
+    if (!older.childElementCount) { this._older = null; this.paintMore(); return; }
+    const k = Math.min(n, older.childElementCount);
+    const r = document.createRange();
+    r.setStartBefore(older.children[older.childElementCount - k]);
+    r.setEndAfter(older.lastChild);
+    const frag = r.extractContents();
+    if (!older.childElementCount) this._older = null;
+    // Shown with their real heights: a 140px content-visibility guess would
+    // jump the moment each one scrolled into view.
+    const msgs = [...frag.children].filter((m) => m.classList.contains("msg"));
+    msgs.forEach((m) => m.classList.add("prime"));
+    const anchor = this._moreEl && this._moreEl.nextElementSibling;
+    const was = anchor ? anchor.offsetTop : 0;
+    log.insertBefore(frag, anchor || null);
+    if (anchor) log.scrollTop += anchor.offsetTop - was;
+    this.paintMore();
+    requestAnimationFrame(() => requestAnimationFrame(() => msgs.forEach((m) => m.classList.remove("prime"))));
+  }
+  // Unfold until `node` is in the live log (a bookmark or artifact jump).
+  unfoldTo(node) {
+    while (this._older && node && this._older.contains(node)) this.unfoldOlder(LOG_CHUNK);
+  }
+  // The roots that hold this chat's messages, older first.
+  msgRoots() { return this._older ? [this._older, this.logEl] : [this.logEl]; }
+  paintMore() {
+    const n = this._older ? this._older.querySelectorAll(":scope > .msg").length : 0;
+    if (!this._older) {
+      if (this._moreEl) { this._moreEl.remove(); this._moreEl = null; }
+      return;
+    }
+    if (!this._moreEl) {
+      const b = el("button", "older-more");
+      b.type = "button";
+      b.addEventListener("click", () => this.unfoldOlder(LOG_CHUNK));
+      this._moreEl = b;
+    }
+    if (this.logEl.firstChild !== this._moreEl) this.logEl.insertBefore(this._moreEl, this.logEl.firstChild);
+    this._moreEl.innerHTML = '<span class="msi">expand_less</span>'
+      + (n ? n + " earlier message" + (n === 1 ? "" : "s") : "Earlier entries");
+  }
   primeHeights() {
     if (this._primed || this._replaying || !this.active) return;
     this._primed = true;
@@ -1713,8 +1796,15 @@ class Session {
      rewind THIS chat in place (the tail is discarded, after a confirm); branch
      opens a new chat holding the conversation up to that point and leaves this
      one alone. All three ride the CLI's truncating resume (see bridge.rewind). */
+  // The bar is built the first time the pointer or focus reaches its message
+  // (ensureMsgActions): six buttons on each of thousands of replayed messages
+  // were a third of a long chat's elements, and most are never hovered.
   msgActions(wrap, role) {
     const box = el("span", "msg-actions");
+    box._build = () => this.fillMsgActions(box, wrap, role);
+    return box;
+  }
+  fillMsgActions(box, wrap, role) {
     const add = (icon, title, run, cls) => {
       const b = el("button", cls || null, '<span class="msi">' + icon + "</span>");
       b.type = "button";
@@ -1737,7 +1827,8 @@ class Session {
     }
     add("bookmark", "Bookmark this message", () => this.toggleBookmark(wrap), "bm-btn");
     add("content_copy", "Copy message", () => copyText(messageSource(wrap)));
-    return box;
+    if (wrap._rated) box.querySelectorAll(".rate").forEach((b) => b.classList.toggle("on", b.dataset.sent === wrap._rated));
+    this.paintBookmark(wrap);
   }
   /* ---- bookmarks (see the registries above Session) ---- */
   // The on-disk address of a message, or null while a live bubble has not yet
@@ -1748,8 +1839,9 @@ class Session {
     return { role: this.isUserMsg(msg) ? "user" : "mist", seq: v };
   }
   findMsg(role, seq) {
-    for (const m of this.logEl.querySelectorAll('.msg[data-seq="' + seq + '"]'))
-      if ((role === "user") === this.isUserMsg(m)) return m;
+    for (const root of this.msgRoots())
+      for (const m of root.querySelectorAll('.msg[data-seq="' + seq + '"]'))
+        if ((role === "user") === this.isUserMsg(m)) return m;
     return null;
   }
   // Attach the address once it is known, then paint everything that hangs off it.
@@ -1774,7 +1866,8 @@ class Session {
     b.setAttribute("aria-pressed", on ? "true" : "false");
   }
   paintAllBookmarks() {
-    this.logEl.querySelectorAll(".msg[data-seq]").forEach((m) => this.paintBookmark(m));
+    for (const root of this.msgRoots())
+      root.querySelectorAll(".msg[data-seq]").forEach((m) => this.paintBookmark(m));
   }
   async toggleBookmark(wrap) {
     const a = this.msgAddr(wrap);
@@ -2799,6 +2892,7 @@ class Session {
   /* render a complete (imported) MIST message from normalized blocks */
   renderHistMsg(blocks, ts, seq) {
     const body = this.addMsg("mist", "MIST", tsMs(ts), this.takeAnchor());
+    const groups = new Set();   // labelled once at the end, not once per card
     blocks.forEach((b) => {
       if (b.kind === "text") {
         const tdiv = el("div", "md", md(b.text, ts));
@@ -2810,7 +2904,7 @@ class Session {
         const tb = el("div", "think-body");
         tb.textContent = b.text;
         d.appendChild(tb);
-        appendStep(body, d);
+        groups.add(appendStep(body, d, true));
       } else if (b.kind === "tool") {
         const card = el("details", "tool");
         const head = el("summary", "tool-head");
@@ -2823,9 +2917,10 @@ class Session {
         catch (_) { pre.textContent = String(b.input); }
         card.appendChild(pre);
         if (b.result) card.appendChild(el("pre", "tool-result", esc(String(b.result).slice(0, 6000))));
-        appendStep(body, card);
+        groups.add(appendStep(body, card, true));
       }
     });
+    groups.forEach(refreshSteps);
     if (seq != null) this.setMsgSeq(body.parentNode, seq);   // condensed history keeps the assistant seq
     this.scroll();
   }
@@ -2937,11 +3032,14 @@ class Session {
         // (its completion was never recorded — e.g. the app closed mid-run, or the
         // backend is dormant), so drop it. A genuinely-live task re-appears from
         // its next task_progress tick (handleBgSystem recreates on unknown id).
-        this._replaying = false;
-        this.scroll();
-        this.primeHeights();
         this.paintAllBookmarks();
         hydrateTaskBoxes(this.logEl, this);
+        this.foldOlder();   // before the log shows, so only the newest entries cost layout
+        this._replaying = false;
+        if (this._modStatusDeferred && window.MODS && MODS.paintStatus) MODS.paintStatus(this);
+        this._modStatusDeferred = false;
+        this.scroll();
+        this.primeHeights();
         { const q = this._afterReplay; this._afterReplay = []; q.forEach((f) => { try { f(); } catch (_) {} }); }
         this.bgTasks.forEach((t, id) => { if (t.status === "running" || t.status === "killing") this.bgTasks.delete(id); });
         this.markStaleProgress();
@@ -4208,13 +4306,25 @@ function switchTo(id) {
   crystal.emotion = null; crystal.lastActivity = Date.now();
   const s = sessions.get(id);
   if (!s) return;
+  // The chat being left sheds what it unfolded or streamed since its last
+  // fold; coming back lands on its newest message anyway.
+  const left = activeId !== id && activeId && sessions.get(activeId);
+  if (left && !left._replaying) left.foldOlder();
   if (activeId !== id) saveLastChat(id);
   activeId = id;
   if (window.VOICE) VOICE.onSwitch();   // the conversation pane shows only on its own chat
   pauseVideos(s.logEl);   // a video keeps playing in a hidden log otherwise
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
   syncPhoneTitle();
-  s.connect();   // lazy: open the stream + replay this transcript on first view
+  // Lazy: the stream opens (and replays this transcript) on first view, one
+  // frame after this switch, so the rail and the top bar paint before the
+  // replay takes the main thread. The timer covers a window that draws no
+  // frames (hidden at launch); connect() runs once either way.
+  if (!s.connected) {
+    const go = () => s.connect();
+    requestAnimationFrame(() => setTimeout(go, 0));
+    setTimeout(go, 150);
+  }
   warmLogs = [id, ...warmLogs.filter((x) => x !== id && sessions.has(x))].slice(0, WARM_LOGS + 1);
   const warmSet = new Set();
   let budget = WARM_MSG_BUDGET;
@@ -4311,7 +4421,7 @@ async function loadChecks(sid) {
     Object.entries(j.checks || {}).forEach(([k, v]) => taskChecks.set(sid + "|" + k, v));
   } catch (_) { checksLoaded.delete(sid); return; }
   const x = sessions.get(sid);
-  if (x) hydrateTaskBoxes(x.logEl, x);
+  if (x) x.msgRoots().forEach((root) => hydrateTaskBoxes(root, x));
 }
 // Number the checkboxes of each message in document order and restore the
 // user's saved toggles. Safe to call repeatedly (the ticker does, mid-stream).
@@ -4334,6 +4444,17 @@ function hydrateTaskBoxes(root, s) {
     });
   });
 }
+// A message's hover bar is built on first contact (Session.msgActions).
+function ensureMsgActions(msg) {
+  const who = msg && msg.querySelector(":scope > .who");
+  const box = who && who.querySelector(":scope > .msg-actions");
+  if (box && box._build) { const b = box._build; box._build = null; b(); }
+  return box;
+}
+["pointerover", "focusin"].forEach((t) => logs.addEventListener(t, (e) => {
+  const m = e.target && e.target.closest ? e.target.closest(".msg") : null;
+  if (m) ensureMsgActions(m);
+}, { passive: true }));
 logs.addEventListener("change", (e) => {
   const box = e.target && e.target.closest ? e.target.closest(".tcb") : null;
   if (!box) return;
@@ -4472,6 +4593,7 @@ function jumpToBookmark(b) {
 }
 // Scroll a message of chat `s` to the centre and flash its outline.
 function revealMessage(s, m) {
+  s.unfoldTo(m);
   s.stick = false;   // stop following the bottom; the reader is going back
   m.scrollIntoView({ block: "center" });
   // content-visibility: auto sizes off-screen messages lazily, so a second
@@ -6695,12 +6817,27 @@ const UI_RELOAD = (() => {
 })();
 
 async function boot() {
+  // index.html starts both requests in its head, so they run while the
+  // scripts and styles load instead of after them. A page without them
+  // (or a failed early request) fetches here.
+  const early = window.__boot || {};
+  window.__boot = null;
+  const got = (p, url) => (p ? p.catch(() => fetch(url)) : fetch(url));
+  const cfgReq = got(early.config, "/config");
+  const listReq = got(early.sessions, "/sessions");
+  // Build after the parser is done and the empty shell has painted once: an
+  // early answer otherwise runs the rail and the chat replay between the
+  // body's scripts, and the first layout (which is what requests the fonts)
+  // waited for all of it. The timer covers a window that draws no frames.
+  if (document.readyState === "loading")
+    await new Promise((r) => document.addEventListener("DOMContentLoaded", r, { once: true }));
+  await new Promise((r) => { requestAnimationFrame(() => setTimeout(r, 0)); setTimeout(r, 50); });
+  const bootList = await listReq;
   try {
-    const cfg = await (await fetch("/config")).json();
+    const cfg = await (await cfgReq).json();
     if (cfg.spinner_verbs && cfg.spinner_verbs.length) SPINNER_VERBS = cfg.spinner_verbs;
     MODELS = cfg.models || [];
   } catch (_) {}
-  const bootList = await fetch("/sessions");
   const existing = await bootList.json();
   _syncSince = parseFloat(bootList.headers.get("X-Now")) || Date.now() / 1000;   // server clock, for syncSessions
   if (existing.length) {
@@ -6972,16 +7109,17 @@ async function shareCSS() {
 async function buildShareSnapshot(s) {
   const css = await shareCSS();
   const clone = s.logEl.cloneNode(true);
+  if (s._older) clone.prepend(...s._older.cloneNode(true).childNodes);   // folded entries, in order
   clone.removeAttribute("hidden");
   clone.removeAttribute("style");
   // Interactive chrome that has no meaning in a read-only page.
   clone.querySelectorAll(".spinner, .perm-actions, .copy-btn, .rc-cook-btn, .genimg-dl, "
-    + ".msg-actions, .msg-edit, .msg-confirm, .notice-actions")
+    + ".msg-actions, .msg-edit, .msg-confirm, .notice-actions, .older-more")
     .forEach((e) => e.remove());
   // 3D viewers: canvas pixels do not survive cloneNode, so ask the live viewer
   // (same DOM order as the clone) for a PNG of its current view. One that has
   // not finished loading gets the usual stub.
-  const liveModels = Array.from(s.logEl.querySelectorAll(".genmodel-wrap"));
+  const liveModels = s.msgRoots().flatMap((r) => Array.from(r.querySelectorAll(".genmodel-wrap")));
   Array.from(clone.querySelectorAll(".genmodel-wrap")).forEach((w, i) => {
     const png = window.MistModel && liveModels[i] ? window.MistModel.snapshotPNG(liveModels[i]) : null;
     const d = document.createElement("div");
@@ -7084,7 +7222,8 @@ async function buildShareSnapshot(s) {
 // page, so it inherits the theme the chat was actually read in.
 
 function shareSummary(s) {
-  const first = s.logEl.querySelector(".msg.user .body") || s.logEl.querySelector(".msg .body");
+  const root = s._older || s.logEl;
+  const first = root.querySelector(".msg.user .body") || root.querySelector(".msg .body");
   const text = (first ? first.textContent : "").replace(/\s+/g, " ").trim();
   return text.slice(0, 400);
 }
@@ -7580,7 +7719,7 @@ const PHONE_MSG_LABELS = {
   thumb_up: "Good answer", thumb_down: "Bad answer",
 };
 function openMessageSheet(msg) {
-  const box = msg && msg.querySelector(".msg-actions");
+  const box = ensureMsgActions(msg);
   if (!phoneSheet || !box) return;
   const isUser = msg.classList.contains("user");
   msg.classList.add("pressed");

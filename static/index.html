@@ -7,7 +7,8 @@
 <!-- Apply the saved theme + font before CSS paints so switching never flashes.
      __mistFont is replaced server-side (app.py) with the persisted font so a
      wiped localStorage still paints the right face. localStorage wins if set. -->
-<script>window.__mistFont=null;window.__mistZoom=null;window.__mistRailW=null;
+<script>try{window.__boot={sessions:fetch("/sessions"),config:fetch("/config")};}catch(e){}
+window.__mistFont=null;window.__mistZoom=null;window.__mistRailW=null;
 try{if(/MISTShell/.test(navigator.userAgent)||/[?&]shell=ios\b/.test(location.search))document.documentElement.dataset.shell="ios";}catch(e){}</script>
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("theme")||"terminal"}catch(e){document.documentElement.dataset.theme="terminal"}
 try{var _d=document.documentElement,_fs=localStorage.getItem("fontStack"),_fid=localStorage.getItem("font");

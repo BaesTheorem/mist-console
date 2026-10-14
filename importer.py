@@ -65,25 +65,63 @@ def _summarize(path, need=2):
     return n, first
 
 
-def scan_recent(days=7, min_user_turns=2, limit=120):
-    """List importable sessions (newest first). Metadata only."""
+def _load_cache(path):
+    try:
+        with open(path) as f:
+            c = json.load(f)
+        return c if isinstance(c, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_cache(path, cache):
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(cache, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def scan_recent(days=7, min_user_turns=2, limit=120, skip=(), cache_path=None):
+    """List importable sessions (newest first). Metadata only.
+
+    `skip` holds session uuids the caller already has. Those files are never
+    opened: most recent transcripts are Console chats the registry knows, and
+    reading them anyway cost a second on every launch (a headless routine run
+    with one user turn is read to its end looking for a second one).
+    `cache_path` keeps each summary keyed by mtime and size, so a file that
+    did not change since the last scan is not read again."""
     import time
     cutoff = time.time() - days * 86400
+    cache = _load_cache(cache_path) if cache_path else {}
+    seen = {}
     out = []
     for path in glob.glob(os.path.join(PROJECT_DIR, "*.jsonl")):
+        uuid = os.path.splitext(os.path.basename(path))[0]
+        if uuid in skip:
+            continue
         try:
-            mtime = os.path.getmtime(path)
+            st = os.stat(path)
         except OSError:
             continue
+        mtime = st.st_mtime
         if mtime < cutoff:
             continue
-        n, first = _summarize(path)
+        hit = cache.get(uuid)
+        if isinstance(hit, list) and len(hit) == 4 and hit[0] == mtime and hit[1] == st.st_size:
+            n, first = hit[2], hit[3]
+        else:
+            n, first = _summarize(path)
+        seen[uuid] = [mtime, st.st_size, n, first[:200]]
         if n < min_user_turns or not first:
             continue
-        uuid = os.path.splitext(os.path.basename(path))[0]
         title = (first[:48] + "…") if len(first) > 48 else first
         out.append({"uuid": uuid, "path": path, "title": title,
                     "mtime": mtime, "turns": n})
+    if cache_path and seen != cache:
+        _save_cache(cache_path, seen)
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out[:limit]
 

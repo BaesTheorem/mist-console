@@ -12,6 +12,7 @@ except ImportError:
     pass  # cosmetic process name only; never block startup on it
 
 import collections
+import gzip
 import json
 import logging
 import os
@@ -96,6 +97,35 @@ def _foreign_origin(req):
     if req.headers.get("Origin", "").strip().lower() == "null":
         return True
     return req.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site"
+
+
+# Text responses to the phone (LAN or tunnel) go out gzipped: the chat list
+# alone is ~560 KB of JSON and app.js ~370 KB, and both shrink by 80-90%. This
+# Mac's own window reads them over loopback, where compressing would only cost
+# CPU, so local requests are left alone. The event streams are never touched.
+_GZIP_TYPES = {"application/json", "text/html", "text/css", "text/javascript",
+               "application/javascript", "image/svg+xml", "text/plain"}
+_GZIP_MIN = 2048
+
+
+@app.after_request
+def _gzip_remote(resp):
+    try:
+        if (resp.status_code != 200 or resp.mimetype not in _GZIP_TYPES
+                or "Content-Encoding" in resp.headers
+                or "gzip" not in request.headers.get("Accept-Encoding", "")
+                or remote.is_local(request)):
+            return resp
+        resp.direct_passthrough = False   # a static file: read it so it can be compressed
+        data = resp.get_data()
+        if len(data) < _GZIP_MIN:
+            return resp
+        resp.set_data(gzip.compress(data, compresslevel=5))
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.vary.add("Accept-Encoding")
+    except Exception:  # noqa: S110, BLE001 -- compression is an optimization; the plain response still works
+        pass
+    return resp
 
 
 @app.before_request
@@ -3057,22 +3087,31 @@ def _sse(obj):
 
 
 def _import_existing():
-    """One-time: surface recent Claude Code conversations as dormant tabs."""
+    """Surface recent Claude Code conversations as dormant tabs.
+
+    Runs on a thread after the server is up, not at import: the scan reads
+    transcript files and held the port closed (and so the window and its chat
+    list) for 1 to 1.5 s on every launch. A chat it adds reaches open pages
+    over /events like any other new chat."""
     import importer
-    known = {s.claude_session_id for s in _sessions.values() if s.claude_session_id}
-    known |= {os.path.splitext(os.path.basename(s.import_path))[0]
-              for s in _sessions.values() if s.import_path}
+    time.sleep(5)   # after the first page load and its chat open, not under them
+    with _meta_lock:
+        known = {s.claude_session_id for s in _sessions.values() if s.claude_session_id}
+        known |= {os.path.splitext(os.path.basename(s.import_path))[0]
+                  for s in _sessions.values() if s.import_path}
     added = 0
-    for info in importer.scan_recent(days=7, min_user_turns=2):
-        if info["uuid"] in known:
-            continue
+    for info in importer.scan_recent(days=7, min_user_turns=2, skip=known,
+                                     cache_path=os.path.join(DATA_DIR, "import-scan.json")):
         sid = "i_" + info["uuid"]
-        if sid in _sessions:
-            continue
-        _sessions[sid] = ClaudeSession(
-            id=sid, title=info["title"], claude_session_id=info["uuid"],
-            import_path=info["path"], last_activity=info["mtime"], autostart=False)
-        _order.append(sid)
+        with _meta_lock:
+            if sid in _sessions:
+                continue
+            s = ClaudeSession(
+                id=sid, title=info["title"], claude_session_id=info["uuid"],
+                import_path=info["path"], last_activity=info["mtime"], autostart=False)
+            _sessions[sid] = s
+            _order.append(sid)
+            _touch(s, created=True)
         added += 1
     if added:
         _save_meta()
@@ -3171,7 +3210,6 @@ _bridge.on_activity = lambda s: _registry_publish({"type": "session_updated",
 _bridge.start_rate_poller(_sessions)   # keep the usage badges' % near-real-time (free read)
 
 _load_meta()
-_import_existing()
 quickaccess.load()
 remote.init()   # tunnel supervisor; a no-op until remote access + tunnel are on
 
@@ -3195,6 +3233,7 @@ threading.Thread(target=_periodic_save, daemon=True).start()
 threading.Thread(target=_reaper, daemon=True).start()
 threading.Thread(target=_archiver, daemon=True).start()
 threading.Thread(target=_retention_keeper, daemon=True, name="retention").start()
+threading.Thread(target=_import_existing, daemon=True, name="importer").start()
 
 
 if __name__ == "__main__":

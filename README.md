@@ -73,6 +73,27 @@ The left rail is a stacked list of independent conversations, each backed by its
 
 Backend: `/sessions` GET/POST, `/sessions/<id>` DELETE, `/sessions/<id>/pin` POST, `/sessions/<id>/archive` POST, `/stream/<id>`, `/send/<id>`. `data/` is gitignored (personal conversation history).
 
+## Load speed
+
+Measured on 2026-10-14 on 1996 chats with `bin/console-bench` (below). The traps that make WebKit slow on long chats are in the comments at `.session-log` in `style.css` and at `foldOlder` in `app.js`.
+
+- **Launch.** The server opens its port approximately 0.25 s after it starts (before: 1.75 s). `_import_existing()` read each recent CLI transcript before the port opened. Now it runs on a thread 5 s after start, it skips each transcript that the registry knows, and `data/import-scan.json` keeps one summary per file, keyed by mtime and size.
+- **First open of a long chat.** `bridge._iter_jsonl_for_fold` does not parse a line that only the condenser sees and that the condenser drops by type: stream deltas and system ticks, approximately 98% of the lines of a long chat. The fold result is identical (`tests/test_history_window.py`). The first open of a 257 MB chat takes 1.2 s of server time (before: 2.8 s).
+- **Chat list.** `index.html` starts the `/sessions` and `/config` requests in its head, so they run while the scripts load. `boot()` waits for DOMContentLoaded and one frame. Thus the empty shell paints and requests its fonts before the rail is built. The boot chat opens its stream one frame after the switch, so the rail paints before the replay starts.
+- **Folded log.** After a replay, a chat keeps its newest 150 entries in the live log (`LOG_WINDOW`). The older entries stay in a detached element (`Session._older`). When the reader scrolls near the top, or clicks the "N earlier messages" row, 150 more entries come back, and the message on screen stays in place. A bookmark jump unfolds to its message. The artifacts drawer, the share snapshot, the bookmarks and the task boxes also read the folded entries. When you leave a chat, it folds again. In WebKit, the display of a 2450-message chat (84k elements) took 350 ms. With the newest 200 entries live, it took 11 ms.
+- **Message hover bar.** The buttons of a message are built when the pointer or the focus first reaches the message (`ensureMsgActions`). On a phone, the long-press sheet builds them. Before, these buttons were a third of the elements of a long chat.
+- **Phone.** Text responses to a client that is not local are gzipped (`_gzip_remote` in `app.py`). The chat list is approximately 560 KB of JSON and `app.js` is approximately 370 KB. Loopback requests from the Mac window are not compressed.
+
+Real WKWebView (`--engine wk`), median of 3 runs:
+
+| Mark | Before | After |
+| --- | --- | --- |
+| Server start to open port | 1750 ms | 250 ms |
+| Page start to chat list in the DOM | 296 ms | 274 ms |
+| Page start to a 2450-message chat on screen | 1673 ms | 1035 ms |
+
+`bin/console-bench [--engine wk] [--chat SID] [--origin URL] [--runs N]` loads the page in Playwright's WebKit or in an off-screen WKWebView, and prints the median time of each mark and the main-thread stalls. It drops every request that is not a GET, so it cannot change the live Console. To compare two versions, run each version as a test instance (`MIST_CONSOLE_DATA_DIR` set to a copy of `data/`) on its own port, and use `--origin`.
+
 ## Usage metrics (top bar)
 
 - **ctx %**: context window used for the *active* tab, computed live in `bridge.py` from the latest assistant message's usage (`input + cache_read + cache_creation`) ÷ the model's `contextWindow`, broadcast as a `context` event. Uses the per-message usage (a single API call = current context occupancy), not the `result` event's turn-cumulative total, which sums every internal tool-call round trip and reads past 100%. Subagent (sidechain) messages, those with a `parent_tool_use_id`, are skipped: they carry the subagent's context, not the session's.
@@ -552,6 +573,7 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | Chat list | rail | drawer (menu button, swipe from the left edge) |
 | Model, permissions, thinking, usage, share, diff, rename, pin, delete | top-bar badges and cards | chat-details sheet (tap the title) |
 | Message actions | hover icons | long-press sheet |
+| Long chats (folded log) | newest 150 entries live; scroll near the top or click **N earlier messages** | same; the long-press sheet builds a message's buttons |
 | Bookmarks | composer button | drawer footer, **Saved** |
 | Settings | gear | drawer footer, **Settings** |
 | Text size | `textSize`, saved to the server so a wiped store keeps it | `textSizePhone`, local to the phone, default 100%; the Mac's size never reaches the phone |

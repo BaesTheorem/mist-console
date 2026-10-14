@@ -85,6 +85,9 @@
   function paintStatus(s) {
     const box = $("#modStatus");
     if (!box || !isActive(s)) return;
+    // Mid-replay, each paint forced a page layout (syncComposerHeight reads
+    // offsetHeight): 50 ms apiece. The replay_done handler paints once.
+    if (s._replaying) { s._modStatusDeferred = true; return; }
     const st = state(s);
     box.innerHTML = "";
     st.status.forEach((text, plugin) => {
@@ -1088,6 +1091,7 @@
     subagent(s, o) { subagentEvent(s, o); },
     acceptSuggestion,
     switched(s) { onSwitch(s); },
+    paintStatus(s) { paintStatus(s); },
     turnEnded(s) { const st = state(s); st.hooksCard = null; if (isActive(s)) drawBand(s); },
     turnStarted(s) { if (isActive(s)) drawBand(s); },
     exited(s) { const st = state(s); st.status.clear(); st.panes = null; st.hooked.clear(); st.suggestion = ""; if (isActive(s)) { paintStatus(s); paintPanes(s); paintSuggestion(s); const b = $("#aboveBand"); if (b) { b.hidden = true; b.innerHTML = ""; } } },
