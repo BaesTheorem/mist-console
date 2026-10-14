@@ -77,14 +77,14 @@ Backend: `/sessions` GET/POST, `/sessions/<id>` DELETE, `/sessions/<id>/pin` POS
 
 Measured on 2026-10-14 on 1996 chats with `bin/console-bench` (below). The traps that make WebKit slow on long chats are in the comments at `.session-log` in `style.css` and at `foldOlder` in `app.js`.
 
-- **Launch.** The server opens its port approximately 0.25 s after it starts (before: 1.75 s). `_import_existing()` read each recent CLI transcript before the port opened. Now it runs on a thread 5 s after start, it skips each transcript that the registry knows, and `data/import-scan.json` keeps one summary per file, keyed by mtime and size.
-- **First open of a long chat.** `bridge._iter_jsonl_for_fold` does not parse a line that only the condenser sees and that the condenser drops by type: stream deltas and system ticks, approximately 98% of the lines of a long chat. The fold result is identical (`tests/test_history_window.py`). The first open of a 257 MB chat takes 1.2 s of server time (before: 2.8 s).
+- **Launch.** The server opens its port approximately 0.25 s after it starts (before: 1.75 s). `_import_existing()` read each recent CLI transcript before the port opened. The import now starts on a thread 5 s after the server starts. It skips each transcript that the registry knows. `data/import-scan.json` keeps one summary for each file, keyed by mtime and size.
+- **First open of a long chat.** `bridge._iter_jsonl_for_fold` does not parse a line that the condenser drops by its type and that no other step reads. These lines are stream deltas and system ticks, approximately 98% of the lines of a long chat. The fold result is the same (`tests/test_history_window.py`). The first open of a 257 MB chat takes 1.2 s of server time (before: 2.8 s).
 - **Chat list.** `index.html` starts the `/sessions` and `/config` requests in its head, so they run while the scripts load. `boot()` waits for DOMContentLoaded and one frame. Thus the empty shell paints and requests its fonts before the rail is built. The boot chat opens its stream one frame after the switch, so the rail paints before the replay starts.
-- **Folded log.** After a replay, a chat keeps its newest 150 entries in the live log (`LOG_WINDOW`). The older entries stay in a detached element (`Session._older`). When the reader scrolls near the top, or clicks the "N earlier messages" row, 150 more entries come back, and the message on screen stays in place. A bookmark jump unfolds to its message. The artifacts drawer, the share snapshot, the bookmarks and the task boxes also read the folded entries. When you leave a chat, it folds again. In WebKit, the display of a 2450-message chat (84k elements) took 350 ms. With the newest 200 entries live, it took 11 ms.
+- **Folded log.** After a replay, a chat keeps its newest 150 entries in the live log (`LOG_WINDOW`). The older entries stay in a detached element (`Session._older`). When the reader scrolls near the top, or clicks the "N earlier messages" row, 150 more entries come back. The message on screen stays in its position. A bookmark jump unfolds to its message. The artifacts drawer, the share snapshot, the bookmarks and the task boxes also read the folded entries. When you leave a chat, it folds again. In WebKit, the display of a 2450-message chat (84k elements) took 350 ms. With the newest 200 entries live, it took 11 ms.
 - **Message hover bar.** The buttons of a message are built when the pointer or the focus first reaches the message (`ensureMsgActions`). On a phone, the long-press sheet builds them. Before, these buttons were a third of the elements of a long chat.
 - **Phone.** Text responses to a client that is not local are gzipped (`_gzip_remote` in `app.py`). The chat list is approximately 560 KB of JSON and `app.js` is approximately 370 KB. Loopback requests from the Mac window are not compressed.
 
-Real WKWebView (`--engine wk`), median of 3 runs:
+Median of 3 runs. The server row is a test instance on this Mac. The page rows are from the system WKWebView (`--engine wk`).
 
 | Mark | Before | After |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ Real WKWebView (`--engine wk`), median of 3 runs:
 | Page start to chat list in the DOM | 296 ms | 274 ms |
 | Page start to a 2450-message chat on screen | 1673 ms | 1035 ms |
 
-`bin/console-bench [--engine wk] [--chat SID] [--origin URL] [--runs N]` loads the page in Playwright's WebKit or in an off-screen WKWebView, and prints the median time of each mark and the main-thread stalls. It drops every request that is not a GET, so it cannot change the live Console. To compare two versions, run each version as a test instance (`MIST_CONSOLE_DATA_DIR` set to a copy of `data/`) on its own port, and use `--origin`.
+`bin/console-bench [--engine wk] [--chat SID] [--origin URL] [--runs N]` loads the page in Playwright's WebKit or in an off-screen WKWebView, and prints the median time of each mark and the main-thread stalls. It drops all requests other than GET requests, so it cannot change the live Console. To compare two versions, start each version as a test instance on its own port. Set `MIST_CONSOLE_DATA_DIR` of each instance to a copy of `data/`, then use `--origin`.
 
 ## Usage metrics (top bar)
 
