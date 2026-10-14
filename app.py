@@ -2227,7 +2227,7 @@ def stream(sid):
                 sq = ev.get("seq")
                 if isinstance(sq, int) and sq > last_seq:
                     last_seq = sq
-                yield _sse(ev)
+                yield _sse(_for_page(ev))
                 # A big transcript is tens of MB pushed into one loopback socket
                 # in a tight loop; a breather every few hundred events keeps the
                 # send queue from filling faster than WebKit drains it (ENOBUFS).
@@ -2242,7 +2242,7 @@ def stream(sid):
                 sq = ev.get("seq")
                 if isinstance(sq, int) and sq <= last_seq:
                     continue                     # already replayed above
-                yield _sse(ev)
+                yield _sse(_for_page(ev))
         except GeneratorExit:
             s.unsubscribe(q)
 
@@ -3019,6 +3019,33 @@ def watchers_delete():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": True})
+
+
+def _image_blocks(content):
+    """Base64 image blocks in a message's content, tool results included."""
+    for c in content if isinstance(content, list) else ():
+        if not isinstance(c, dict):
+            continue
+        if c.get("type") == "image" and isinstance(c.get("source"), dict) and c["source"].get("data"):
+            yield c
+        if c.get("type") == "tool_result":
+            yield from _image_blocks(c.get("content"))
+
+
+def _for_page(ev):
+    """The event as the page receives it: base64 images dropped. The page never
+    shows them (tool results render as text), yet a screenshot-heavy chat
+    replayed 137 MB of them into the web view on every open (s1220: 455 images
+    of ~500 KB). History on disk and in memory keeps them; only this copy is
+    trimmed, and only when there is something to trim."""
+    msg = ev.get("message") if isinstance(ev, dict) else None
+    if not isinstance(msg, dict) or not any(True for _ in _image_blocks(msg.get("content"))):
+        return ev
+    ev = json.loads(json.dumps(ev))
+    for c in _image_blocks(ev["message"].get("content")):
+        c["source"] = {"type": "omitted", "media_type": c["source"].get("media_type"),
+                       "bytes": len(c["source"].get("data") or "")}
+    return ev
 
 
 def _sse(obj):

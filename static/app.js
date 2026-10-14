@@ -4196,6 +4196,14 @@ async function toggleArchive(id) {
   }
   try { await fetch("/sessions/" + id + "/archive", { method: "POST" }); } catch (_) {}
 }
+// The last WARM_LOGS chats stay styled and laid out while hidden: they move
+// off-screen (style.css .warm) instead of going display:none, so switching back
+// skips restyling the whole log (WebKit, 2300-message chat: 300 ms to 160 ms
+// per switch). Capped because each warm log keeps its render tree in memory:
+// three long chats warm cost 213 MB, so the cap counts messages too.
+const WARM_LOGS = 3;
+const WARM_MSG_BUDGET = 2500;
+let warmLogs = [];
 function switchTo(id) {
   crystal.emotion = null; crystal.lastActivity = Date.now();
   const s = sessions.get(id);
@@ -4207,7 +4215,20 @@ function switchTo(id) {
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
   syncPhoneTitle();
   s.connect();   // lazy: open the stream + replay this transcript on first view
-  sessions.forEach((x) => { x.logEl.hidden = x.id !== id; });
+  warmLogs = [id, ...warmLogs.filter((x) => x !== id && sessions.has(x))].slice(0, WARM_LOGS + 1);
+  const warmSet = new Set();
+  let budget = WARM_MSG_BUDGET;
+  for (const x of warmLogs.slice(1)) {
+    budget -= sessions.get(x).logEl.childElementCount;
+    if (budget < 0) break;
+    warmSet.add(x);
+  }
+  sessions.forEach((x) => {
+    const hide = x.id !== id, warm = hide && warmSet.has(x.id);
+    // Unchanged writes still queue a mutation record per log (2000 chats).
+    if (x.logEl.hidden !== hide) x.logEl.hidden = hide;
+    if (x.logEl.classList.contains("warm") !== warm) x.logEl.classList.toggle("warm", warm);
+  });
   // reflect this session into the top bar
   if (s.init) fillCaps(s.init, s);
   else {   // dormant chat, no init yet — still show its own selections

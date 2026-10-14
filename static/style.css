@@ -376,6 +376,12 @@ body.tab-dragging .tab:not(.dragging):hover { background: inherit; color: inheri
 #mid.rail-collapsed #tabrail { width: 0; flex-basis: 0; overflow: hidden; border-right: 0; }
 #mid.rail-collapsed #railResize { display: none; }
 .session-log[hidden] { display: none; }
+/* A recently viewed chat (switchTo, WARM_LOGS) keeps its render tree off-screen.
+   Measured in WebKit on a 77k-node log: showing it again cost 322 ms from
+   display:none, 185 ms from content-visibility: hidden and 228 ms from
+   visibility: hidden (each restyles the subtree), 14 ms from a transform. The
+   active log sits above it and takes every click. */
+.session-log[hidden].warm { display: block; transform: translateX(-200vw); }
 /* History replay (Session._replaying): no layout until the log is complete. */
 .session-log.replaying { display: none; }
 .msg {
