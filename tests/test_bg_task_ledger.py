@@ -1,9 +1,13 @@
 """A background task cannot outlive the backend that owns it: when the process
 exits, every task still open in the ledger gets a synthesized terminal event
-(bridge.ClaudeSession._close_tasks), so the monitor and the replay agree."""
+(bridge.ClaudeSession._close_tasks), so the monitor and the replay agree.
+While a task is open, the idle reaper leaves the backend alone."""
+# These tests drive the session's private ledger and reaper state on purpose.
+# ruff: noqa: SLF001
 import os
 import queue
 import sys
+import time
 
 os.environ.setdefault("MIST_CONSOLE_DATA_DIR", "/tmp/mist-console-test-data")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -59,6 +63,43 @@ def test_process_exit_kills_every_open_task_once():
     s._close_tasks(s._take_open_tasks())
     assert _drain(q) == []
     assert s._open_tasks == {}
+
+
+def _live(s):
+    """Make a unit-test session look like a live backend whose stop is counted."""
+    s.alive = True
+    s.stops = 0
+
+    def stop():
+        s.stops += 1
+        s.alive = False
+    s._stop_locked = stop
+    return s
+
+
+def test_reaper_waits_while_background_tasks_run():
+    # 2026-10-15: the turn ended, three research agents kept working, and the
+    # reaper killed the backend (and the agents) 15 minutes later.
+    s, _ = _session()
+    _live(s)
+    s.last_activity = time.time() - 3600          # the turn ended an hour ago
+    s._note_task_event({"type": "system", "subtype": "task_started", "task_id": "a", "description": "research"})
+    assert s.reap_if_idle(900) is False
+    assert s.stops == 0
+    # Positive control: the same idle session is reaped once the task ends.
+    s._note_task_event({"type": "system", "subtype": "task_notification", "task_id": "a", "status": "completed"})
+    assert s.reap_if_idle(900) is True
+    assert s.stops == 1
+
+
+def test_reaper_ceiling_frees_a_backend_whose_terminal_event_was_lost():
+    s, _ = _session()
+    _live(s)
+    s.last_activity = time.time() - 3600
+    s._note_task_event({"type": "system", "subtype": "task_started", "task_id": "a", "description": "x"})
+    s._last_task_event = time.time() - bridge.BG_TASK_REAP_SEC - 1
+    assert s.reap_if_idle(900) is True
+    assert s.stops == 1
 
 
 def test_stop_ack_path_shape_matches_the_synthesized_close():

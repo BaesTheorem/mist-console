@@ -255,6 +255,15 @@ CTX_HARD_PCT = 80
 # long-idle chat costs zero extra tokens. Set MIST_CONSOLE_IDLE_REAP_SEC=0 to
 # disable.
 IDLE_REAP_SEC = int(os.environ.get("MIST_CONSOLE_IDLE_REAP_SEC", "900"))
+# Background tasks (Agent subagents, run_in_background shells) live inside the
+# backend process, so reaping a chat whose turn ended but whose agents still run
+# kills them mid-flight (2026-10-15: the backend exited 15m37s after the turn
+# ended and three research agents died with it, no API error). While the ledger holds an
+# open task the reaper waits, up to BG_TASK_REAP_SEC after the newest task event.
+# The ceiling only matters when a terminal event never arrives: a lost
+# task_notification must not pin a backend forever. 4 h covers the 2 h cap on a
+# background shell plus agents, which emit task_progress as they work.
+BG_TASK_REAP_SEC = int(os.environ.get("MIST_CONSOLE_BG_TASK_REAP_SEC", "14400"))
 
 
 def _iter_jsonl(path):
@@ -706,6 +715,7 @@ class ClaudeSession:
         # still here when it exits gets a synthesized terminal event (see
         # _close_open_tasks); otherwise the monitor shows them "running" forever.
         self._open_tasks = {}
+        self._last_task_event = 0.0  # time of the newest task_* event (reaper grace)
         self._pending_perms = {}     # can_use_tool request_id -> {input, suggestions}
         self._init_sent = False      # control-protocol initialize handshake sent?
         self._progress = {}          # progress bar id -> {last: ts, done: bool}
@@ -1068,6 +1078,7 @@ class ClaudeSession:
         tid = obj.get("task_id")
         if not tid:
             return
+        self._last_task_event = time.time()
         if sub in ("task_started", "task_progress"):
             self._open_tasks.setdefault(tid, obj.get("description") or "background task")
         elif sub in ("task_notification", "task_updated"):
@@ -1241,6 +1252,10 @@ class ClaudeSession:
             if timeout <= 0 or not self.alive or self._turn_active:
                 return False
             if time.time() - self.last_activity < timeout:
+                return False
+            # A finished turn can leave agents or shells running in this
+            # process; reaping now would kill them (see BG_TASK_REAP_SEC).
+            if self._open_tasks and time.time() - self._last_task_event < BG_TASK_REAP_SEC:
                 return False
             self._resume_tried = False
             self._stop_locked()

@@ -160,6 +160,8 @@ The CLI reports subagents and backgrounded shells as `system` events (`task_star
 
 The bridge also keeps a ledger of every open task id per backend (`_open_tasks`). When the process exits, for any reason (crash, idle reap, model or mode switch, window close), it broadcasts the same synthesized `killed` event for each one still open, and records it, so a replay agrees. Without this, three agents killed by a session restart sat in the panel as "running" for an hour: no process was alive, but nothing had ever said so. The frontend does the same prune on `process_exit` as a fallback, and `replay_done` still drops any task with no terminal event in the log. `tests/test_bg_task_ledger.py` covers the ledger.
 
+The idle reaper reads the same ledger. A turn can end while its agents or shells still run inside the process, so `reap_if_idle` skips a backend that has an open task. Before this guard, the reaper stopped the backend `IDLE_REAP_SEC` (15 min) after the turn ended and killed the agents with it: on 2026-10-15 the backend exited 15 min 37 s after the turn ended, and three research agents died with it (their transcripts stop within 4 s of each other, with no API error). If a terminal event never arrives, the guard expires `BG_TASK_REAP_SEC` (4 h, `MIST_CONSOLE_BG_TASK_REAP_SEC`) after the newest task event, so a lost notification cannot keep a backend alive forever.
+
 ## Look: theme, font, text size
 
 Settings carries three appearance controls, all persisted **twice** — localStorage
