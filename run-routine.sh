@@ -150,6 +150,14 @@ TRANSIENT_RE='connection closed|failedtoopensocket|unable to connect|session lim
 CREDITS_RE='out of usage credits|usage credits|credit balance is too low|insufficient credits'
 FELL_BACK=0
 LIMIT_WAITED=0
+# API-credit fallback. The plan (OAuth) is the default, and ANTHROPIC_API_KEY
+# is never in this environment, because the CLI prefers a key when one is set.
+# Only claude-api-gate adds the key, only to one child, and only when the plan's
+# 5-hour or weekly window is at 100%. The gate fails closed.
+unset ANTHROPIC_API_KEY
+API_GATE="$HOME/Documents/Exobrain harness/bin/claude-api-gate"
+PLAN_LIMIT_RE='session limit|weekly limit|usage limit|hit your limit|limit reached|out of usage credits'
+API_MODE=0
 NOTIFY="$HOME/Documents/Exobrain harness/mist-voice/bin/mist-notify"
 
 # Overall wall-clock budget for the claude runs (default 45 min). There was no
@@ -179,7 +187,9 @@ run_claude() {
 	SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
 	export MIST_NOTIFY_CONTEXT="Scheduled routine '$DIR' on ${MODEL:-the default model}, started $(date '+%Y-%m-%d %H:%M'), attempt $attempt. Its full transcript is Claude Code session $SESSION_ID (file $CLI_PROJECT_DIR/$SESSION_ID.jsonl); read that for everything the routine did and saw. Routine log: $HOME/Library/Logs/mist-routines.log."
 	tmp="$(mktemp -t routine-out)"
-	"$CLAUDE" -p --dangerously-skip-permissions --permission-prompts none --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$PROMPT" >"$tmp" 2>&1 &
+	local launch=("$CLAUDE")
+	[ "$API_MODE" -eq 1 ] && launch=(env MIST_API_GATE_CALLER="routine $DIR" "$API_GATE" exec -- "$CLAUDE")
+	"${launch[@]}" -p --dangerously-skip-permissions --permission-prompts none --session-id "$SESSION_ID" ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} "$PROMPT" >"$tmp" 2>&1 &
 	pid=$!
 	( sleep "$remaining"; kill -TERM "$pid" 2>/dev/null && { sleep 10; kill -KILL "$pid" 2>/dev/null; } ) &
 	wd=$!
@@ -247,6 +257,17 @@ while :; do
 	if [ "$RC" -eq 78 ] || printf '%s' "$OUT" | grep -qiE 'not logged in|invalid api key|authentication_error|please run .*login'; then
 		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR — genuine config/auth failure (rc=$RC); leaving FAIL flag for investigation."
 		exit "$RC"
+	fi
+
+	# Plan at its 5-hour or weekly limit: re-run once on the API credits. The
+	# gate decides from the usage endpoint, not from this text, so a routine
+	# that only writes one of these phrases cannot open it. Exit 3 = gate closed.
+	if [ "$API_MODE" -eq 0 ] && [ -x "$API_GATE" ] && printf '%s' "$OUT" | grep -qiE "$PLAN_LIMIT_RE" \
+		&& "$API_GATE" status >/dev/null 2>&1; then
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: plan limit reached; re-running once on the API credits."
+		API_MODE=1
+		attempt=$((attempt - 1))
+		continue
 	fi
 
 	# Out of usage credits on the selected model: switch models, don't wait.
