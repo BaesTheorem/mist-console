@@ -24,6 +24,21 @@ import replay
 import v4first
 
 HARNESS = "/Users/alexhedtke/Documents/Exobrain harness"
+# API-credit fallback (see claude-api-gate's docstring). Chats run on the plan.
+# A chat moves to the API key only after a turn fails on the plan limit AND the
+# gate reads a 5-hour or weekly window at 100%; it moves back when the gate closes.
+API_GATE = os.path.join(HARNESS, "bin", "claude-api-gate")
+PLAN_LIMIT_MARKERS = ("session limit", "weekly limit", "usage limit", "hit your limit",
+                      "limit reached", "out of usage credits")
+
+
+def api_gate_open():
+    """True only when claude-api-gate says the plan is at its limit. Fails closed."""
+    try:
+        r = subprocess.run([API_GATE, "status"], capture_output=True, text=True, timeout=30)
+    except Exception:
+        return False
+    return r.returncode == 0
 
 
 def _find_claude():
@@ -706,6 +721,8 @@ class ClaudeSession:
         self._turn_active = False    # a send is in flight (no result yet); blocks reaping
         self._pause_pending = False  # a pause was sent; the next result marks the chat paused
         self.paused = False          # last turn ended on a pause; cleared by the next send
+        self.api_mode = False        # next spawn goes through claude-api-gate (plan at its limit)
+        self._api_running = False    # the live backend is on the API key
         self._ctx_warned = False     # one-shot soft warning at CTX_WARN_PCT
         self._ctx_override = False    # one-shot hard-cap override (next send passes)
         self._ctl_seq = 0            # control_request id counter (stop_task)
@@ -964,6 +981,18 @@ class ClaudeSession:
             # and its bar renders inline in the conversation that started it.
             env["MIST_CONSOLE_SESSION"] = self.id or ""
             env["MIST_CONSOLE_URL"] = CONSOLE_URL
+            # The CLI prefers ANTHROPIC_API_KEY over the plan whenever it is set,
+            # so it never passes through. Only claude-api-gate adds it.
+            env.pop("ANTHROPIC_API_KEY", None)
+            cmd = self._build_cmd()
+            self._api_running = False
+            if self.api_mode:
+                if api_gate_open():
+                    env["MIST_API_GATE_CALLER"] = "Console chat " + (self.id or "")
+                    cmd = [API_GATE, "exec", "--"] + cmd
+                    self._api_running = True
+                else:
+                    self.api_mode = False
             # Claude Mods: the Console's folder of plugins, plus whatever the
             # environment already names, each child loaded as a --plugin-dir.
             # DIR_WATCH makes this long-lived headless session reload a mod
@@ -981,7 +1010,7 @@ class ClaudeSession:
                 self._seed_pending = True
             try:
                 self.proc = subprocess.Popen(
-                    self._build_cmd(), cwd=self.cwd, env=env,
+                    cmd, cwd=self.cwd, env=env,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, bufsize=1)
             except Exception as e:
@@ -1154,6 +1183,28 @@ class ClaudeSession:
             self.ensure_started()
             return
         self._broadcast({"type": "process_exit", "code": code})
+
+    def _api_after_result(self, obj):
+        """Move this chat onto or off the API key after a turn. The gate read is
+        a network call, so it runs off the reader thread."""
+        text = str(obj.get("result") or "").lower()
+        hit = bool(obj.get("is_error")) and any(m in text for m in PLAN_LIMIT_MARKERS)
+        if not (hit and not self._api_running) and not self._api_running:
+            return
+
+        def decide():
+            is_open = api_gate_open()
+            if self._api_running and not is_open:
+                # The plan has capacity again: back to it at the next send.
+                self.api_mode = False
+                self._broadcast({"type": "notice", "text": "Plan has capacity again; the next message runs on the plan, not the API."})
+                self.restart_backend()
+            elif hit and not self._api_running and is_open:
+                self.api_mode = True
+                self._broadcast({"type": "notice", "text": "Plan limit reached. Send the message again to run it on the API credits."})
+                self.restart_backend()
+
+        threading.Thread(target=decide, daemon=True).start()
 
     def set_model(self, model):
         """Switch model. On a live backend this goes over the control protocol
@@ -1347,6 +1398,7 @@ class ClaudeSession:
                     # never inits; _watch still needs its message to resend.
                     self._inflight = None
                 self._emit_context(obj)
+                self._api_after_result(obj)
                 if self._pause_pending:
                     # The turn ended after a pause request: this chat is paused
                     # until the next send (the composer offers resume).
