@@ -48,9 +48,17 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         # The Mac serves plain http on the LAN and behind a Tailscale name; the
         # only server this app ever talks to is the one it was paired with.
+        # iOS ignores NSAllowsArbitraryLoads once NSAllowsLocalNetworking is
+        # set, which leaves plain http only for IP literals and .local names:
+        # a Tailscale MagicDNS name (*.ts.net) was refused before any packet
+        # left the phone. ts.net gets its own exception for that reason.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         NSLocalNetworkUsageDescription: MIST talks to the Console server running on your Mac over the local network.
         NSBonjourServices:
           - _http._tcp
