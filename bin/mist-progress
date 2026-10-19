@@ -104,6 +104,12 @@ class Bar:
             payload = dict(self.state)
             self._dirty = False
         self._stop.set()
+        # Let the poster's in-flight post land first. Otherwise a command that
+        # exits within the first tick races its own opening `start` post: the
+        # terminal frame arrives first, then the late `start` opens a new bar
+        # generation that nothing ever settles (a "running" bar forever).
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=3)
         self._post(payload)
 
     def _loop(self):
