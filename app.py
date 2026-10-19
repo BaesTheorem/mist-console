@@ -182,6 +182,7 @@ def _session_meta(sid, s):
     return {"id": sid, "title": s.title or "New chat", "alive": s.alive,
             "pinned": s.pinned, "pin_order": s.pin_order,
             "last_activity": s.last_activity,
+            "busy": bool(getattr(s, "_turn_active", False)),
             "model": s.model or "",
             "permission_mode": s.permission_mode or "",
             "effort": s.effort or "",

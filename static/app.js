@@ -3141,7 +3141,17 @@ class Session {
         { const anc = this._replayAnchor; this._replayAnchor = null;
           if (anc && this.active) {
             const m = anc.seq != null && this.findMsg(anc.role, anc.seq);
-            if (m) { this.unfoldTo(m); this.stick = false; this.logEl.scrollTop = m.offsetTop - anc.off; }
+            if (m) {
+              // Real heights first: above the anchor, unrendered messages hold a
+              // 140px guess (content-visibility), and the offset would land short.
+              this.unfoldTo(m);
+              const msgs = [...this.logEl.children].filter((n) => n.classList.contains("msg"));
+              const upto = msgs.slice(0, msgs.indexOf(m) + 1);
+              upto.forEach((n) => n.classList.add("prime"));
+              this.stick = false;
+              this.logEl.scrollTop = m.offsetTop - anc.off;
+              requestAnimationFrame(() => requestAnimationFrame(() => upto.forEach((n) => n.classList.remove("prime"))));
+            }
             else this.stick = true;   // following, or the message is gone: the newest
           } }
         this.scroll();
@@ -7025,6 +7035,9 @@ function applySessionMeta(meta) {
   if (s.archived !== !!meta.archived) { s.archived = !!meta.archived; changed = true; }
   const la = (meta.last_activity || 0) * 1000;
   if (la > (s.lastActivity || 0)) { s.lastActivity = la; changed = true; }
+  // A turn started in a chat whose stream the phone closed (suspend()): reopen
+  // it with resume so the rail's dot and the log follow the turn live.
+  if (meta.busy && s._suspended && !s.connected) s.connect();
   if (!s.init) {   // a dormant chat's badges come from its meta until it speaks
     if (meta.model && s.model !== meta.model) s.model = meta.model;
     if (meta.permission_mode && s.permMode !== meta.permission_mode) s.permMode = meta.permission_mode;

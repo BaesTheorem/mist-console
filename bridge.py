@@ -1405,11 +1405,7 @@ class ClaudeSession:
                     self._pause_pending = False
                     self.paused = True
                     self._broadcast({"type": "paused"})
-                if on_activity:
-                    try:
-                        on_activity(self)
-                    except Exception:
-                        pass
+                self._notify_activity()
             elif obj.get("type") == "rate_limit_event":
                 # Keep the usage badges' reset/status fresh during Console-only
                 # use (see RATE_LIVE_PATH note); the front-end reads it via /usage.
@@ -2123,6 +2119,7 @@ class ClaudeSession:
             self._turn_active = True   # cleared on the matching result (or exit)
             self.paused = False        # any message after a pause is a resume
             self._pause_pending = kind == "pause"
+        self._notify_activity()   # the rail's busy flag (a phone with this stream closed reopens it)
         ev = {"type": "user_text", "text": display}   # for live + replay
         if kind:
             ev["kind"] = kind
@@ -2297,6 +2294,7 @@ class ClaudeSession:
                 return False
             self._turn_active = True
             self.last_activity = time.time()
+        self._notify_activity()
         self._broadcast({"type": "system", "subtype": "status", "status": "compacting"},
                         record=False)
         msg = {"type": "user", "message": {"role": "user", "content": "/compact"}}
@@ -2584,6 +2582,16 @@ class ClaudeSession:
     AUTH_PATH_PREFIX = (CLAUDE_BIN_DIR
                         + ":" + os.path.expanduser("~/.npm-global/bin")
                         + ":/opt/homebrew/bin:/usr/local/bin:")
+
+    def _notify_activity(self):
+        """Tell the registry feed (/events) that this chat started or ended a
+        turn. Its meta carries `busy`, which is how a page that closed this
+        chat's stream (the phone) knows to reopen it."""
+        if on_activity:
+            try:
+                on_activity(self)
+            except Exception:  # noqa: BLE001, S110 -- the feed is advisory; the turn goes on without it
+                pass
 
     def maybe_auth_command(self, text):
         """If `text` is an auth slash command the headless process can't run,
