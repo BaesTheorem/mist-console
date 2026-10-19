@@ -7785,15 +7785,15 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   document.addEventListener("touchend", finish);
   document.addEventListener("touchcancel", finish);
 })();
-/* ---------- phone: title status line, context line, New Chat ----------
+/* ---------- phone: title status line, New Chat ----------
    The top bar on a phone is menu, title, New Chat. Under the title one quiet
-   line mirrors the badge strip (state dot, model, state); the 2px line under
-   the bar is context use. Everything else from the strip lives in the
+   line mirrors the badge strip (state dot, model, state). Context use and
+   everything else from the strip lives in the
    chat-details sheet the title opens (below). */
 (function () {
-  const title = $("#phoneTitle"), bar = $("#phoneCtx");
-  const status = $("#status"), model = $("#model"), ctx = $("#ctx");
-  if (!title || !status || !model || !ctx) return;
+  const title = $("#phoneTitle");
+  const status = $("#status"), model = $("#model");
+  if (!title || !status || !model) return;
   const text = title.querySelector(".pt-text");
   const sync = () => {
     const state = status.dataset.state || "idle";
@@ -7801,16 +7801,9 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
     const m = phoneModelName(model.textContent);
     const st = (status.textContent || "").trim() || "idle";
     if (text) text.textContent = [m, st].filter(Boolean).join(" · ");
-    const pct = parseFloat((ctx.textContent || "").replace(/^ctx\s*/, ""));
-    if (bar) {
-      const i = bar.querySelector("i");
-      if (i) i.style.width = (isNaN(pct) ? 0 : Math.min(100, pct)) + "%";
-      bar.classList.toggle("warn", pct >= 70 && pct < 90);
-      bar.classList.toggle("err", pct >= 90);
-    }
   };
   const mo = new MutationObserver(sync);
-  [status, model, ctx].forEach((n) => mo.observe(n, { attributes: true, childList: true, characterData: true, subtree: true }));
+  [status, model].forEach((n) => mo.observe(n, { attributes: true, childList: true, characterData: true, subtree: true }));
   sync();
 })();
 // "claude-opus-5-5[1m]" -> "opus 5.5"; "claude-haiku-4-5-20251001" -> "haiku 4.5"

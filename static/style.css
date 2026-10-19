@@ -2094,8 +2094,8 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
 
 /* ---- phone, fourth pass: the 2026-10-04 declutter (design/handoff/2026-10-04) ----
    Top bar: menu, the title with one status line under it, New Chat. The chip,
-   the artifacts button and the gear leave the bar; context use is a 2px line
-   under it. Messages lose their icon row (a long-press opens the actions as a
+   the artifacts button and the gear leave the bar. Context use lives in the
+   chat-details sheet only. Messages lose their icon row (a long-press opens the actions as a
    sheet) and the crystal wallpaper. The drawer leads with New Chat and ends in
    a footer (saved, offline copy, settings). The composer is +, the field, and
    one button: voice while the field is empty, send once it has text. */
@@ -2124,10 +2124,6 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
   #phoneTitle[data-state="error"] .ps-dot { background: var(--err); }
   #phoneTitle[data-state="paused"] .ps-dot { background: var(--warn); }
   #phoneTitle:active .pt-name { color: var(--teal); }
-  #phoneCtx.phone-only { display: block !important; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; }
-  #phoneCtx i { display: block; height: 2px; width: 0; background: var(--teal); transition: width .3s ease; }
-  #phoneCtx.warn i { background: var(--warn); }
-  #phoneCtx.err i { background: var(--err); }
   /* the anchored cards hang under the bar, whatever their (hidden) badge says */
   #modelCard, #permCard, #thinkCard, #ctxCard, #usageCard, #shareCard {
     top: calc(var(--topbar-h, 56px) + 6px) !important;
@@ -2196,7 +2192,6 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
 }
 @media (max-width: 760px) and (prefers-reduced-motion: reduce) {
   #phoneTitle .ps-dot { animation: none !important; }
-  #phoneCtx i { transition: none; }
 }
 
 /* the bottom sheet (phone only; the element stays hidden elsewhere) */

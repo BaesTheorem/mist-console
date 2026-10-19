@@ -20,8 +20,8 @@ running.
   blocks) and when the app's user agent (`MISTShell/…`) is present. The
   layout follows `design/handoff/2026-10-04/`:
   - The top bar is menu, the chat's title, and New Chat. One line below the
-    title shows the model and the state. A 2px line below the bar shows
-    context use.
+    title shows the model and the state. Context use is in the
+    chat-details sheet.
   - Tap the title for the chat-details sheet: model, permissions, thinking,
     usage bars, share, diff, rename, pin, delete.
   - Messages have no icon row. A long-press opens their actions as a sheet

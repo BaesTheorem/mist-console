@@ -6,7 +6,8 @@ folder `phone/`, file `Phone.dc.html`. Approved as drafted, with no edits.
 - New Chat is a compose button at the top right of every chat and the first
   item in the drawer. The app icon's long-press menu gets a "New chat" item.
 - Top bar: menu, full-width title with one status line (model, state), New
-  Chat. Context use is a 2px line under the bar.
+  Chat. Context use is a 2px line under the bar (removed 2026-10-19:
+  it read as a stuck loading bar; context is in the chat-details sheet).
 - No per-message action icons on phones. A long-press opens an action sheet.
 - No crystal watermark behind the transcript on phones.
 - Tapping the title opens a chat-details sheet with the badge strip contents.
