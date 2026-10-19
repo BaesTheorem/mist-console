@@ -6218,7 +6218,21 @@ hiddenFile.addEventListener("change", () => {
 if (jumpBtn) {
   jumpBtn.addEventListener("click", () => {
     const s = activeId && sessions.get(activeId);
-    if (s) s.scroll(true);   // re-arm following and snap to the latest
+    if (!s) return;
+    // iOS keeps a fling's momentum running through a programmatic scrollTop
+    // write, so a jump made while the log still coasts lands back where the
+    // fling was going. Turning overflow off for one frame stops the momentum.
+    // Messages that lay out late (images, lazy rows) can then grow the log, so
+    // snap again on the next frame and once more after they settle.
+    const L = s.logEl;
+    s._touching = false;
+    if (isTouch()) L.style.overflowY = "hidden";
+    s.scroll(true);   // re-arm following and snap to the latest
+    requestAnimationFrame(() => {
+      L.style.overflowY = "";
+      s.scroll(true);
+      setTimeout(() => { if (s.stick) s.scroll(true); }, 300);
+    });
   });
 }
 
