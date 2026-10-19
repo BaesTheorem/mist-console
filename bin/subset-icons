@@ -1,0 +1,115 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["fonttools>=4.50", "skia-pathops>=0.8"]
+# ///
+"""Cut the Material Symbols icon font down to the icons the Console uses.
+
+    bin/subset-icons [--check]
+
+The full variable font (static/vendor/MaterialSymbolsSharp.ttf) is 8.8 MB,
+and the phone downloaded all of it on a cold start. This keeps only the
+icon names that appear as words in static/ (app.js, index.html, ...), pins
+every axis at the values the stylesheet uses (wght 400, GRAD 0, opsz 20),
+and writes two static fonts: MaterialSymbolsSharp.subset.woff (FILL 0) and
+MaterialSymbolsSharp.fill.woff (FILL 1, for .msi.fill). Two fonts and not
+one variable font, because the filled icons are separate glyphs that the
+full font swaps in through GSUB FeatureVariations, and the subsetter drops
+that table; pinning FILL applies the swap for good.
+
+Icon names are ligatures: a word in a .msi span turns into its glyph. A word
+that is missing from the subset shows as plain text, so run this after you
+add an icon. --check exits 1 and names the missing icons (tests use it).
+"""
+from __future__ import annotations
+
+import hashlib
+import re
+import sys
+from io import BytesIO
+from pathlib import Path
+
+from fontTools import subset
+from fontTools.ttLib import TTFont
+from fontTools.varLib import instancer
+
+ROOT = Path(__file__).resolve().parent.parent
+STATIC = ROOT / "static"
+FULL = STATIC / "vendor" / "MaterialSymbolsSharp.ttf"
+OUT = STATIC / "vendor" / "MaterialSymbolsSharp.subset.woff"
+OUT_FILL = STATIC / "vendor" / "MaterialSymbolsSharp.fill.woff"
+SOURCES = ["*.js", "*.html", "*.css"]
+
+
+def ligature_names(font: TTFont) -> set[str]:
+    """Every icon name the font's ligature table knows."""
+    rev = {g: chr(c) for c, g in font.getBestCmap().items()}
+    names: set[str] = set()
+    for lookup in font["GSUB"].table.LookupList.Lookup:
+        for st in lookup.SubTable:
+            st = getattr(st, "ExtSubTable", st)
+            for first, ligs in getattr(st, "ligatures", {}).items():
+                for lig in ligs:
+                    chars = [rev.get(g) for g in [first, *lig.Component]]
+                    if all(chars):
+                        names.add("".join(chars))
+    return names
+
+
+def used_words() -> set[str]:
+    words: set[str] = set()
+    for pat in SOURCES:
+        for f in STATIC.glob(pat):
+            words |= set(re.findall(r"[a-z0-9_]{2,}", f.read_text(errors="ignore")))
+    return words
+
+
+def main() -> None:
+    full = TTFont(FULL)
+    names = ligature_names(full) & used_words()
+    if "--check" in sys.argv:
+        if not OUT.exists() or not OUT_FILL.exists():
+            sys.exit(f"{OUT.name} is missing: run bin/subset-icons")
+        missing = sorted(names - ligature_names(TTFont(OUT)) | names - ligature_names(TTFont(OUT_FILL)))
+        if missing:
+            sys.exit("icons missing from the subset (run bin/subset-icons): " + ", ".join(missing))
+        print(f"subset covers all {len(names)} icons in use")
+        return
+    text = "".join(sorted(names)) + " _0123456789abcdefghijklmnopqrstuvwxyz"
+    for fill, out in ((0, OUT), (1, OUT_FILL)):
+        # The filled icons draw a fill shape over the outline; kept with only
+        # the overlap flag set, WebKit renders the overlap as a hole, so FILL 1
+        # merges the contours. FILL 0 keeps them: merging changed a few
+        # outline icons (chat, keyboard), and unmerged they match exactly.
+        mode = instancer.OverlapMode.REMOVE if fill else instancer.OverlapMode.KEEP_AND_SET_FLAGS
+        pinned = instancer.instantiateVariableFont(TTFont(FULL), {"FILL": fill, "wght": 400, "GRAD": 0, "opsz": 20},
+                                                   overlap=mode)
+        buf = BytesIO()
+        pinned.save(buf)
+        buf.seek(0)
+        font = TTFont(buf)
+        opts = subset.Options()
+        opts.layout_features = ["liga", "rlig", "calt", "ccmp"]
+        opts.notdef_outline = True
+        sub = subset.Subsetter(opts)
+        sub.populate(text=text)   # the letters stay so the words can shape into ligatures
+        sub.subset(font)
+        font.flavor = "woff"   # not woff2: its glyf transform drops the overlap flag
+        font.save(out)
+        print(f"FILL {fill}: {len(names)} icons, {FULL.stat().st_size / 1e6:.1f} MB -> {out.stat().st_size / 1e3:.0f} KB")
+    stamp_versions()
+
+
+def stamp_versions() -> None:
+    """Put a content hash on the font URLs in md-tokens.css. The server
+    caches a versioned URL for a year, so a rebuilt font needs a new one."""
+    css = STATIC / "md-tokens.css"
+    text = css.read_text()
+    for f in (OUT, OUT_FILL):
+        v = hashlib.sha256(f.read_bytes()).hexdigest()[:10]
+        text = re.sub(rf'url\("vendor/{re.escape(f.name)}(\?v=[0-9a-f]+)?"\)', f'url("vendor/{f.name}?v={v}")', text)
+    css.write_text(text)
+
+
+if __name__ == "__main__":
+    main()

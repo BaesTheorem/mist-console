@@ -108,6 +108,25 @@ _GZIP_TYPES = {"application/json", "text/html", "text/css", "text/javascript",
 _GZIP_MIN = 2048
 
 
+# Static assets that rarely change get a real cache lifetime. Flask's default
+# is no-cache, so every launch of the phone app revalidated ~100 files, one
+# round trip each over the Tailscale relay. A versioned URL (?v=, stamped by
+# bin/subset-icons for the icon fonts) is cached for a year; images and the
+# crystal clips for a day. app.js, the CSS and the HTML keep revalidating,
+# because they change with every Console edit.
+_LONG_CACHE_EXT = (".woff", ".woff2", ".ttf", ".webp", ".png", ".jpg", ".svg", ".webm", ".gif")
+
+
+@app.after_request
+def _static_cache(resp):
+    if (request.method == "GET" and resp.status_code in (200, 304)
+            and request.path.lower().endswith(_LONG_CACHE_EXT)
+            and request.endpoint == "static"):
+        age = 31536000 if request.args.get("v") else 86400
+        resp.headers["Cache-Control"] = f"public, max-age={age}" + (", immutable" if request.args.get("v") else "")
+    return resp
+
+
 @app.after_request
 def _gzip_remote(resp):
     try:

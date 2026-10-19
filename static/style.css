@@ -2140,7 +2140,7 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
   .session-log:empty::before {
     content: "What\2019s up?"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
     padding-top: 150px; box-sizing: border-box;
-    background: url("MIST_nobg.png") center calc(50% - 40px) / auto 120px no-repeat;
+    background: url("MIST_nobg-sm.webp") center calc(50% - 40px) / auto 120px no-repeat;
     font-family: "Poiret One", var(--font-display, sans-serif); font-size: 30px; color: var(--text); pointer-events: none;
   }
   .msg .msg-actions { display: none !important; }

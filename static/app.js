@@ -5409,7 +5409,7 @@ function renderCrystalList() {
   if (!crystal.avail) { list.appendChild(el("div", "modelnote", "Animation pack not installed (static/anims/README.md).")); return; }
   Object.entries(CRYSTAL_LOOKS).forEach(([id, label]) => {
     const row = el("div", "modelrow crystalrow" + (id === crystal.look ? " sel" : ""),
-      '<img alt="" draggable="false" src="' + crystalSrc("idle", id) + '"> ' + esc(label));
+      '<img alt="" draggable="false" loading="lazy" src="' + crystalSrc("idle", id) + '"> ' + esc(label));   // lazy: the panel is closed at boot, and 7 previews were ~2 MB
     row.addEventListener("click", () => setCrystalLook(id, null));
     list.appendChild(row);
   });
@@ -5451,10 +5451,11 @@ function renderCrystalList() {
   };
   probe.onerror = () => { crystal.avail = false; renderCrystalList(); crystalRefresh(); };
   probe.src = crystalSrc("idle", "classic");
-  const wprobe = new Image();
-  wprobe.onload = () => { crystal.wallAvail = true; crystalRefresh(); };
-  wprobe.onerror = () => { crystal.wallAvail = false; wallSync(); };
-  wprobe.src = wallSrc(crystalSrc("idle", "classic"));
+  // Only "is the 256 px pack installed?": a HEAD answers it. Loading the clip
+  // as an Image pulled ~1 MB at every boot even with the wallpaper off.
+  fetch(wallSrc(crystalSrc("idle", "classic")), { method: "HEAD" })
+    .then((r) => { crystal.wallAvail = r.ok; if (r.ok) crystalRefresh(); else wallSync(); })
+    .catch(() => { crystal.wallAvail = false; wallSync(); });
   // you typing = listening; one of MIST's audio replies playing = speaking
   const input = $("#input");
   if (input) input.addEventListener("input", () => { crystal.typingAt = Date.now(); crystalRefresh(); });

@@ -13,13 +13,21 @@
    tokens. Loaded BEFORE style.css; style.css consumes these.
    ============================================================ */
 
-/* Material Symbols, Sharp cut — self-hosted variable font (vendor/). */
+/* Material Symbols, Sharp cut, self-hosted (vendor/). Not the 8.8 MB variable
+   font: bin/subset-icons cuts it to the icons this UI names and pins the axes
+   below, one file per FILL value (~350 KB each). The fill file loads only when
+   a .msi.fill icon shows. After adding an icon, run bin/subset-icons. */
 @font-face {
   font-family: "Material Symbols Sharp";
   font-style: normal;
-  font-weight: 100 700;
   font-display: block;
-  src: url("vendor/MaterialSymbolsSharp.ttf") format("truetype");
+  src: url("vendor/MaterialSymbolsSharp.subset.woff?v=284fa47ffd") format("woff");
+}
+@font-face {
+  font-family: "Material Symbols Sharp Fill";
+  font-style: normal;
+  font-display: block;
+  src: url("vendor/MaterialSymbolsSharp.fill.woff?v=019b816693") format("woff");
 }
 /* Raw icon span (ligature-based): <span class="msi">settings</span> */
 .msi {
@@ -33,7 +41,7 @@
   font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 20;
   user-select: none;
 }
-.msi.fill { font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 20; }
+.msi.fill { font-family: "Material Symbols Sharp Fill"; }
 
 :root {
   /* ---- color: terminal (dark) — teal seed, navy neutrals ---- */
