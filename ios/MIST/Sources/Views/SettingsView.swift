@@ -162,10 +162,13 @@ struct SettingsView: View {
             syncNote = "Connect first; the list comes from the Mac."
             return
         }
-        if let c = await Probe.config(base, token: token) {
-            store.merge(urls: c.urls, discovery: c.discovery)
-            syncNote = "Synced \(c.urls.count) address\(c.urls.count == 1 ? "" : "es")."
-        } else {
+        switch await Probe.config(base, token: token) {
+        case .ok(let urls, let discovery):
+            store.merge(urls: urls, discovery: discovery)
+            syncNote = "Synced \(urls.count) address\(urls.count == 1 ? "" : "es")."
+        case .unauthorized:
+            syncNote = "The Mac rejected this phone's token. Scan a new pairing code."
+        case .failed:
             syncNote = "The Mac didn't answer the sync."
         }
     }

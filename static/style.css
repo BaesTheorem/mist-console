@@ -575,6 +575,9 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .body .codeblock:hover .copy-btn { opacity: 1; }
 .body .copy-btn:hover { border-color: var(--teal); color: var(--teal); }
 .body .copy-btn.copied { color: var(--teal); border-color: var(--teal); opacity: 1; }
+/* A finger cannot hover, and an invisible button that still takes the tap is a
+   trap: on touch the Copy buttons stay up, quiet. */
+@media (hover: none) { .body .copy-btn { opacity: .75; } }
 .body h1,.body h2,.body h3 { color: var(--teal); margin: 12px 0 6px; font-size: 14px; }
 .body h4,.body h5 { color: var(--teal); margin: 10px 0 5px; font-size: 13px; }
 .body ul,.body ol { margin: 4px 0 9px; padding-left: 22px; }
@@ -592,6 +595,10 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .body .md-table { border-collapse: collapse; margin: 9px 0; width: auto; max-width: 100%; display: block; overflow-x: auto; font-size: 12px; }
 .body .md-table th, .body .md-table td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; }
 .body .md-table th { background: var(--md-sys-color-surface-container-lowest); color: var(--teal); font-weight: 600; white-space: nowrap; }
+/* Cells keep whole words. The message body wraps anywhere so a long URL cannot
+   widen the column, but in a table that let a narrow column split "Kansas"
+   into "Kans/as"; the table scrolls sideways instead. */
+.body .md-table th, .body .md-table td { overflow-wrap: normal; word-break: normal; min-width: 6ch; }
 .body .md-table tbody tr:nth-child(even) td { background: var(--md-sys-color-surface-container-low); }
 .body .md-table code { background: var(--md-sys-color-surface-container-lowest); }
 .cursor { display: inline-block; width: 7px; background: var(--teal); animation: blink 1s steps(1) infinite; }
@@ -1011,7 +1018,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .genmodel-stage {
   display: block; width: min(480px, 100%); aspect-ratio: 3 / 2;
   border: 1px solid var(--line); background: var(--surface);
-  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+  cursor: grab; touch-action: pan-y; user-select: none; -webkit-user-select: none;   /* model.js: a vertical drag scrolls the chat */
 }
 .genmodel-stage:active { cursor: grabbing; }
 .genmodel-wrap.is-loading .genmodel-stage { cursor: progress; }
@@ -1037,9 +1044,9 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 /* On a finger there is no hover: the tools stay up and grow to finger size. */
 @media (hover: none) {
   .genmodel-tools { opacity: 1; }
-  .genmodel-btn { width: 32px; height: 32px; }
-  .genmodel-btn .msi { font-size: 18px; }
-  .genmodel-wrap .genmodel-dl { opacity: 1; width: 32px; height: 32px; }
+  .genmodel-btn { width: 44px; height: 44px; }
+  .genmodel-btn .msi { font-size: 20px; }
+  .genmodel-wrap .genmodel-dl { opacity: 1; width: 44px; height: 44px; }
 }
 /* PDF embed: the WebView's PDF viewer in a frame, the attachment card under it. */
 .genpdf-wrap { display: flex; flex-direction: column; width: 100%; max-width: 760px; margin: 6px 0; line-height: normal; }
@@ -1786,7 +1793,7 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
      are their own scrollers. Pinning the body keeps a stray scrollIntoView or
      a keyboard reveal from sliding the top bar off the screen. */
   html, body { overflow: hidden; overscroll-behavior: none; }
-  body { position: fixed; top: 0; left: 0; right: 0; }
+  body { position: fixed; top: 0; top: var(--vvtop, 0px); left: 0; right: 0; }   /* --vvtop: app.js, keyboard pan */
   .brand { display: none; }              /* the app icon already says MIST; the row is for the chat title */
   #phoneTitle.phone-only {
     /* basis 0: a long title must never push the chip and the gear onto a second line */
@@ -1802,7 +1809,10 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
   #tabrail.dragging, #mid.rail-collapsed #tabrail.dragging { transition: none; }
   #railBackdrop:not([hidden]) { transition: opacity .2s ease; }
   #railBackdrop.dragging { transition: none; }
-  .tab { padding: 11px 9px; }            /* finger-sized rows */
+  .tab { padding: 11px 9px; min-height: 44px; box-sizing: border-box; }   /* finger-sized rows */
+  #chatSearch { min-height: 44px; padding: 0; font-size: 16px; }   /* under 16px iOS zooms into the field */
+  #chatSearchClear { min-width: 44px; min-height: 44px; }
+  details.hooks:not(.quiet) > summary { min-height: 44px; display: flex; align-items: center; }
 }
 
 /* ---- phone, third pass: the top bar ----
@@ -2134,13 +2144,18 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
     font-family: "Poiret One", var(--font-display, sans-serif); font-size: 30px; color: var(--text); pointer-events: none;
   }
   .msg .msg-actions { display: none !important; }
-  .session-log .msg { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-  .session-log .msg.selectable { -webkit-user-select: text; user-select: text; }
-  .session-log .msg textarea { -webkit-user-select: text; user-select: text; }
+  /* A long-press opens the actions sheet, so it must not also start an iOS
+     text selection. These need the #logs prefix and the descendant rule:
+     `#logs, #logs *` (the desktop's select-anything rule) outranks any
+     class-only selector, which is how a long-press kept selecting text. */
+  #logs .session-log .msg, #logs .session-log .msg * { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  #logs .session-log .msg.selectable, #logs .session-log .msg.selectable * { -webkit-touch-callout: default; -webkit-user-select: text; user-select: text; }
+  #logs .session-log .msg textarea, #logs .session-log .msg input, #logs .session-log .msg [contenteditable] { -webkit-user-select: text; user-select: text; }
   .session-log .msg.pressed { background: var(--md-sys-color-surface-container); }
   #jumpBtn {
     left: auto; right: 14px; bottom: 10px; transform: none;
-    width: 40px; height: 40px; padding: 0; font-size: 0; display: grid; place-items: center;
+    width: 44px; height: 44px; padding: 0; font-size: 0; display: grid; place-items: center;
+    background: var(--md-sys-color-surface-container-high);   /* opaque over the newest text */
   }
   #jumpBtn[hidden] { display: none; }
   #jumpBtn .msi { font-size: 20px; margin: 0; vertical-align: 0; }
@@ -2194,6 +2209,7 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
 }
 #phoneSheet.enter .sheet-body { transform: translateY(100%); }
 #phoneSheet .sheet-grab { width: 36px; height: 4px; background: var(--line); margin: 8px auto 4px; }
+#phoneSheet .sheet-body.dragging { transition: none; }   /* app.js: drag down to close */
 #phoneSheet .sh-head { display: flex; flex-direction: column; gap: 3px; padding: 8px 18px 12px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
 #phoneSheet .sh-head b { font-size: 16px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
 #phoneSheet .sh-head span { font-size: 12px; color: var(--dim); }
@@ -2213,21 +2229,23 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
 #phoneSheet .sh-row.on .msi { color: var(--teal); }
 #phoneSheet .sh-row.warn, #phoneSheet .sh-row.warn .msi { color: var(--err); }
 #phoneSheet .sh-row.static { cursor: default; }
-#phoneSheet .sh-meters { display: flex; flex-direction: column; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+#phoneSheet .sh-meters { display: flex; flex-direction: column; gap: 0; padding: 4px 18px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
 #phoneSheet .sh-meter {
   display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 10px;
-  min-height: 28px; background: none; border: 0; padding: 0; font: inherit; font-size: 12px; color: var(--dim); text-align: left; cursor: pointer;
+  min-height: 44px; background: none; border: 0; padding: 0; font: inherit; font-size: 12px; color: var(--dim); text-align: left; cursor: pointer;
 }
 #phoneSheet .sh-meter .bar { height: 4px; background: var(--md-sys-color-surface-container-high); }
 #phoneSheet .sh-meter .bar i { display: block; height: 4px; background: var(--teal); }
 #phoneSheet .sh-meter.warn .bar i { background: var(--warn); }
 #phoneSheet .sh-meter.err .bar i { background: var(--err); }
+/* One row that shares its width among however many actions the chat has
+   (four or five): a fixed four-column grid left a gray gap after a fifth. */
 #phoneSheet .sh-grid {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+  display: flex; flex-wrap: wrap; gap: 1px;
   background: var(--md-sys-color-outline-variant); border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 #phoneSheet .sh-grid button {
-  min-height: 72px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  flex: 1 1 0; min-width: 64px; min-height: 72px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   background: var(--md-sys-color-surface-container-low); border: 0; color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
 }
 #phoneSheet .sh-grid button .msi { font-size: 22px; color: var(--teal); }

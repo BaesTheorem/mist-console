@@ -132,6 +132,11 @@ def _gzip_remote(resp):
 def _remote_guard():
     if _foreign_origin(request):
         return jsonify({"error": "cross-origin request refused"}), 403
+    # DNS rebinding: a page on some domain re-pointed at 127.0.0.1 reaches us
+    # from loopback, but with its own name in Host. Refused before the public
+    # paths too; is_local() also withholds trust from it on its own.
+    if remote.foreign_host(request):
+        return jsonify({"error": "unknown Host"}), 403
     if remote.is_local(request):
         return None
     if request.path in remote.PUBLIC_PATHS:
@@ -994,10 +999,18 @@ def session_transcript(sid):
     s = _sessions.get(sid)
     if not s:
         return jsonify({"error": "no session"}), 404
-    s.ensure_imported()
     path = os.path.join(DATA_DIR, f"{sid}.jsonl")
+    # Only an imported chat that was never converted needs the import; calling
+    # it for every imported chat loaded (and pinned) its whole history in
+    # memory just to read a file that already exists.
+    if not os.path.exists(path):
+        s.ensure_imported()
+    # Read before the file: the phone stores this as "synced up to", so it must
+    # not be newer than what the transcript below contains. A reply that lands
+    # mid-read leaves last_activity behind it, and the next sync fetches again.
+    last_activity = s.last_activity
     doc = transcript.build(path, sid=sid, title=s.title or "New chat")
-    doc["last_activity"] = s.last_activity
+    doc["last_activity"] = last_activity
     doc["pinned"] = bool(s.pinned)
     return jsonify(doc)
 
@@ -2163,7 +2176,12 @@ def remote_rotate():
 def remote_ping():
     """Public, tokenless: 'a MIST Console answers here'. The phone races its
     candidate URLs against this before it logs in."""
-    name = remote.local_hostname().removesuffix(".local") or "MIST"
+    # The Mac's own name only to this Mac and the LAN (where Bonjour shows it
+    # anyway). Anyone holding the tunnel URL gets a generic one; the phone only
+    # checks "app" here and learns the name from /remote/config after login.
+    name = "MIST"
+    if not remote.via_tunnel(request):
+        name = remote.local_hostname().removesuffix(".local") or "MIST"
     return jsonify({"ok": True, "app": "mist-console", "name": name, "enabled": remote.enabled()})
 
 
@@ -2173,16 +2191,24 @@ def remote_login():
     A form post is a browser or the app's web view, so it is redirected into
     the app; JSON callers get JSON. Misses are rate-limited per address."""
     # Through the tunnel every request arrives from cloudflared on loopback, so
-    # the miss counter keys on the client address Cloudflare stamps (it is only
-    # spoofable from the LAN, where the guard already trusts nothing by address).
-    ip = request.headers.get("Cf-Connecting-Ip") or request.remote_addr or "?"
+    # the miss counter keys on the client address Cloudflare stamps. That
+    # header is only believed on the tunnel's origin port: on the LAN port a
+    # client could send a fresh made-up one with each guess.
+    ip = None
+    if remote.via_tunnel(request):
+        ip = request.headers.get("Cf-Connecting-Ip")
+    ip = ip or request.remote_addr or "?"
     if not remote.enabled():
         return jsonify({"ok": False, "error": "remote access is off on this Console"}), 403
-    if not remote.login_allowed(ip):
-        return jsonify({"ok": False, "error": "too many attempts; wait a few minutes"}), 429
     body = request.get_json(silent=True) or {}
     tok = body.get("token") or request.form.get("token") or ""
-    if not remote.check_token(tok):
+    # A correct token always gets in, even from an address over the limit: a
+    # phone that retried a stale token after a rotate must be able to re-pair
+    # at once, and the token itself (256 bits) is the real protection.
+    good = remote.check_token(tok)
+    if not good and not remote.login_allowed(ip):
+        return jsonify({"ok": False, "error": "too many attempts; wait a few minutes"}), 429
+    if not good:
         remote.login_failed(ip)
         if request.form:
             return Response(remote.LOGIN_HTML.replace("<!--msg-->", "<p class=err>That token is wrong.</p>"),
@@ -2218,6 +2244,34 @@ def remote_config():
                     "name": remote.local_hostname().removesuffix(".local") or "MIST"})
 
 
+def _resume_splits_condensed(history, after):
+    """True when resuming after seq `after` would cut a condensed message.
+
+    A history fold turns an assistant message (and its tool results) into one
+    `mist_msg` stamped with the seq of its FIRST event. A client that saw only
+    part of that message before it dropped has `after` inside the span, so a
+    resume (send seq > after) would skip the whole condensed event and leave
+    the client with half a reply. archive.Condenser records the span's last
+    seq as `seq_end`; a condensed event from before that field existed is
+    assumed to run up to the next newer event in the list (or to the end)."""
+    for i, ev in enumerate(history):
+        if ev.get("type") != "mist_msg":
+            continue
+        start = ev.get("seq")
+        if not isinstance(start, int) or start > after:
+            continue
+        end = ev.get("seq_end")
+        if isinstance(end, int):
+            if after < end:
+                return True
+            continue
+        later = (o.get("seq") for o in history[i + 1:])
+        nxt = min((sq for sq in later if isinstance(sq, int) and sq > start), default=None)
+        if nxt is None or after < nxt - 1:
+            return True
+    return False
+
+
 @app.route("/stream/<sid>")
 def stream(sid):
     s = _sessions.get(sid)
@@ -2243,13 +2297,16 @@ def stream(sid):
         # overlap (events in both snapshot and queue) is dropped by seq stamp.
         q = s.subscribe()
         try:
+            yield "retry: 2000\n\n"
             last_seq = 0
             history = s.snapshot_history()
             if after is not None and after > 0:
                 seqs = [ev.get("seq") for ev in history if isinstance(ev.get("seq"), int)]
                 # Resumable only if the client's last event is still inside the
-                # buffer (or the buffer is empty past it); otherwise full replay.
-                if seqs and seqs[0] <= after + 1:
+                # buffer (or the buffer is empty past it), and does not fall
+                # inside a message the history has since condensed (see
+                # _resume_splits_condensed); otherwise full replay.
+                if seqs and seqs[0] <= after + 1 and not _resume_splits_condensed(history, after):
                     history = [ev for ev in history if not (isinstance(ev.get("seq"), int) and ev["seq"] <= after)]
                     last_seq = after
                     yield _sse({"type": "resumed", "after": after, "missed": len(history)})
@@ -2268,7 +2325,15 @@ def stream(sid):
             # monitor once (instead of flickering it during replay).
             yield _sse({"type": "replay_done"})
             while True:
-                ev = q.get()
+                # Timed wait plus a comment line: Cloudflare drops a stream
+                # idle for ~100 s, and a bare get() also left this generator
+                # (and its queue subscription) blocked forever after the client
+                # was gone, since only a write notices a closed socket.
+                try:
+                    ev = q.get(timeout=25)
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
                 sq = ev.get("seq")
                 if isinstance(sq, int) and sq <= last_seq:
                     continue                     # already replayed above

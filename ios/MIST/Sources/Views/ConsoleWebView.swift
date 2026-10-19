@@ -20,7 +20,8 @@ struct ConsoleWebView: UIViewRepresentable {
         cfg.mediaTypesRequiringUserActionForPlayback = []
         cfg.websiteDataStore = .default()
         // The page posts {type:"stream", state:"up"|"down"} here when its event
-        // stream drops or returns (shellStream in app.js).
+        // stream drops or returns (shellStream in app.js), and {type:"ready"}
+        // once it has booted (sessions loaded, UI usable).
         cfg.userContentController.add(context.coordinator, name: "mist")
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = context.coordinator
@@ -36,6 +37,7 @@ struct ConsoleWebView: UIViewRepresentable {
         wv.allowsBackForwardNavigationGestures = false
         wv.allowsLinkPreview = false
         context.coordinator.webView = wv
+        context.coordinator.observeForeground()
         return wv
     }
 
@@ -52,7 +54,7 @@ struct ConsoleWebView: UIViewRepresentable {
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         let tok = token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? token
         req.httpBody = "token=\(tok)&next=%2F".data(using: .utf8)
-        wv.load(req)
+        c.load(req)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
@@ -60,31 +62,111 @@ struct ConsoleWebView: UIViewRepresentable {
         var link: ConsoleLink?
         var loadedGeneration = -1
         var baseHost: String?
+        /// True once the page posted {type:"ready"} (or, for a page too old to
+        /// post it, the fallback below fired). False from the moment a load
+        /// is issued until then.
         var pageLoaded = false
+        /// Bumped per load, so a stash that finishes after a newer load was
+        /// asked for does not load the older request on top of it.
+        private var loadSeq = 0
+        /// Status of the last main-frame response, for the didFinish fallback.
+        private var lastStatus = 0
+        private var readyFallback: DispatchWorkItem?
+        private var foreground: NSObjectProtocol?
 
-        /// Run the script a deep link queued, once the page is really there.
-        func flushPendingScript() {
-            guard pageLoaded, let link, let js = link.pendingScript, let wv = webView else { return }
-            link.pendingScript = nil
-            // Give the page a beat to finish its own boot (sessions load async).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                wv.evaluateJavaScript(js) { _, _ in }
+        deinit {
+            if let foreground { NotificationCenter.default.removeObserver(foreground) }
+        }
+
+        /// Back from the background with no document (the system reclaimed
+        /// the page while the app slept): load it again.
+        func observeForeground() {
+            guard foreground == nil else { return }
+            foreground = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                guard let self, let wv = self.webView, wv.url == nil, self.loadedGeneration >= 0 else { return }
+                self.pageGone()
             }
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            pageLoaded = true
+        /// Issue a load. Before replacing a live page, ask it to stash the
+        /// composer draft and the open chat (window.mistStashDraft in app.js),
+        /// waiting at most half a second, so the next boot restores them.
+        func load(_ req: URLRequest) {
+            guard let wv = webView else { return }
+            loadSeq += 1
+            let seq = loadSeq
+            let hadPage = wv.url != nil
+            setLoaded(false)
+            guard hadPage else { wv.load(req); return }
+            var fired = false
+            let go: () -> Void = { [weak self, weak wv] in
+                guard !fired else { return }
+                fired = true
+                guard let self, let wv, seq == self.loadSeq else { return }
+                wv.load(req)
+            }
+            wv.evaluateJavaScript("window.mistStashDraft && window.mistStashDraft('reconnect')") { _, _ in go() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: go)
+        }
+
+        private func setLoaded(_ loaded: Bool) {
+            pageLoaded = loaded
+            if !loaded { readyFallback?.cancel(); readyFallback = nil }
             let link = self.link
             Task { @MainActor in
-                _ = link   // keep the reference alive across the hop
-                self.flushPendingScript()
+                link?.pageAlive = loaded
+                if loaded { self.flushPendingScript() }
             }
+        }
+
+        /// The page is gone (content process killed, or no document after a
+        /// background stretch): mark it and have the link load it again.
+        private func pageGone() {
+            setLoaded(false)
+            let link = self.link
+            Task { @MainActor in link?.reloadPage() }
+        }
+
+        /// Run the script a deep link queued, once the page has booted and the
+        /// link is connected (not on a page about to be replaced).
+        @MainActor
+        func flushPendingScript() {
+            guard pageLoaded, let link, link.state == .connected,
+                  let js = link.pendingScript, let wv = webView else { return }
+            link.pendingScript = nil
+            wv.evaluateJavaScript(js) { _, _ in }
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            setLoaded(false)
+        }
+
+        /// "ready" from the page is the real signal. A page served by an older
+        /// Console never posts it, so a finished 200 load that stays silent
+        /// for 5 s counts as ready too. A login page (401/403) never does.
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard !pageLoaded, lastStatus == 200 else { return }
+            readyFallback?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                guard let self, !self.pageLoaded, self.lastStatus == 200 else { return }
+                self.setLoaded(true)
+            }
+            readyFallback = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: item)
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            pageGone()
         }
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
             guard message.name == "mist", let body = message.body as? [String: Any] else { return }
             switch body["type"] as? String {
+            case "ready":
+                setLoaded(true)
             case "stream":
                 guard let state = body["state"] as? String else { return }
                 let link = self.link
@@ -110,10 +192,11 @@ struct ConsoleWebView: UIViewRepresentable {
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url else { decisionHandler(.allow); return }
             if url.scheme?.lowercased() == "mist" {
-                if url.host?.lowercased() == "settings" {
-                    let link = self.link
-                    Task { @MainActor in link?.showSettings = true }
-                }
+                // Same router as links from outside (MISTApp.handle). A pairing
+                // link inside the page is ignored: re-pairing is the settings
+                // sheet's job, never the page's.
+                let link = self.link
+                Task { @MainActor in link?.handle(mistURL: url) }
                 decisionHandler(.cancel)
                 return
             }
@@ -129,17 +212,18 @@ struct ConsoleWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                      decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
-            if navigationResponse.isForMainFrame,
-               let http = navigationResponse.response as? HTTPURLResponse,
-               http.statusCode == 401 || http.statusCode == 403 {
-                let link = self.link
-                Task { @MainActor in link?.pageRejected() }
+            if navigationResponse.isForMainFrame, let http = navigationResponse.response as? HTTPURLResponse {
+                lastStatus = http.statusCode
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    let link = self.link
+                    Task { @MainActor in link?.pageRejected() }
+                }
             }
             decisionHandler(.allow)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            pageLoaded = false
+            setLoaded(false)
             report(error)
         }
 

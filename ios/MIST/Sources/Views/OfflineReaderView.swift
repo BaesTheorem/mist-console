@@ -59,24 +59,34 @@ struct TranscriptView: View {
     @EnvironmentObject var cache: ChatCache
     let chat: CachedChat
     @State private var doc: CachedTranscript?
+    @State private var loaded = false
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if let doc {
-                        ForEach(doc.messages) { m in
-                            MessageRow(message: m).id(m.id)
+                        // Rows are keyed by position: several tool lines share
+                        // a timestamp and text, so nothing in a message is unique.
+                        ForEach(Array(doc.messages.enumerated()), id: \.offset) { i, m in
+                            MessageRow(message: m).id(i)
                         }
-                    } else {
+                    } else if loaded {
                         Text("No copy of this chat on the phone yet.").foregroundStyle(.secondary)
+                    } else {
+                        ProgressView().tint(.teal).frame(maxWidth: .infinity)
                     }
                 }
                 .padding(14)
             }
-            .onAppear {
-                doc = cache.transcript(for: chat.id)
-                if let last = doc?.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            .task(id: chat.id) {
+                // Decoded off the main thread; a long chat is megabytes.
+                doc = await cache.transcript(for: chat.id)
+                loaded = true
+                guard let count = doc?.messages.count, count > 0 else { return }
+                // The rows exist only after this state change renders, so
+                // scroll on the next turn of the run loop.
+                DispatchQueue.main.async { proxy.scrollTo(count - 1, anchor: .bottom) }
             }
         }
         .background(Color.surface)

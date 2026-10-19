@@ -11,6 +11,10 @@ struct MISTApp: App {
     @StateObject private var link = ConsoleLink()
     @StateObject private var cache = ChatCache()
     @Environment(\.scenePhase) private var scenePhase
+    /// A pairing link that would replace the current pairing, waiting for Alex
+    /// to confirm it. Any app or web page can open a mist://pair link, so one
+    /// must never silently point the phone (and its token) at another server.
+    @State private var offered: Pairing?
 
     var body: some Scene {
         WindowGroup {
@@ -30,24 +34,42 @@ struct MISTApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active { link.becameActive(store: store) }
                 }
+                .alert(offerTitle, isPresented: Binding(get: { offered != nil },
+                                                        set: { if !$0 { offered = nil } }),
+                       presenting: offered) { p in
+                    Button("pair") {
+                        offered = nil
+                        store.apply(p)
+                        link.reconnect(store: store)
+                    }
+                    Button("cancel", role: .cancel) { offered = nil }
+                } message: { p in
+                    Text("This replaces the pairing with \(store.pairing?.name ?? "the current Mac"). Only accept a code you just made on your own Mac.\n\n\(p.urls.joined(separator: "\n"))")
+                }
         }
     }
 
     /// mist://pair?d=… pairs (or re-pairs); mist://settings opens the sheet;
     /// mist://offline opens the offline copy; mist://new opens a fresh chat.
+    /// The rest goes through ConsoleLink.handle(mistURL:), the same router
+    /// the page's own mist: links use.
     private func handle(_ url: URL) {
         if let pairing = Pairing.parse(url: url) {
-            store.apply(pairing)
-            link.reconnect(store: store)
-        } else if url.host?.lowercased() == "settings" {
-            link.showSettings = true
-        } else if url.host?.lowercased() == "offline" {
-            // From the drawer's "Offline" button in the page.
-            link.showReader = true
-        } else if url.host?.lowercased() == "new" {
-            // From the "New chat" widget or the icon's menu: a fresh chat as soon as the page is up.
-            link.pendingScript = "if (typeof createSession === 'function') createSession();"
+            if let current = store.pairing, current != pairing {
+                offered = pairing   // replacing a pairing: ask first
+            } else {
+                store.apply(pairing)
+                link.reconnect(store: store)
+            }
+        } else {
+            link.handle(mistURL: url)
         }
+    }
+
+    private var offerTitle: String {
+        guard let p = offered else { return "" }
+        let host = p.urls.first.flatMap { URL(string: $0)?.host } ?? "an unknown address"
+        return "Pair with \(p.name) at \(host)?"
     }
 }
 

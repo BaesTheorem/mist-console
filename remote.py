@@ -7,10 +7,14 @@ more identity, "holds the pairing token". Everything is decided per request in
 app.py's before_request hook through is_local() and authorized().
 
 INVARIANTS
-- A loopback request carrying no proxy headers is trusted exactly as before
-  this module existed. The desktop window, mist-progress, notification replies
-  and every script inside a chat depend on that, and none of them can send a
-  token.
+- A loopback request carrying no proxy headers, and naming a loopback host
+  (127.0.0.1, localhost, [::1]) in Host, is trusted exactly as before this
+  module existed. The desktop window, mist-progress, notification replies and
+  every script inside a chat depend on that, and none of them can send a
+  token. Any other Host from loopback is the DNS rebinding shape and is
+  refused (foreign_host) unless it is an address this Console is known by.
+- A raw TCP forwarder into the main port inherits that trust; forwarders must
+  target ORIGIN_PORT (README, "Forwarders must target ORIGIN_PORT").
 - Every other request needs remote access switched ON and the pairing token
   (the mist_remote cookie or a Bearer header). Off means every non-local
   request is refused, whatever it carries. Only /remote/ping and /remote/login
@@ -137,19 +141,83 @@ def discovery_key():
 
 # ---- per-request identity ----------------------------------------------------
 
-def is_local(req):
-    """True for a request from this machine that no proxy forwarded, and that
-    did not come in on the tunnel's origin port."""
-    if str(req.environ.get("SERVER_PORT") or "") == str(ORIGIN_PORT):
-        return False
+# Host names a loopback caller may use and still be trusted. A web page whose
+# domain an attacker re-points at 127.0.0.1 (DNS rebinding) reaches this server
+# from loopback too, but its browser sends the attacker's name in Host.
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def host_of(value):
+    """The host part of a Host header, lowercased, port and IPv6 brackets
+    removed: '[::1]:5014' -> '::1', 'LocalHost:5014' -> 'localhost'."""
+    h = (value or "").strip().lower()
+    if h.startswith("["):
+        h = h[1:].split("]", 1)[0]
+    elif h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    return h.rstrip(".")
+
+
+def _from_loopback(req):
     addr = (req.remote_addr or "").split("%")[0]
     try:
-        ip = ipaddress.ip_address(addr)
+        return ipaddress.ip_address(addr).is_loopback
     except ValueError:
         return False
-    if not ip.is_loopback:
+
+
+def on_origin_port(req):
+    """Arrived on the tunnel's origin listener (cloudflared, or any forwarder
+    pointed there as the README says)."""
+    return str(req.environ.get("SERVER_PORT") or "") == str(ORIGIN_PORT)
+
+
+def is_local(req):
+    """True for a request from this machine that no proxy forwarded, that did
+    not come in on the tunnel's origin port, and that names this machine by a
+    loopback name in Host. A request with no Host header at all is not a
+    browser (every browser sends one), so it keeps loopback trust."""
+    if on_origin_port(req) or not _from_loopback(req):
         return False
-    return not any(h in req.headers for h in _PROXY_HEADERS)
+    if any(h in req.headers for h in _PROXY_HEADERS):
+        return False
+    host = req.environ.get("HTTP_HOST")
+    return host is None or host_of(host) in _LOOPBACK_HOSTS
+
+
+def _known_hosts():
+    """Every name this Console legitimately answers to besides loopback."""
+    known = set(lan_ips())
+    h = local_hostname()
+    if h:
+        known.add(h.lower())
+    for u in offlan_urls():
+        m = re.match(r"^https?://([^/]+)", u)
+        if m:
+            known.add(host_of(m.group(1)))
+    return known
+
+
+def foreign_host(req):
+    """A loopback request on the main port whose Host is neither a loopback
+    name nor an address this Console is known by: the DNS rebinding shape.
+    The guard refuses it outright, before the public paths, so a rebound page
+    cannot even read /remote/ping. The origin port is exempt (cloudflared sends
+    the tunnel's own hostname, and nothing there is trusted anyway)."""
+    if on_origin_port(req) or not _from_loopback(req):
+        return False
+    host = req.environ.get("HTTP_HOST")
+    if host is None:
+        return False
+    name = host_of(host)
+    return name not in _LOOPBACK_HOSTS and name not in _known_hosts()
+
+
+def via_tunnel(req):
+    """True when the request came through the Cloudflare tunnel, so the
+    address Cloudflare stamps in Cf-Connecting-Ip is the real client. On any
+    other port that header is just text a LAN client chose to send."""
+    return on_origin_port(req)
 
 
 def cookie_value(tok=None):
@@ -159,23 +227,31 @@ def cookie_value(tok=None):
                     hashlib.sha256).hexdigest()
 
 
+def _same(a, b):
+    # compare_digest on two str raises TypeError when either holds a non-ASCII
+    # character, which a client fully controls. Bytes always compare.
+    return hmac.compare_digest(str(a).encode(), str(b).encode())
+
+
 def authorized(req):
     tok = token()
     c = req.cookies.get(COOKIE)
-    if c and hmac.compare_digest(c, cookie_value(tok)):
+    if c and _same(c, cookie_value(tok)):
         return True
     auth = req.headers.get("Authorization", "")
-    if auth.startswith("Bearer ") and hmac.compare_digest(auth[7:].strip(), tok):
+    if auth.startswith("Bearer ") and _same(auth[7:].strip(), tok):
         return True
     return False
 
 
 def check_token(candidate):
-    return bool(candidate) and hmac.compare_digest(str(candidate), token())
+    return bool(candidate) and _same(candidate, token())
 
 
 # A 256-bit token cannot be guessed, but a login endpoint on a public tunnel
 # should still not answer a flood. Eight misses per address per ten minutes.
+# A correct token always gets in (app.py checks it before the limit), so a
+# phone that tried a stale token a few times can still re-pair at once.
 _fails = {}
 FAIL_LIMIT, FAIL_WINDOW = 8, 600
 
@@ -183,9 +259,15 @@ FAIL_LIMIT, FAIL_WINDOW = 8, 600
 def login_allowed(ip):
     now = time.time()
     with _lock:
-        hits = [t for t in _fails.get(ip, []) if now - t < FAIL_WINDOW]
-        _fails[ip] = hits
-        return len(hits) < FAIL_LIMIT
+        # Prune every address, not only this one, so a flood from many
+        # addresses cannot grow the table without bound.
+        for key in list(_fails):
+            hits = [t for t in _fails[key] if now - t < FAIL_WINDOW]
+            if hits:
+                _fails[key] = hits
+            else:
+                del _fails[key]
+        return len(_fails.get(ip, ())) < FAIL_LIMIT
 
 
 def login_failed(ip):
@@ -310,7 +392,16 @@ def urls():
 
 class _Tunnel:
     """One cloudflared quick tunnel, supervised. `url` is the live public URL
-    or None. The origin is the LAN address on purpose (see module docstring)."""
+    or None. The origin is the loopback-only ORIGIN_PORT listener on purpose
+    (see module docstring).
+
+    A cloudflared that dies soon after it starts (no network, a bad binary, the
+    edge refusing it) is not restarted every supervisor tick: each short run
+    doubles the wait before the next start, up to BACKOFF_MAX, and a run that
+    lasted HEALTHY_RUN seconds resets it."""
+
+    BACKOFF_MIN, BACKOFF_MAX = 10, 600
+    HEALTHY_RUN = 30
 
     def __init__(self):
         self.proc = None
@@ -318,7 +409,8 @@ class _Tunnel:
         self.error = None
         self.origin = None
         self.started_at = None
-        self._backoff = 10
+        self.backoff = self.BACKOFF_MIN
+        self.not_before = 0.0       # no start before this time (backoff)
         self._lock = threading.Lock()
 
     @staticmethod
@@ -334,13 +426,19 @@ class _Tunnel:
     def running(self):
         return self.proc is not None and self.proc.poll() is None
 
+    def _defer(self, since):
+        """A short run or a failed start: wait longer before the next try."""
+        self.backoff = min(self.backoff * 2, self.BACKOFF_MAX)
+        self.not_before = since + self.backoff
+
     def start(self):
         with self._lock:
-            if self.running():
+            if self.running() or time.time() < self.not_before:
                 return
             binary = self.binary()
             if not binary:
                 self.error = "cloudflared is not installed (brew install cloudflared)"
+                self._defer(time.time())
                 return
             self.origin = f"http://127.0.0.1:{ORIGIN_PORT}"
             try:
@@ -350,6 +448,7 @@ class _Tunnel:
             except Exception as e:
                 self.error = f"couldn't start cloudflared: {e}"
                 self.proc = None
+                self._defer(time.time())
                 return
             self.url = None
             self.error = None
@@ -361,24 +460,41 @@ class _Tunnel:
             for line in proc.stderr:
                 _tunnel_log(line.rstrip())
                 m = _TUNNEL_URL.search(line)
-                if m and m.group(0) != self.url:
-                    self.url = m.group(0)
-                    self.error = None
-                    self._backoff = 10
-                    threading.Thread(target=publish_discovery, daemon=True).start()
+                if not m:
+                    continue
+                with self._lock:
+                    # A stopped tunnel's reader can still be draining stderr;
+                    # its URL is dead and must not be shown or published.
+                    fresh = proc is self.proc and m.group(0) != self.url
+                    if fresh:
+                        self.url = m.group(0)
+                        self.error = None
+                if fresh:
+                    publish_async()
         except Exception:
             pass
         code = proc.wait()
-        if proc is self.proc:
+        with self._lock:
+            if proc is not self.proc:
+                return       # stopped on purpose; stop() already reset state
             self.url = None
             if code not in (0, -15, -9):
                 self.error = f"cloudflared exited with code {code}"
+            since = self.started_at or time.time()
+            if time.time() - since < self.HEALTHY_RUN:
+                self._defer(since)
+            else:
+                self.backoff = self.BACKOFF_MIN
+                self.not_before = 0.0
 
     def stop(self):
         with self._lock:
             p, self.proc = self.proc, None
             self.url = None
             self.error = None
+            # A deliberate stop (switch off, health restart) starts clean.
+            self.backoff = self.BACKOFF_MIN
+            self.not_before = 0.0
         if p and p.poll() is None:
             try:
                 p.terminate()
@@ -392,6 +508,7 @@ class _Tunnel:
     def status(self):
         return {"running": self.running(), "url": self.url, "error": self.error,
                 "origin": self.origin, "since": self.started_at,
+                "retry_at": self.not_before or None,
                 "last_ok": _health["last_ok"], "restarts": _health["restarts"],
                 "installed": bool(self.binary())}
 
@@ -440,6 +557,44 @@ def _probe(url, timeout=10):
         return False
 
 
+def _public_addrs(host):
+    """The routable addresses `host` resolves to here, or [] when it does not
+    resolve or only resolves to a sinkhole (0.0.0.0, loopback, a private
+    range: what DNS filters answer for a blocked name)."""
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return []
+    out = []
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+        except ValueError:
+            continue
+        if ip.is_global:
+            out.append(str(ip))
+    return out
+
+
+def _dns_verdict(url):
+    """Why a public URL did not answer, as far as this Mac's DNS can say.
+    'filtered': the trycloudflare.com zone itself does not resolve here (a
+    DNS filter or a captive resolver), so this Mac cannot judge the tunnel;
+    the phone, on another network, may reach it fine. 'gone': the zone
+    resolves but this tunnel's hostname does not (the 2026-09-27 shape: the
+    edge dropped the quick tunnel). 'resolves': DNS is fine and the URL just
+    does not answer."""
+    m = re.match(r"^https?://([^/:]+)", url or "")
+    host = m.group(1) if m else ""
+    if _public_addrs(host):
+        return "resolves"
+    zone = host.split(".", 1)[1] if "." in host else host
+    return "gone" if _public_addrs(zone) else "filtered"
+
+
+_dns_filtered_logged: dict[str, str | None] = {"url": None}
+
+
 def _check_tunnel_health():
     url, since = tunnel.url, tunnel.started_at or 0
     now = time.time()
@@ -451,6 +606,15 @@ def _check_tunnel_health():
         return
     if not _probe(_CONTROL_URL):
         return   # we are offline; not the tunnel's fault
+    if _dns_verdict(url) == "filtered":
+        # Restarting would only mint another name the same filter blocks, and
+        # would take a working tunnel away from the phone. Say so once.
+        if _dns_filtered_logged["url"] != url:
+            _dns_filtered_logged["url"] = url
+            _tunnel_log(f"[health] {url}: trycloudflare.com does not resolve on this "
+                        "Mac (DNS filter?); cannot check the tunnel, leaving it up")
+        _health["misses"] = 0
+        return
     _health["misses"] += 1
     _tunnel_log(f"[health] {url} unreachable ({_health['misses']}/{HEALTH_MISSES})")
     if _health["misses"] >= HEALTH_MISSES:
@@ -459,7 +623,9 @@ def _check_tunnel_health():
         tunnel.stop()   # the supervisor starts a new one on its next pass
 
 
-_published = {"urls": None, "at": 0}
+# What the last SUCCESSFUL publish wrote, and when the supervisor last asked
+# for one (the rate limit). "urls" is only set after the KV PUT returns.
+_published = {"urls": None, "at": 0, "tried": 0}
 
 
 def _republish_if_moved():
@@ -469,10 +635,10 @@ def _republish_if_moved():
     if not enabled():
         return
     now = urls()
-    if now == _published["urls"] or time.time() - _published["at"] < 15:
+    if now == _published["urls"] or time.time() - _published["tried"] < 15:
         return
-    _published.update(urls=now, at=time.time())
-    threading.Thread(target=publish_discovery, daemon=True).start()
+    _published["tried"] = time.time()
+    publish_async()
 
 
 def _supervise():
@@ -488,12 +654,9 @@ def _supervise():
             want = bool(cfg.get("enabled") and cfg.get("tunnel"))
             if want:
                 if not tunnel.running():
-                    tunnel.start()
-                    if not tunnel.running():
-                        tunnel._backoff = min(tunnel._backoff * 2, 120)
-                        time.sleep(tunnel._backoff)
-                        continue
-                _check_tunnel_health()
+                    tunnel.start()    # a no-op until tunnel.not_before (backoff)
+                else:
+                    _check_tunnel_health()
             elif tunnel.running():
                 tunnel.stop()
         except Exception:
@@ -527,7 +690,7 @@ def _keep_awake(want):
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             _awake["proc"] = None
-    elif not want and running:
+    elif not want and running and p is not None:
         try:
             p.terminate()
         except Exception:
@@ -558,40 +721,77 @@ def discovery_url():
     the share Worker serving KV, same GET-only surface the share links use."""
     try:
         import share
-        base = (share._load_cloud_config() or {}).get("base_url")
+        base = (share._load_cloud_config() or {}).get("base_url")  # noqa: SLF001 -- share.py owns the cloud config; no public accessor
     except Exception:
         base = None
     return f"{base}/s/{discovery_key()}" if base else None
+
+
+# One publish at a time. Two concurrent ones (a URL appearing while the
+# supervisor republishes after a hop) raced: each computed urls() at a
+# different moment and the slower PUT could land last with a stale list, one
+# that had no tunnel URL in it, and nothing would fix KV until the next move.
+_publish_serial = threading.Lock()
+# publish_async() coalescing: at most one worker thread; a request that comes
+# in while it runs makes it go round once more (with fresh urls()).
+_pub = {"busy": False, "again": False}
+_pub_lock = threading.Lock()
+
+
+def publish_async():
+    """Ask for a discovery publish without blocking the caller."""
+    with _pub_lock:
+        if _pub["busy"]:
+            _pub["again"] = True
+            return
+        _pub["busy"] = True
+    threading.Thread(target=_publish_worker, daemon=True, name="remote-discovery").start()
+
+
+def _publish_worker():
+    while True:
+        try:
+            publish_discovery()
+        except Exception:  # noqa: S110, BLE001 -- publish_discovery records its own failure
+            pass
+        with _pub_lock:
+            if not _pub["again"]:
+                _pub["busy"] = False
+                return
+            _pub["again"] = False
 
 
 def publish_discovery():
     """Write the current address list to Workers KV under the discovery id.
     URLs only (private addresses and a tunnel hostname are worthless without
     the token); the token is never published. Best effort: no credentials, no
-    cloud. An empty list is published when remote access is off."""
-    try:
-        import share
-        account, tok = share._creds()
-        if not (account and tok):
-            _discovery_state.update(ok=False, why="no Cloudflare credentials in the harness .env", at=time.time())
-            return {"ok": False, "why": "no Cloudflare credentials in the harness .env"}
-        base_url, kv_id = share._ensure_cloud()
-        current = urls() if enabled() else []
-        doc = json.dumps({"v": 1, "urls": current, "updated": int(time.time())})
-        _published.update(urls=current, at=time.time())
-        share._req("PUT", f"/accounts/{account}/storage/kv/namespaces/{kv_id}/values/{discovery_key()}",
-                   tok, doc.encode(), ctype="text/plain", raw=True)
-        _discovery_state.update(ok=True, why="", at=time.time())
-        return {"ok": True, "url": f"{base_url}/s/{discovery_key()}"}
-    except Exception as e:
-        _log.warning("discovery publish failed: %s", e)
-        _discovery_state.update(ok=False, why=str(e), at=time.time())
-        # Forget what we thought was published so the supervisor tries again
-        # on its next tick (rate-limited): right after a network hop DNS may
-        # not be back yet, and a list that never lands is the one failure the
-        # phone cannot recover from on its own.
-        _published["urls"] = None
-        return {"ok": False, "why": str(e)}
+    cloud. An empty list is published when remote access is off. Serialized:
+    the list is read inside the lock, so the last PUT always carries the
+    newest list, and _published only records a list once KV has it."""
+    with _publish_serial:
+        try:
+            import share
+            account, tok = share._creds()  # noqa: SLF001 -- share.py owns the Cloudflare credentials
+            if not (account and tok):
+                _discovery_state.update(ok=False, why="no Cloudflare credentials in the harness .env", at=time.time())
+                return {"ok": False, "why": "no Cloudflare credentials in the harness .env"}
+            base_url, kv_id = share._ensure_cloud()  # noqa: SLF001 -- same
+            current = urls() if enabled() else []
+            doc = json.dumps({"v": 1, "urls": current, "updated": int(time.time())})
+            share._req("PUT", f"/accounts/{account}/storage/kv/namespaces/{kv_id}/values/{discovery_key()}",  # noqa: SLF001 -- same
+                       tok, doc.encode(), ctype="text/plain", raw=True)
+            _published.update(urls=current, at=time.time())
+            _discovery_state.update(ok=True, why="", at=time.time())
+            return {"ok": True, "url": f"{base_url}/s/{discovery_key()}"}
+        except Exception as e:
+            _log.warning("discovery publish failed: %s", e)
+            _discovery_state.update(ok=False, why=str(e), at=time.time())
+            # Forget what we thought was published so the supervisor tries again
+            # on its next tick (rate-limited): right after a network hop DNS may
+            # not be back yet, and a list that never lands is the one failure the
+            # phone cannot recover from on its own.
+            _published["urls"] = None
+            return {"ok": False, "why": str(e)}
 
 
 # ---- pairing + status + updates ----------------------------------------------
@@ -648,7 +848,7 @@ def update(enabled_=None, tunnel_=None, remote_url=None, keep_awake=None):
     _save()
     if not (cfg["enabled"] and cfg["tunnel"]):
         tunnel.stop()
-    threading.Thread(target=publish_discovery, daemon=True).start()
+    publish_async()
     return status()
 
 
@@ -661,7 +861,7 @@ def rotate():
         cfg["discovery_id"] = secrets.token_urlsafe(16)
         _fails.clear()
     _save()
-    threading.Thread(target=publish_discovery, daemon=True).start()
+    publish_async()
     return status()
 
 

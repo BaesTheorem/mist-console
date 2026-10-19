@@ -3,7 +3,9 @@
 Walks a chat's whole jsonl once and returns messages a reader can show with
 no Console around: the user's text, MIST's text (one message per API message,
 text blocks joined), and one line per tool call. Thinking, deltas, tool
-results, progress ticks and every other stream event are dropped. Handles the
+results, progress ticks and every other stream event are dropped, and so is
+anything a subagent said (events with parent_tool_use_id set): those are a
+tool's inner workings, not MIST's reply or Alex's message. Handles the
 live shape (`assistant` events with content blocks) and the condensed /
 imported shape (`mist_msg` blocks, see archive.py and importer.py).
 """
@@ -55,11 +57,15 @@ def build(path, sid=None, title=None):
             if isinstance(ts, (int, float)):
                 last_ts = ts if ts < 1e11 else ts / 1000
             if t == "user_text":
+                if e.get("parent_tool_use_id"):
+                    continue    # never Alex: a prompt inside a subagent's thread
                 flush()
                 text = (e.get("text") or "").strip()
                 if text:
                     messages.append({"role": "user", "text": text, "ts": last_ts})
             elif t == "assistant":
+                if e.get("parent_tool_use_id"):
+                    continue    # a subagent's turn, not MIST's reply (archive.Condenser drops it too)
                 msg = e.get("message") or {}
                 mid = msg.get("id")
                 if not cur or (mid and cur["id"] != mid):

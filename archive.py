@@ -15,6 +15,10 @@ INVARIANTS:
   so a long chat still replays from its first message.
 - `mist_msg` carries the CLI `uuid` of its last content block, so rewind() can
   still find an anchor in a condensed chat.
+- `mist_msg.seq` is the seq of its first event and `seq_end` the seq of the
+  last event folded into it (assistant pieces and tool results), so a stream
+  resume can tell when a client's last-seen seq falls inside the message
+  (app._resume_splits_condensed).
 - Rewrite is atomic (temp file + os.replace); a crash mid-run leaves the
   original intact.
 
@@ -39,6 +43,12 @@ def _text_of(content):
     return ""
 
 
+def _extend(ev, seq):
+    """Stretch a mist_msg's seq_end to cover one more folded event."""
+    if isinstance(seq, int) and seq > (ev.get("seq_end") or 0):
+        ev["seq_end"] = seq
+
+
 class Condenser:
     """Streaming condenser: feed() raw Console events in order, finish() returns
     the condensed list. Single pass and bounded by the output size, so a 500k-line
@@ -54,7 +64,7 @@ class Condenser:
     def __init__(self):
         self.out = []
         self._msgs = {}          # api message id -> mist_msg event being assembled
-        self._pending = {}       # tool_use_id -> tool block awaiting its result
+        self._pending = {}       # tool_use_id -> (tool block awaiting its result, its mist_msg)
         self._last_context = None
         self.n_in = 0
 
@@ -74,9 +84,11 @@ class Condenser:
             if isinstance(content, list):
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "tool_result":
-                        blk = self._pending.pop(b.get("tool_use_id"), None)
-                        if blk is None:
+                        hit = self._pending.pop(b.get("tool_use_id"), None)
+                        if hit is None:
                             continue
+                        blk, owner = hit
+                        _extend(owner, obj.get("seq"))
                         txt = b.get("content")
                         if isinstance(txt, list):
                             txt = "".join(p.get("text", "") for p in txt
@@ -93,6 +105,7 @@ class Condenser:
                 self.out.append(ev)
             else:
                 ev["uuid"] = obj.get("uuid") or ev.get("uuid")
+            _extend(ev, obj.get("seq"))
             for b in (m.get("content") or []):
                 if not isinstance(b, dict):
                     continue
@@ -105,7 +118,7 @@ class Condenser:
                            "input": b.get("input", {}), "result": ""}
                     ev["blocks"].append(blk)
                     if b.get("id"):
-                        self._pending[b["id"]] = blk
+                        self._pending[b["id"]] = (blk, ev)
 
     def finish(self):
         out = [ev for ev in self.out if ev.get("type") != "mist_msg" or ev.get("blocks")]

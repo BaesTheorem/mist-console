@@ -236,7 +236,7 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
           <label for="remoteUrl">your own address (optional)</label>
           <input id="remoteUrl" type="url" placeholder="https://mist.tailnet-name.ts.net:5014" spellcheck="false" autocapitalize="off" autocomplete="off">
         </div>
-        <div class="qa-note">A Tailscale MagicDNS name, or anything else that reaches this Mac from anywhere. Sturdier than the quick tunnel; needs Tailscale on both devices.</div>
+        <div class="qa-note">A Tailscale MagicDNS name, or anything else that reaches this Mac from anywhere. Sturdier than the quick tunnel; needs Tailscale on both devices. An external forwarder (ssh -L, socat, tailscale serve, a named tunnel) must point at the tunnel origin port (the Console port + 1000), never at the Console port itself, because the Console port trusts every loopback connection.</div>
         <div class="remote-sub">while the mac is reachable</div>
         <div class="qa-row">
           <label class="qa-toggle"><md-switch id="keepAwake"></md-switch> keep the display awake on power</label>

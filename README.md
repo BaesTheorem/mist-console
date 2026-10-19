@@ -535,14 +535,33 @@ Mac is out of reach. Build and pairing steps are in
 What changed on the server for it (`remote.py`, the `/remote/*` routes):
 
 - **The server binds every interface**, and a `before_request` guard decides
-  each request: a loopback request with no proxy headers is trusted exactly as
-  before (the window, `mist-progress`, notification replies, scripts inside a
-  chat); anything else needs **remote access switched on** (settings, phone)
+  each request: a loopback request with no proxy headers and a loopback name
+  in `Host` (`127.0.0.1`, `localhost` or `[::1]`, any port) is trusted exactly
+  as before (the window, `mist-progress`, notification replies, scripts inside
+  a chat); anything else needs **remote access switched on** (settings, phone)
   **and the pairing token**, as the `mist_remote` cookie from `POST
   /remote/login` or a `Bearer` header. Off means every non-local request is
-  refused. Only `/remote/ping` and `/remote/login` answer without the token,
-  and the login is rate-limited per address. A browser landing on `/` without
-  the cookie gets a small login page instead of the app.
+  refused. Only `/remote/ping` and `/remote/login` answer without the token.
+  The login is rate-limited per address (eight misses in ten minutes), but a
+  correct token always gets in, so a phone that retried a stale token can
+  re-pair at once. Cloudflare's `Cf-Connecting-Ip` keys the limiter only on
+  `ORIGIN_PORT`; on the LAN port the socket address does. A browser landing
+  on `/` without the cookie gets a small login page instead of the app.
+- **DNS rebinding**: a web page whose domain an attacker re-points at
+  127.0.0.1 reaches the server from loopback, but its browser sends the
+  attacker's name in `Host`. A loopback request on the main port whose `Host`
+  is neither a loopback name nor an address this Console is known by (LAN
+  IPs, `<hostname>.local`, the configured and tunnel URLs) gets a 403 before
+  any route, public ones included. `/remote/ping` gives the Mac's name only
+  to this Mac and the LAN; through the tunnel it answers `"name": "MIST"`.
+- **Forwarders must target `ORIGIN_PORT`, never the main port.** A raw TCP
+  forward (`ssh -L`, `socat`, `tailscale serve --tcp`, any port forward that
+  adds no proxy header) into `localhost:5014` arrives from loopback, and if
+  the client also uses a loopback name in `Host` (as `ssh -L 8080:localhost:5014`
+  does) the guard cannot tell it from this Mac: the far end gets full,
+  token-free control. Point every forwarder at `127.0.0.1:<ORIGIN_PORT>`
+  (6014 on the live Console, port + 1000 in general), where no request is
+  ever local and the pairing token is required.
 - **Pairing**: the phone section shows a QR (`mist://pair?d=<base64url
   json>`: addresses, token, discovery URL). The token lives in
   `data/remote.json` (mode 600, gitignored with the rest of `data/`); the
@@ -551,7 +570,8 @@ What changed on the server for it (`remote.py`, the `/remote/*` routes):
   the other `en*` so USB tethering counts, bridges, tunnels) and
   `<hostname>.local` on this port, plus two off-LAN lanes: a supervised
   **cloudflared quick tunnel** (`tunnel: true` keeps one up and restarts it
-  after a crash) and a **user-entered address** (Tailscale MagicDNS, a named
+  after a crash; a process that dies within 30 s doubles the wait before the
+  next start, up to 10 minutes, and a healthy run resets it) and a **user-entered address** (Tailscale MagicDNS, a named
   tunnel). The tunnel's origin is a second, loopback-only listener on
   `ORIGIN_PORT` (port + 1000) that the guard treats as never local, so a
   tunneled request can never inherit loopback trust, a VPN's LAN rules never
@@ -560,6 +580,24 @@ What changed on the server for it (`remote.py`, the `/remote/*` routes):
   (`/s/remote-<discovery id>`, URLs only, never the token) and republishes
   within ~15 s of the list changing; the phone reads it when nothing it
   remembers answers, which is how it finds the Mac on the phone's own hotspot.
+  Publishes run one at a time (`publish_async` coalesces requests into one
+  worker) and read the list inside the lock, so the last write to KV always
+  carries the newest list; the "already published" mark is set only after
+  the PUT succeeds.
+- **Tunnel health**: the public URL is probed every minute and cloudflared is
+  restarted after three misses, but only when this Mac is online (a request
+  to www.cloudflare.com answers) and its DNS can judge the tunnel. If
+  `trycloudflare.com` itself does not resolve here (a DNS filter), the tunnel
+  is left up and the log says so once; the phone, on another network, can
+  still use it. If the zone resolves but the tunnel's hostname does not, the
+  edge dropped the tunnel and it is restarted.
+- **Event streams** (`/stream/<id>`, `/events`) send `retry: 2000` first and a
+  `: keepalive` comment every 25 s while idle, so Cloudflare (which drops a
+  stream idle for ~100 s) keeps them open, and a stream whose client is gone
+  notices on the next write and unsubscribes. A resume (`Last-Event-ID`) whose
+  seq falls inside a message the history has condensed replays in full, since
+  the condensed event carries the seq of its first part (`seq_end` marks its
+  last).
 - **macOS firewall**: the first bind on `0.0.0.0` makes macOS ask whether
   "MIST Console" may accept incoming connections. Allow it; Deny blocks the
   phone until the rule is changed in System Settings, Network, Firewall.
@@ -572,16 +610,16 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 
 | Feature | Mac | Phone (under 760px, or the iOS shell) |
 | --- | --- | --- |
-| Chat list | rail | drawer (menu button, swipe from the left edge) |
-| Model, permissions, thinking, usage, share, diff, rename, pin, delete | top-bar badges and cards | chat-details sheet (tap the title) |
-| Message actions | hover icons | long-press sheet |
+| Chat list | rail | drawer (menu button, swipe from the left 20px; not from code, tables or other sideways scrollers, and not while a sheet is up); opens at the top of the list unless the active chat would be below the fold |
+| Model, permissions, thinking, usage, share, diff, rename, pin, delete | top-bar badges and cards | chat-details sheet (tap the title; drag it down or tap outside to close) |
+| Message actions | hover icons | long-press sheet (no iOS text selection; **Select text** in the sheet turns it on for that message); code and table Copy buttons always shown (`@media (hover: none)`) |
 | Long chats (folded log) | newest 150 entries live; scroll near the top or click **N earlier messages** | same; the long-press sheet builds a message's buttons |
 | Bookmarks | composer button | drawer footer, **Saved** |
 | Settings | gear | drawer footer, **Settings** |
-| Text size | `textSize`, saved to the server so a wiped store keeps it | `textSizePhone`, local to the phone, default 100%; the Mac's size never reaches the phone |
+| Text size | `textSize`, saved to the server so a wiped store keeps it | `textSizePhone`, local to the phone, default 100%; the Mac's size never reaches the phone; a window that crosses 760px switches lanes live |
 | Artifacts drawer | top-bar button | chat-details sheet, **Artifacts**, or swipe from the right edge |
 | Inline images, audio, video, recipe cards, task checkboxes, progress bars, per-turn time stamps | inline | inline, same markup |
-| 3D models | drag orbits, wheel zooms, double-click resets, tools on hover | one finger orbits, pinch zooms, double-tap resets, tools always shown (`@media (hover: none)`) |
+| 3D models | drag orbits, wheel zooms, double-click resets, tools on hover | a sideways drag orbits, a vertical drag scrolls the chat (`touch-action: pan-y`), pinch zooms, double-tap resets, tools always shown at 44px (`@media (hover: none)`) |
 | PDFs | inline viewer in the bubble, 520px tall, attachment card under it; drawer tile opens a full-size preview | same viewer at 60vh; scrolling inside the frame scrolls the PDF, outside it scrolls the chat |
 | Save a file | copies into the Mac's `~/Downloads` | the shell downloads it over the pairing token and opens the share sheet (`ArtifactSaver.swift`, `shellSave` in app.js) |
 | HTML preview | sandboxed frame, plus "Open in browser" | sandboxed frame only (Safari has no cookie) |
@@ -589,6 +627,7 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | Mod panes | dock beside the chat | gap: the dock is hidden on phones |
 | Repo switching | repo badge | gap: needs a folder picker |
 | Quick access (double-tap Option) | always-on agent | widgets and the icon's long-press menu |
+| Chat streams | every visited chat keeps its stream open, so the rail sees a turn another client starts | the active chat and busy chats stream; an idle chat closes its stream a few seconds after you leave it (six-connection limit) and resumes on return, so its rail dot does not show a turn started elsewhere until you open it |
 
 ## Archive tier (data/ growth)
 

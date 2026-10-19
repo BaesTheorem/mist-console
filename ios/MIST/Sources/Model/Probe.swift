@@ -8,6 +8,14 @@ enum LoginResult {
     case unreachable(String)
 }
 
+/// What /remote/config said. `unauthorized` is the Mac refusing the token
+/// (it was rotated): the caller must show the re-pair card, not stay quiet.
+enum ConfigResult {
+    case ok(urls: [String], discovery: String?)
+    case unauthorized
+    case failed
+}
+
 /// The few requests the shell makes on its own, outside the web view: find the
 /// Mac, check the token, learn new addresses. The web view owns the cookie;
 /// these carry the token as a bearer where they need it.
@@ -30,24 +38,54 @@ enum Probe {
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return false }
+        // The exact shape app.py's remote_ping returns. The ping is public and
+        // carries nothing secret, so this only keeps the token away from a
+        // server that is plainly something else; it is not proof of identity.
         return (obj["app"] as? String) == "mist-console"
+            && (obj["ok"] as? Bool) == true
+            && obj["name"] is String
     }
 
     /// Race every candidate at once; pick the first *by list order* among those
-    /// that answered (LAN before the tunnel when both work). Also returns the
-    /// per-address outcome for the settings sheet.
+    /// that answered (LAN before the tunnel when both work). Returns as soon as
+    /// an answering candidate has no higher-ranked one still pending, and
+    /// cancels the rest, so a dead LAN address after a live one costs nothing.
+    /// Candidates this network cannot reach (LocalNet.plausible) are not
+    /// pinged at all. Also returns the per-address outcome for the settings
+    /// sheet; a cancelled candidate has no entry.
     static func pick(_ urls: [URL]) async -> (URL?, [String: Bool]) {
         var results: [String: Bool] = [:]
+        let nets = LocalNet.current()
+        var done = [Bool?](repeating: nil, count: urls.count)
+        var best: URL?
         await withTaskGroup(of: (Int, Bool).self) { group in
             for (i, u) in urls.enumerated() {
-                group.addTask { (i, await ping(u)) }
+                if LocalNet.plausible(u, nets: nets) {
+                    group.addTask { (i, await ping(u)) }
+                } else {
+                    done[i] = false
+                    results[u.absoluteString] = false
+                }
             }
+            func settled() -> URL? {
+                for (i, d) in done.enumerated() {
+                    guard let d else { return nil }   // a better one is still out
+                    if d { return urls[i] }
+                }
+                return nil
+            }
+            if let b = settled() { best = b; group.cancelAll(); return }
             for await (i, ok) in group {
+                done[i] = ok
                 results[urls[i].absoluteString] = ok
+                if let b = settled() {
+                    best = b
+                    group.cancelAll()
+                    break
+                }
             }
         }
-        let first = urls.first { results[$0.absoluteString] == true }
-        return (first, results)
+        return (best, results)
     }
 
     /// The discovery document the Mac publishes: {"urls": [...]}.
@@ -84,14 +122,17 @@ enum Probe {
     }
 
     /// GET /remote/config with the bearer: the Mac's current address list.
-    static func config(_ base: URL, token: String) async -> (urls: [String], discovery: String?)? {
+    /// A 401 is the Mac refusing this token, kept apart from a plain failure.
+    static func config(_ base: URL, token: String) async -> ConfigResult {
         var req = URLRequest(url: base.appending(path: "remote/config"))
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         guard let (data, resp) = try? await session.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let http = resp as? HTTPURLResponse else { return .failed }
+        if http.statusCode == 401 { return .unauthorized }
+        guard http.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let urls = obj["urls"] as? [String]
-        else { return nil }
-        return (urls, obj["discovery"] as? String)
+        else { return .failed }
+        return .ok(urls: urls, discovery: obj["discovery"] as? String)
     }
 }

@@ -29,14 +29,25 @@ final class ConsoleLink: ObservableObject {
     @Published var showSettings = false
     @Published var lastResults: [String: Bool] = [:]
     @Published var lastProbeAt: Date?
-    /// JavaScript the web view runs once the page is loaded (a widget deep
-    /// link asking for a new chat, for instance), then clears.
+    /// JavaScript the web view runs once the page has booted (it posts
+    /// {type:"ready"}) and the link is connected: a widget deep link asking
+    /// for a new chat, for instance. Cleared once run.
     @Published var pendingScript: String?
     @Published var showReader = false
     /// The offline copy of every chat; refreshed after each successful connect.
     weak var cache: ChatCache?
+    /// Set by the web view: the page posted "ready" and its content process is
+    /// still alive. False from the moment a load starts.
+    var pageAlive = false
+    /// The address and token the page was last loaded with. A connect that
+    /// lands on the same pair while the page is alive does not reload it.
+    private var loadedWith: (url: URL, token: String)?
 
     private var inFlight = false
+    /// Bumped by every connect that runs. A connect checks it after each
+    /// await and stops when a newer one (a forced reconnect after a re-pair,
+    /// a forget) has started, so a stale token's result never lands.
+    private var connectGen = 0
     /// The address that worked last time, tried alone first: on a warm start
     /// that is one round trip, not a race with a timeout in it.
     private var lastGood: URL? {
@@ -111,19 +122,54 @@ final class ConsoleLink: ObservableObject {
         }
     }
 
+    /// The mist: links, from the page (in-page links) and from outside (the
+    /// widget, the icon's menu, onOpenURL) alike. Pairing links are handled by
+    /// MISTApp, which asks first. Returns false for anything unknown.
+    @discardableResult
+    func handle(mistURL url: URL) -> Bool {
+        switch url.host?.lowercased() {
+        case "settings":
+            showSettings = true
+        case "offline":
+            // From the drawer's "Offline" button in the page.
+            showReader = true
+        case "new":
+            // From the "New chat" widget or the icon's menu: a fresh chat as soon as the page is up.
+            pendingScript = "if (typeof createSession === 'function') createSession();"
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// Load the page again at the current address (its web content process
+    /// died, or it came back from the background with no document).
+    func reloadPage() {
+        guard base != nil else { return }
+        pageAlive = false
+        loadGeneration += 1
+    }
+
     // MARK: - the connect
 
     func connect(store: ServerStore, force: Bool) async {
         self.store = store
         guard let pairing = store.pairing else {
+            connectGen += 1
+            inFlight = false
             state = .idle
             base = nil
             return
         }
-        if inFlight { return }
+        // A forced connect (re-pair, "try again") supersedes one in flight;
+        // a background re-check just yields to it.
+        if inFlight && !force { return }
+        connectGen += 1
+        let gen = connectGen
         inFlight = true
-        defer { inFlight = false }
+        defer { if gen == connectGen { inFlight = false } }
         retryTimer?.invalidate()
+        func stale() -> Bool { gen != connectGen }
 
         let wasConnectedTo: URL? = (state == .connected) ? base : nil
         // Already on the page and just re-checking (foreground, a path change):
@@ -134,27 +180,34 @@ final class ConsoleLink: ObservableObject {
         // Fast path: the address that worked last time, alone, short timeout.
         var picked: URL? = nil
         var results: [String: Bool] = [:]
-        if let last = wasConnectedTo ?? lastGood, await Probe.ping(last, timeout: 1.5) {
+        if let last = wasConnectedTo ?? lastGood,
+           LocalNet.plausible(last, nets: LocalNet.current()),
+           await Probe.ping(last, timeout: 1.5) {
             picked = last
             results[last.absoluteString] = true
         }
+        if stale() { return }
         // Round one: what the phone remembers, then the discovery document.
         let candidates = pairing.urls.compactMap { URL(string: $0) }
         if picked == nil {
             let (p1, r1) = await Probe.pick(candidates)
+            if stale() { return }
             picked = p1
             results = r1
         }
         if picked == nil, let d = pairing.discovery, let du = URL(string: d) {
             let extra = await Probe.discover(du).filter { !pairing.urls.contains($0) }
+            if stale() { return }
             if !extra.isEmpty {
                 store.merge(urls: extra, discovery: nil)
                 let (p2, r2) = await Probe.pick(extra.compactMap { URL(string: $0) })
+                if stale() { return }
                 picked = p2
                 results.merge(r2) { $1 }
             }
         }
         guard var url = picked else {
+            store.noteAnswered(results.filter { $0.value }.map { $0.key })
             lastResults = results
             lastProbeAt = Date()
             state = .unreachable("None of the Mac's addresses answered. Is the Console open, and is the Mac awake and online?")
@@ -165,29 +218,54 @@ final class ConsoleLink: ObservableObject {
         // Round two: the Mac's own current list, LAN first. A better address
         // that answers replaces the one round one found. On a quiet re-check
         // only a direct address replacing the tunnel is worth a reload.
-        if let cfg = await Probe.config(url, token: pairing.token) {
-            store.merge(urls: cfg.urls, discovery: cfg.discovery)
-            let fresh = cfg.urls.compactMap { URL(string: $0) }
+        // The config call carries the token, so a 401 here is the first sign
+        // that the Mac rotated it: show the re-pair card even on a quiet check.
+        let cfg = await Probe.config(url, token: pairing.token)
+        if stale() { return }
+        var configOK = false
+        switch cfg {
+        case .ok(let urls, let discovery):
+            configOK = true
+            store.merge(urls: urls, discovery: discovery)
+            let fresh = urls.compactMap { URL(string: $0) }
             let (better, r3) = await Probe.pick(fresh)
+            if stale() { return }
             results.merge(r3) { $1 }
             if let better, better != url {
                 if !quiet || (Self.isTunnel(url) && !Self.isTunnel(better)) { url = better }
             }
+        case .unauthorized:
+            store.noteAnswered(results.filter { $0.value }.map { $0.key })
+            lastResults = results
+            lastProbeAt = Date()
+            state = .rejected("The Mac rejected this phone's token. Re-pair from the phone section of the Console's settings.")
+            return
+        case .failed:
+            break   // the login below says why (remote off, unreachable)
         }
+        store.noteAnswered(results.filter { $0.value }.map { $0.key })
         lastResults = results
         lastProbeAt = Date()
 
-        if quiet, wasConnectedTo == url {
+        if quiet, configOK, wasConnectedTo == url {
             lastGood = url
+            cache?.sync(base: url, token: pairing.token)   // keep the offline copy current
             return   // nothing to do: same address, still answering
         }
-        switch await Probe.login(url, token: pairing.token) {
+        let login = await Probe.login(url, token: pairing.token)
+        if stale() { return }
+        switch login {
         case .ok:
             lastGood = url
-            if !force, wasConnectedTo == url {
-                state = .connected   // same page, same address: leave it alone
+            // The page already on this address with this token, alive and
+            // streaming, stays as it is: a reload would only cost a boot.
+            let same = loadedWith.map { $0.url == url && $0.token == pairing.token } ?? false
+            if same, base == url, pageAlive, !streamDown {
+                state = .connected
             } else {
                 base = url
+                loadedWith = (url, pairing.token)
+                pageAlive = false
                 loadGeneration += 1
                 state = .connected
             }
@@ -232,7 +310,15 @@ final class ConsoleLink: ObservableObject {
     }
 
     func forgetMac() {
+        connectGen += 1   // a connect still running drops its result
+        inFlight = false
         retryTimer?.invalidate()
+        streamTimer?.invalidate()
+        lastGood = nil
+        loadedWith = nil
+        pageAlive = false
+        pendingScript = nil
+        cache?.cancel()
         state = .idle
         base = nil
         lastResults = [:]

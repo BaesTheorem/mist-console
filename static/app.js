@@ -37,6 +37,17 @@ function shellStream(state) {
     if (IS_SHELL && h) h.postMessage({ type: "stream", state });
   } catch (_) {}
 }
+// Boot finished (chat list loaded, the UI answers): the shell can drop its
+// splash and treat this page as live. Sent once per page load.
+let _shellReadySent = false;
+function shellReady() {
+  if (_shellReadySent) return;
+  _shellReadySent = true;
+  try {
+    const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mist;
+    if (IS_SHELL && h) h.postMessage({ type: "ready" });
+  } catch (_) {}
+}
 
 // On the phone "save" means the phone, not the Mac's Downloads folder: the
 // shell downloads the file itself (bearer auth, see ConsoleWebView.swift) and
@@ -79,6 +90,10 @@ const LOG_WINDOW = 150;
 const LOG_FOLD_MIN = 100;
 const LOG_CHUNK = 150;
 const LOG_UNFOLD_PX = 1500;
+// How long a chat stream may be down before the badge says so (Session.connect),
+// and how long a background chat stays connected after it goes quiet.
+const DOWN_GRACE_MS = 3000;
+const SUSPEND_AFTER_MS = 4000;
 // The first message whose box reaches below y (offsetTop is log-relative).
 function topVisibleMsg(msgs, y) {
   let lo = 0, hi = msgs.length - 1, hit = null;
@@ -87,6 +102,21 @@ function topVisibleMsg(msgs, y) {
     if (m.offsetTop + m.offsetHeight > y) { hit = m; hi = mid - 1; } else lo = mid + 1;
   }
   return hit;
+}
+// A streaming reply re-renders its whole markdown every 150 ms. A fresh
+// subtree starts every code block and table at scrollLeft 0, so a reader who
+// had swiped one sideways was thrown back each frame. The positions carry
+// over by index (the blocks only ever grow at the end).
+function renderKeepScroll(node, html) {
+  const sx = [...node.querySelectorAll("pre, .md-table")].map((n) => n.scrollLeft);
+  node.innerHTML = html;
+  if (!sx.some((v) => v)) return;
+  node.querySelectorAll("pre, .md-table").forEach((n, i) => { if (sx[i]) n.scrollLeft = sx[i]; });
+}
+// True while the reader has a non-empty selection that starts inside node.
+function selectionIn(node) {
+  const sel = window.getSelection && window.getSelection();
+  return !!(sel && sel.rangeCount && !sel.isCollapsed && node.contains(sel.anchorNode));
 }
 function updateJumpBtn() {
   if (!jumpBtn) return;
@@ -1441,8 +1471,22 @@ class Session {
     // from the bottom we stop auto-scrolling and reveal "jump to present";
     // scrolling back to the bottom re-arms following.
     this.stick = true;
-    this.logEl.addEventListener("scroll", () => {
+    // A finger on the log is the reader taking over: following stops for the
+    // whole touch, or each streamed frame pulls the log back down under the
+    // finger. Lifting the finger at the bottom re-arms it; a fling that coasts
+    // to the bottom re-arms it from the scroll handler.
+    this._touching = false;
+    this.logEl.addEventListener("touchstart", () => { this._touching = true; this.stick = false; }, { passive: true });
+    const lift = () => {
+      if (!this._touching) return;
+      this._touching = false;
       this.stick = this.atBottom();
+      if (this.active) updateJumpBtn();
+    };
+    this.logEl.addEventListener("touchend", lift, { passive: true });
+    this.logEl.addEventListener("touchcancel", lift, { passive: true });
+    this.logEl.addEventListener("scroll", () => {
+      this.stick = !this._touching && this.atBottom();
       if (this.active) { updateJumpBtn(); renderProgDock(); }
       // Scrolled up near the top of a folded log: bring the next older chunk back.
       if (this._older && !this.stick && this.logEl.scrollTop < LOG_UNFOLD_PX) this.unfoldOlder(LOG_CHUNK);
@@ -1503,10 +1547,17 @@ class Session {
   connect() {
     if (this.connected) return;   // idempotent — first view wins
     this.connected = true;
-    loadChecks(this.id);          // saved checkbox state, painted onto the replay as it lands
+    // A suspended chat (see suspend()) still holds its log. Its stream reopens
+    // from the last event it saw, through the same resume an auto-reconnect
+    // uses: the first event says "resumed" (keep the log) or starts a full
+    // replay (wipe first).
+    const back = this._suspended;
+    this._suspended = false;
+    if (!back) loadChecks(this.id);   // saved checkbox state, painted onto the replay as it lands
     if (this.es) this.es.close();
-    this.es = new EventSource("/stream/" + this.id);
+    this.es = new EventSource("/stream/" + this.id + (back && this._lastSeq ? "?after=" + this._lastSeq : ""));
     this._openCount = 0;
+    this._pendingReconnect = back;
     this.es.onopen = () => {
       // EventSource auto-reconnected (sleep/wake, a network hop, the phone back
       // from the background). The browser sent Last-Event-ID, so the server
@@ -1514,6 +1565,7 @@ class Session {
       // events follow as live ones) or replays everything (wipe first). The
       // decision waits for that first event.
       if (this._openCount++) this._pendingReconnect = true;
+      clearTimeout(this._downTimer); this._downTimer = null;
       // a successful (re)connect clears the sticky "disconnected" badge
       if (this.statusState === "error" && this.statusLabel === "disconnected")
         this.setStatus("idle", "idle");
@@ -1522,6 +1574,8 @@ class Session {
     this.es.onmessage = (m) => {
       let ev;
       try { ev = JSON.parse(m.data); } catch (_) { return; }
+      const id = parseInt(m.lastEventId, 10);
+      if (Number.isFinite(id)) this._lastSeq = id;   // where a reopened stream resumes
       if (this._pendingReconnect) {
         this._pendingReconnect = false;
         if (ev.type === "resumed") return;   // nothing lost; what was missed streams in next
@@ -1529,15 +1583,54 @@ class Session {
       }
       try { this.onEvent(ev); } catch (_) {}
     };
+    // A short drop that EventSource heals on its own (a Wi-Fi hop, the server's
+    // keepalive gap) must not flash "disconnected": the badge and the shell's
+    // re-probe wait DOWN_GRACE_MS and fire only if the stream is still down.
     this.es.onerror = () => {
       this.logEl.classList.remove("replaying");   // show what arrived; a reconnect wipes and replays
-      this.setStatus("error", "disconnected");
-      if (this.active) shellStream("down");   // the shell may need to move to another address
+      if (this._downTimer) return;
+      const es = this.es;
+      this._downTimer = setTimeout(() => {
+        this._downTimer = null;
+        if (this.es !== es || es.readyState === EventSource.OPEN) return;
+        this.setStatus("error", "disconnected");
+        if (this.active) shellStream("down");   // the shell may need to move to another address
+      }, DOWN_GRACE_MS);
     };
+  }
+  // Close the stream of a chat that sits idle in the background. Browsers give
+  // a host six HTTP/1.1 connections, and an EventSource holds one for as long
+  // as it is open: after five visited chats every other request (sends,
+  // /sessions, images) queued behind them. The active chat and any chat with
+  // work in flight keep streaming, because their status comes from this
+  // stream; the rail's dot for a closed chat keeps its last (idle) state.
+  // switchTo reopens it with resume. The desktop window keeps every stream,
+  // so its rail still sees a turn that another client starts in a background chat.
+  scheduleSuspend(ms) {
+    clearTimeout(this._suspendTimer);
+    this._suspendTimer = setTimeout(() => this.suspend(), ms);
+  }
+  suspend() {
+    if (window.pywebview && !IS_SHELL) return;
+    if (!this.es || !this.connected || this.active || this._replaying) return;
+    if (this.statusState === "thinking" || this.statusState === "working") return;
+    if (this.activeCount() > 0 || (this.permCards && this.permCards.size)) return;
+    this.es.close(); this.es = null;
+    this.connected = false; this._suspended = true;
+    clearTimeout(this._downTimer); this._downTimer = null;
+  }
+  // Where the reader is, by message address, so a full replay can put them back.
+  scrollAnchor() {
+    if (!this.active || this.stick || this.logEl.hidden) return { stick: this.stick };
+    const msgs = [...this.logEl.children].filter((n) => n.classList.contains("msg") && n.dataset.seq != null);
+    const m = topVisibleMsg(msgs, this.logEl.scrollTop);
+    const a = m && this.msgAddr(m);
+    return a ? { stick: false, role: a.role, seq: a.seq, off: m.offsetTop - this.logEl.scrollTop } : { stick: false };
   }
   // The transcript is about to be replayed in full: clear everything that
   // lived in the log (a replayed permission/task event must not act as live).
   wipeForReplay() {
+    this._replayAnchor = this.scrollAnchor();   // replay_done scrolls back to it
     this.logEl.innerHTML = "";
     this._older = null; this._moreEl = null;
     this.current = null; this.blocks = {}; this.toolInputs = {}; this._openThink = null;
@@ -1553,7 +1646,7 @@ class Session {
   // changed what is on disk; the same wipe an auto-reconnect does.
   reload() {
     if (this.es) { this.es.close(); this.es = null; }
-    this.connected = false;
+    this.connected = false; this._suspended = false; this._lastSeq = null;
     this.logEl.innerHTML = "";
     this._older = null; this._moreEl = null;
     this.current = null; this.blocks = {}; this.toolInputs = {}; this._openThink = null;
@@ -2392,6 +2485,7 @@ class Session {
     }
     this.statusState = state;
     this.statusLabel = label || state;
+    if (!busy && !this.active && !this._replaying) this.scheduleSuspend(SUSPEND_AFTER_MS);   // its turn ended out of view
     if (busy) this.showSpinner(); else this.hideSpinner();
     this.refreshDot();
     if (this.active) applyStatus(this);
@@ -2839,13 +2933,17 @@ class Session {
         // is quadratic and was the WebContent memory balloon (2026-08-14, 34GB).
         // Coalesce to one re-render per 150ms; content_block_stop still does the
         // final exact render.
+        // A reader who is selecting text in the block holds the re-render off
+        // until the selection collapses (content_block_stop renders anyway).
         if (!b._mdTimer) {
-          b._mdTimer = setTimeout(() => {
+          const tick = () => {
+            if (selectionIn(b.el)) { b._mdTimer = setTimeout(tick, 150); return; }
             b._mdTimer = null;
-            b.el.innerHTML = md(b.text, b.ts) + '<span class="cursor">&nbsp;</span>';
+            renderKeepScroll(b.el, md(b.text, b.ts) + '<span class="cursor">&nbsp;</span>');
             b.el._mdsrc = b.text;
             this.scroll();
-          }, 150);
+          };
+          b._mdTimer = setTimeout(tick, 150);
         }
         if (window.VOICE && VOICE.on) VOICE.onText(this, b, false);   // read finished sentences aloud as they stream
       } else if (d.type === "input_json_delta") {
@@ -2863,7 +2961,7 @@ class Session {
       const b = this.blocks[e.index];
       if (b && b.type === "text") {
         if (b._mdTimer) { clearTimeout(b._mdTimer); b._mdTimer = null; }
-        b.el.innerHTML = md(b.text || "", b.ts); b.el._mdsrc = b.text || "";
+        renderKeepScroll(b.el, md(b.text || "", b.ts)); b.el._mdsrc = b.text || "";
         if (window.VOICE && VOICE.on) VOICE.onText(this, b, true);
         if (!this._replaying) { const em = crystalEmotionFrom(b.text); if (em) this.emotion = em; }
         if (window.MODS && b.text) MODS.siteAssistant(this, b.el, b.text, e.index === 0);
@@ -3038,8 +3136,17 @@ class Session {
         this._replaying = false;
         if (this._modStatusDeferred && window.MODS && MODS.paintStatus) MODS.paintStatus(this);
         this._modStatusDeferred = false;
+        // A full replay after a reconnect puts the reader back on the message
+        // they were reading (the log was hidden while it rebuilt).
+        { const anc = this._replayAnchor; this._replayAnchor = null;
+          if (anc && this.active) {
+            const m = anc.seq != null && this.findMsg(anc.role, anc.seq);
+            if (m) { this.unfoldTo(m); this.stick = false; this.logEl.scrollTop = m.offsetTop - anc.off; }
+            else this.stick = true;   // following, or the message is gone: the newest
+          } }
         this.scroll();
         this.primeHeights();
+        if (!this.active) this.scheduleSuspend(SUSPEND_AFTER_MS);   // opened, then left before it finished
         { const q = this._afterReplay; this._afterReplay = []; q.forEach((f) => { try { f(); } catch (_) {} }); }
         this.bgTasks.forEach((t, id) => { if (t.status === "running" || t.status === "killing") this.bgTasks.delete(id); });
         this.markStaleProgress();
@@ -3237,6 +3344,7 @@ class Session {
   }
 
   destroy() {
+    clearTimeout(this._suspendTimer); clearTimeout(this._downTimer);
     if (this.es) this.es.close();
     this.logEl.remove();
   }
@@ -4312,6 +4420,8 @@ function switchTo(id) {
   if (left && !left._replaying) left.foldOlder();
   if (activeId !== id) saveLastChat(id);
   activeId = id;
+  clearTimeout(s._suspendTimer);
+  if (left) left.scheduleSuspend(1500);   // idle and out of view: give its connection back
   if (window.VOICE) VOICE.onSwitch();   // the conversation pane shows only on its own chat
   pauseVideos(s.logEl);   // a video keeps playing in a hidden log otherwise
   closeRailDrawer();   // phone: picking a chat closes the drawer over it
@@ -4368,7 +4478,10 @@ function switchTo(id) {
   // Keep the chat you just entered on screen: with a long pinned section the tab
   // rail can be scrolled such that the active tab sits below the fold, so a new or
   // switched-to chat would otherwise be invisible until you hunt for it.
-  const at = tabsEl.querySelector(".tab.active");
+  // On a phone the drawer is closed here; it brings the active row into view
+  // when it opens (setRailOpen), and scrolling the hidden list now left it
+  // opening past the pinned rows.
+  const at = !isPhone() && tabsEl.querySelector(".tab.active");
   if (at) at.scrollIntoView({ block: "nearest" });
   s.scroll(true);   // entering a chat lands on its latest message
   s.primeHeights();   // no-op until the replay is done (replay_done calls it too)
@@ -5464,8 +5577,19 @@ renderFontList();
 const TSIZE_MIN = 70, TSIZE_MAX = 200, TSIZE_STEP = 5;
 // A phone keeps its own size under its own key and never writes the server
 // copy, so the Mac's choice does not shrink the phone layout, and the reverse.
-const TSIZE_PHONE = matchMedia("(max-width: 760px)").matches;
-const TSIZE_KEY = TSIZE_PHONE ? "textSizePhone" : "textSize";
+// The lane follows the layout: a window that crosses 760px (a phone turned on
+// its side, a narrowed Mac window) switches to the other lane's saved size.
+let TSIZE_PHONE = PHONE_MQ.matches;
+let TSIZE_KEY = TSIZE_PHONE ? "textSizePhone" : "textSize";
+PHONE_MQ.addEventListener("change", () => {
+  if (TSIZE_PHONE === PHONE_MQ.matches) return;
+  TSIZE_PHONE = PHONE_MQ.matches;
+  TSIZE_KEY = TSIZE_PHONE ? "textSizePhone" : "textSize";
+  let pct = 0;
+  try { pct = parseInt(localStorage.getItem(TSIZE_KEY), 10) || 0; } catch (_) {}
+  if (!pct && !TSIZE_PHONE && window.__mistZoom) pct = window.__mistZoom;   // the server copy, as at boot
+  applyTextSize(pct || 100, false);
+});
 function currentTextSize() {
   const z = parseFloat(document.documentElement.style.zoom);
   return z ? Math.round(z * 100) : 100;
@@ -6799,11 +6923,36 @@ const UI_RELOAD = (() => {
     clearTimeout(timer);
     timer = setTimeout(attempt, ev.force ? 300 : 3000);
   }
+  // The iOS shell calls window.mistStashDraft(reason) right before it reloads
+  // the page itself (a reconnect to another address, a fresh build). Same
+  // stash as the watchdog's, synchronous so it lands before the reload.
+  function stash(reason) {
+    const a = activeId && sessions.get(activeId);
+    if (a) a.draft = input.value;
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ shell: true, reason: String(reason || ""), draft: input.value, sid: activeId }));
+    } catch (_) {}
+    return true;
+  }
   function afterBoot() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); localStorage.removeItem(KEY); } catch (_) {}
     if (!saved) return;
-    if (saved.draft) { input.value = saved.draft; growInput(); }
+    if (saved.sid && saved.sid !== activeId && sessions.has(saved.sid)) switchTo(saved.sid);
+    if (saved.draft) {
+      input.value = saved.draft;
+      const a = activeId && sessions.get(activeId);
+      if (a) a.draft = input.value;
+      growInput(); reflectSend();
+    }
+    if (saved.shell) {
+      // A shell reload: a reconnect is routine and says nothing; anything else
+      // gets one neutral line, and only when there was a draft to bring back.
+      if (saved.reason !== "reconnect" && saved.draft) {
+        setTimeout(() => { const s = sessions.get(activeId); if (s) s.notice("Your draft is back in the box.", false); }, 1500);
+      }
+      return;
+    }
     setTimeout(() => {
       const s = sessions.get(saved.sid) || sessions.get(activeId);
       if (s) s.notice("Console reloaded to free memory" +
@@ -6813,7 +6962,8 @@ const UI_RELOAD = (() => {
     fetch("/ui/reloaded", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: saved.id, gb: saved.gb }) }).catch(() => {});
   }
-  return { request, afterBoot };
+  window.mistStashDraft = stash;
+  return { request, afterBoot, stash };
 })();
 
 async function boot() {
@@ -6847,8 +6997,9 @@ async function boot() {
     await createSession();
   }
   bootGreeting();
-  UI_RELOAD.afterBoot();   // a watchdog-requested reload restores the draft and says so
+  UI_RELOAD.afterBoot();   // a watchdog or shell reload restores the chat and the draft
   if (!isTouch()) input.focus();   // a phone would open with the keyboard up
+  shellReady();
 }
 boot();
 
@@ -7499,7 +7650,18 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   const mid = $("#mid"), rail = $("#tabrail"), open = $("#railOpen"), backdrop = $("#railBackdrop");
   if (!mid || !rail || !open || !backdrop) return;
   const isOpen = () => mid.classList.contains("rail-open");
-  setRailOpen = (on) => { mid.classList.toggle("rail-open", on); backdrop.hidden = !on; };
+  // The drawer opens at the top of the list (pinned rows first), unless that
+  // would leave the active chat below the fold.
+  const railToTop = () => {
+    tabsEl.scrollTop = 0;
+    const at = tabsEl.querySelector(".tab.active");
+    if (!at) return;
+    if (at.getBoundingClientRect().bottom > tabsEl.getBoundingClientRect().bottom) at.scrollIntoView({ block: "nearest" });
+  };
+  setRailOpen = (on) => {
+    if (on && !isOpen() && isPhone()) railToTop();
+    mid.classList.toggle("rail-open", on); backdrop.hidden = !on;
+  };
   open.addEventListener("click", () => setRailOpen(!isOpen()));
   backdrop.addEventListener("click", () => setRailOpen(false));
   closeRailDrawer = () => {
@@ -7513,7 +7675,12 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
   // to close, the drawer following the finger. Released past halfway, or with
   // a flick, it goes the rest of the way. Movement that starts vertical is a
   // scroll, and the gesture stands down without touching the event.
-  const EDGE = 28, SLOP = 8, FLICK = 0.35;   // CSS px from the left, px before deciding, px per ms
+  // Only the drawer and its backdrop hold a non-passive touchmove. One on the
+  // document made every scroll in the chat wait for the main thread before it
+  // could start (busy while a reply streams). An edge swipe over the log thus
+  // cannot cancel the log's own scroll; the log only scrolls vertically, so at
+  // worst it drifts by the vertical part of the swipe.
+  const EDGE = 20, SLOP = 8, FLICK = 0.35;   // CSS px from the left, px before deciding, px per ms
   let mode = null, startX = 0, startY = 0, width = 0, x = 0, lastX = 0, lastT = 0, vx = 0, zr = 1;
   // Text size is a zoom on the root. Chromium reports rects and touch points
   // in zoomed pixels, Apple's WKWebView in unzoomed ones, and the transform we
@@ -7526,36 +7693,57 @@ $("#shareClose").addEventListener("click", () => { $("#shareCard").hidden = true
     rail.style.transform = "translateX(" + x + "px)";
     backdrop.style.opacity = String(1 + x / width);
   };
+  // A swipe that starts on something that scrolls sideways (code, a table, a
+  // diff, the 3D viewer) belongs to that element, not to the drawer.
+  const SIDEWAYS = "pre, table, .md-table, .diff, .genmodel-stage, .tool pre";
+  const scrollsSideways = (n) => {
+    for (; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
+      if (n.matches(SIDEWAYS)) return true;
+      if (n.scrollWidth > n.clientWidth + 1) {
+        const ox = getComputedStyle(n).overflowX;
+        if (ox === "auto" || ox === "scroll") return true;
+      }
+    }
+    return false;
+  };
   document.addEventListener("touchstart", (e) => {
     mode = null;
     if (!isPhone() || e.touches.length !== 1) return;
+    const sheet = $("#phoneSheet");
+    if (sheet && !sheet.hidden) return;   // the sheet owns the screen while it is up
     const t = e.touches[0];
     zr = rectScale();
     if (!isOpen() && t.clientX > EDGE * zr) return;
     if (isOpen() && !(rail.contains(e.target) || e.target === backdrop)) return;
     if (e.target.closest && e.target.closest("input, textarea, select")) return;
+    if (!isOpen() && scrollsSideways(e.target)) return;
     mode = "pending";
     startX = t.clientX; startY = t.clientY; width = railWidth();
     lastX = startX; lastT = performance.now(); vx = 0;
   }, { passive: true });
-  document.addEventListener("touchmove", (e) => {
-    if (!mode) return;
+  const move = (e, owned) => {
+    if (!mode || e._railSeen) return;
+    e._railSeen = true;   // the drawer's own listener ran first; the document's skips it
     const t = e.touches[0];
     const mx = (t.clientX - startX) / zr, my = (t.clientY - startY) / zr;
     if (mode === "pending") {
       if (Math.abs(mx) < SLOP && Math.abs(my) < SLOP) return;
       if (Math.abs(my) > Math.abs(mx)) { mode = null; return; }
       mode = "drag";
+      if (!isOpen()) railToTop();
       rail.classList.add("dragging");
       backdrop.classList.add("dragging");
       backdrop.hidden = false;
     }
-    e.preventDefault();
+    if (owned && e.cancelable) e.preventDefault();
     const now = performance.now();
     vx = (t.clientX - lastX) / zr / Math.max(1, now - lastT);
     lastX = t.clientX; lastT = now;
     place(isOpen() ? mx : -width + mx);
-  }, { passive: false });
+  };
+  rail.addEventListener("touchmove", (e) => move(e, true), { passive: false });
+  backdrop.addEventListener("touchmove", (e) => move(e, true), { passive: false });
+  document.addEventListener("touchmove", (e) => move(e, false), { passive: true });
   const finish = () => {
     if (mode !== "drag") { mode = null; return; }
     mode = null;
@@ -7637,6 +7825,40 @@ const phoneSheet = (function () {
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("enter")));
   };
   root.querySelector(".sheet-scrim").addEventListener("click", close);
+  // Drag down to close, from the grab bar or anywhere in the sheet while its
+  // content is scrolled to the top. Released past a third of its height (or
+  // 120px), or with a downward flick, it closes; otherwise it springs back.
+  // The non-passive touchmove lives on the sheet alone, so the chat behind it
+  // keeps its fast scroll start.
+  const body = root.querySelector(".sheet-body");
+  let y0 = null, dy = 0, t0 = 0;
+  body.addEventListener("touchstart", (e) => {
+    y0 = null;
+    if (e.touches.length !== 1 || body.scrollTop > 0) return;
+    y0 = e.touches[0].clientY; dy = 0; t0 = performance.now();
+  }, { passive: true });
+  body.addEventListener("touchmove", (e) => {
+    if (y0 == null) return;
+    dy = e.touches[0].clientY - y0;
+    if (!body.classList.contains("dragging")) {
+      if (Math.abs(dy) < 6) return;
+      if (dy < 0) { y0 = null; return; }   // an upward move scrolls the sheet's content
+      body.classList.add("dragging");
+    }
+    if (e.cancelable) e.preventDefault();
+    body.style.transform = "translateY(" + Math.max(0, dy) + "px)";
+  }, { passive: false });
+  const release = () => {
+    if (y0 == null) return;
+    y0 = null;
+    if (!body.classList.contains("dragging")) return;
+    body.classList.remove("dragging");
+    const flick = dy / Math.max(1, performance.now() - t0) > 0.6;
+    body.style.transform = "";
+    if (flick || dy > Math.min(120, body.offsetHeight / 3)) close();
+  };
+  body.addEventListener("touchend", release);
+  body.addEventListener("touchcancel", release);
   PHONE_MQ.addEventListener("change", close);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !root.hidden) close(); });
   // A row's action runs after the sheet is gone and after this click has
@@ -7858,13 +8080,22 @@ if (isTouch()) input.placeholder = "Talk to MIST…";
   let raf = 0;
   const sync = () => {
     raf = 0;
-    if (!isPhone()) { document.documentElement.style.removeProperty("--vvh"); return; }
+    if (!isPhone()) {
+      document.documentElement.style.removeProperty("--vvh");
+      document.documentElement.style.removeProperty("--vvtop");
+      return;
+    }
     // Text size is a CSS zoom on the root, and a px length inside it renders
     // zoomed, so the visual height is divided by the zoom or a 125% Console
     // gets a body 25% taller than the screen (the top bar scrolled off it).
     const zoom = parseFloat(document.documentElement.style.zoom) || 1;
     setRootVar("--zoom", String(zoom));   // vw-sized things divide by it (style.css)
     setRootVar("--vvh", Math.round(vv.height / zoom) + "px");
+    // iOS can also pan the visual viewport down (offsetTop) to reveal the
+    // focused field. The body is fixed to the layout viewport, so the top bar
+    // went up out of view with it; style.css moves the body down by the same
+    // amount, which keeps it on the visible area.
+    setRootVar("--vvtop", Math.max(0, Math.round(vv.offsetTop / zoom)) + "px");
     if (window.scrollY) window.scrollTo(0, 0);
     const a = activeId && sessions.get(activeId);
     if (a) a.scroll();   // keep following the bottom while the log area resizes

@@ -263,10 +263,17 @@
       controls.addEventListener("end", () => { st.dragging = false; schedule(st); });
       controls.addEventListener("change", () => schedule(st));
       st.controls = controls;
+      // OrbitControls writes touch-action:none on the stage, which made a
+      // viewer a dead zone for scrolling the chat on a phone. pan-y gives a
+      // vertical one-finger drag back to the page (the controls get a
+      // pointercancel and stand down); a sideways drag still orbits, and two
+      // fingers still pinch to zoom, since pan-y leaves pinches to the page's
+      // handlers. Touch only: a mouse ignores touch-action.
+      stage.style.touchAction = "pan-y";
       stage.addEventListener("dblclick", () => resetView(st));
-      // Touch: WebKit sends no dblclick on a touch-action:none stage, so two
-      // taps within 300 ms (and no drag between) reset the view, same as a
-      // double-click on the Mac.
+      // Touch: WebKit sends no dblclick on a touch stage, so two taps within
+      // 300 ms (and no drag between) reset the view, same as a double-click on
+      // the Mac.
       let lastTap = 0, tapX = 0, tapY = 0;
       stage.addEventListener("pointerdown", (e) => { if (e.pointerType === "touch") { tapX = e.clientX; tapY = e.clientY; } });
       stage.addEventListener("pointerup", (e) => {
