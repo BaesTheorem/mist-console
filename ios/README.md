@@ -81,8 +81,7 @@ turns with the clock, so one frame at a time is in view. The mask method comes
 from [KeyringWidget](https://github.com/giljihun/KeyringWidget) (MIT). The
 frames are 32 per clip from `mist-anims/dist/webp/classic`, in
 `MISTWidget/Resources/Frames`. If Apple stops the private effect, the widget
-shows a still crystal. The counter under the name is a probe: it ticks
-wherever the host renders live.
+shows a still crystal.
 
 ## Widgets (Lock Screen and Home Screen)
 

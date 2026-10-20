@@ -14,10 +14,6 @@ import WidgetKit
 /// fidget, then idle again. Entries are computed ahead, so they cost no reloads.
 /// If the private effect stops working (it did once, in iOS 26.1), the masks do
 /// not turn and the widget shows a still crystal: degraded, never broken.
-///
-/// The small counter under the name is a probe: a timer label ticks on its own
-/// wherever the host renders live. Ticking counter + still crystal = the host
-/// blocks the rotation; both still = the host shows a snapshot.
 
 struct Clip {
     let name: String
@@ -37,14 +33,13 @@ private let frameCount = 32
 struct ClipEntry: TimelineEntry {
     let date: Date
     let clip: Clip
-    let since: Date
 }
 
 struct ClipProvider: TimelineProvider {
-    func placeholder(in context: Context) -> ClipEntry { ClipEntry(date: .now, clip: idle, since: .now) }
+    func placeholder(in context: Context) -> ClipEntry { ClipEntry(date: .now, clip: idle) }
 
     func getSnapshot(in context: Context, completion: @escaping (ClipEntry) -> Void) {
-        completion(ClipEntry(date: .now, clip: idle, since: .now))
+        completion(ClipEntry(date: .now, clip: idle))
     }
 
     /// Six hours ahead: 3 minutes idle, 40 seconds of the next fidget, repeat.
@@ -54,9 +49,9 @@ struct ClipProvider: TimelineProvider {
         var t = start
         var i = Int.random(in: 0..<fidgets.count)
         while t < start.addingTimeInterval(6 * 3600) {
-            entries.append(ClipEntry(date: t, clip: idle, since: start))
+            entries.append(ClipEntry(date: t, clip: idle))
             t += 180
-            entries.append(ClipEntry(date: t, clip: fidgets[i % fidgets.count], since: start))
+            entries.append(ClipEntry(date: t, clip: fidgets[i % fidgets.count]))
             t += 40
             i += 1
         }
@@ -123,12 +118,7 @@ struct AnimatedMISTView: View {
             let side = min(g.size.width, g.size.height)
             VStack(spacing: 2) {
                 FrameLoop(clip: entry.clip, size: side * 0.78)
-                HStack(spacing: 6) {
-                    Text("MIST").font(.caption.weight(.semibold))
-                    Text(entry.since, style: .timer)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+                Text("MIST").font(.caption.weight(.semibold))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
