@@ -67,6 +67,23 @@ A Console feature must work here the day it ships. The table under "Parity
 with the Mac" in the main README records each feature's phone path, and a
 change to the Console updates that table in the same commit.
 
+## Animated widget (Home Screen and CarPlay Dashboard)
+
+**MIST (animated)** is a Home Screen small widget in which the crystal idles
+and does a fidget every few minutes (happy, curious, thinking). CarPlay shows
+any `systemSmall` widget from iOS 26 on without a CarPlay entitlement, so the
+widget goes on the car's Dashboard too (Settings, General, CarPlay, your car).
+
+A widget is a series of snapshots, so the motion uses WidgetKit's private
+clock-hand rotation through [ClockHandKit](https://github.com/giljihun/ClockHandKit)
+(MIT, pinned in `project.yml`). Each frame is behind a large arc mask that
+turns with the clock, so one frame at a time is in view. The mask method comes
+from [KeyringWidget](https://github.com/giljihun/KeyringWidget) (MIT). The
+frames are 32 per clip from `mist-anims/dist/webp/classic`, in
+`MISTWidget/Resources/Frames`. If Apple stops the private effect, the widget
+shows a still crystal. The counter under the name is a probe: it ticks
+wherever the host renders live.
+
 ## Widgets (Lock Screen and Home Screen)
 
 `MISTWidget/` is a WidgetKit extension embedded in the app: two launchers,

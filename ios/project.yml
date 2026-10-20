@@ -9,6 +9,14 @@ options:
   createIntermediateGroups: true
   groupSortPosition: top
 
+# ClockHandKit drives WidgetKit's private clock-hand rotation, the only way a
+# widget animates continuously (the animated MIST widget). Pinned: it reaches a
+# private type by name, so an update is a deliberate review, not a resolve.
+packages:
+  ClockHandKit:
+    url: https://github.com/giljihun/ClockHandKit
+    exactVersion: 0.1.2
+
 configFiles:
   Debug: Config/Signing.xcconfig
   Release: Config/Signing.xcconfig
@@ -104,6 +112,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    dependencies:
+      - package: ClockHandKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alexhedtke.mistconsole.widget

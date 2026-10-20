@@ -110,6 +110,7 @@ struct MISTWidgetBundle: WidgetBundle {
     var body: some Widget {
         MISTLaunchWidget()
         MISTNewChatWidget()
+        AnimatedMISTWidget()
     }
 }
 
