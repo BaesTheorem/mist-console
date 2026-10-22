@@ -874,11 +874,16 @@ class ClaudeSession:
             cmd.append("--dangerously-skip-permissions")
         elif self.permission_mode:
             cmd += ["--permission-mode", self.permission_mode]
-            # Route every "ask" permission decision back to us over the control
-            # protocol as a can_use_tool control_request (see _handle_control_request
-            # + respond_permission), so default/acceptEdits/plan modes surface real
-            # Allow/Deny cards in the UI instead of silently auto-running (as
-            # bypassPermissions does — which stays untouched, no prompt tool).
+        # Route every "ask" permission decision back to us over the control
+        # protocol as a can_use_tool control_request (see _handle_control_request
+        # + respond_permission), so default/acceptEdits/plan modes surface real
+        # Allow/Deny cards in the UI instead of silently auto-running. Bypass
+        # gets it too: the CLI itself never asks there, but a PreToolUse hook
+        # that returns "ask" (the harness guard-identity hook) does, and with
+        # no prompt tool that ask became a silent deny. Probed 2026-10-22:
+        # bypass + stdio routes the hook ask as can_use_tool, and ordinary
+        # tool calls still run with no request.
+        if self.permission_mode:
             cmd += ["--permission-prompt-tool", "stdio"]
         # AskUserQuestion is an interactive picker. In the non-bypass modes it
         # arrives over the same control protocol as any other ask (a can_use_tool
@@ -1046,8 +1051,8 @@ class ClaudeSession:
             self._broadcast({"type": "process_exit", "code": -1, "error": spawn_err})
             return
         # Enable the SDK control protocol so the CLI will route permission
-        # decisions to us as can_use_tool control_requests. Only needed when a
-        # prompt tool is in play (non-bypass modes); bypassPermissions never asks.
+        # decisions to us as can_use_tool control_requests. Every mode wires
+        # the prompt tool; in bypass only a hook "ask" ever uses it.
         self._maybe_init_control()
 
     def _transcript_gone(self):
@@ -1251,10 +1256,8 @@ class ClaudeSession:
         """Switch permission mode. Between the asking modes (default /
         acceptEdits / plan) this goes live over `set_permission_mode`, exactly
         like the TUI's Shift+Tab, and returns True. Any switch involving
-        bypassPermissions still restarts the backend: a process spawned with
-        --dangerously-skip-permissions has no permission prompt tool wired up,
-        so asks would have nowhere to go, and the CLI refuses to enter bypass
-        on a process that was not started with the flag."""
+        bypassPermissions still restarts the backend: the CLI refuses to enter
+        bypass on a process that was not started with the flag."""
         if not mode or mode == self.permission_mode:
             return False
         old = self.permission_mode
@@ -1848,10 +1851,10 @@ class ClaudeSession:
 
         Without this the ask only exists inside the Console window, so stepping
         away from the machine leaves the turn parked indefinitely on a card
-        nobody is looking at. Only modes that actually ask ever reach here
-        (bypassPermissions never asks), so there is no focus check and no
-        quiet-hours logic: if this fires, the mode was a deliberate choice to be
-        asked. Voice is off because a coding turn can stack several asks in a
+        nobody is looking at. Only an ask reaches here: the asking modes, or a
+        PreToolUse hook that returns "ask" in bypass (the identity guard), so
+        there is no focus check and no quiet-hours logic: if this fires, a
+        human decision is wanted. Voice is off because a coding turn can stack several asks in a
         row and narrating each one would be unbearable; the sound still plays.
         """
         if not req_id:
