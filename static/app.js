@@ -2288,13 +2288,17 @@ class Session {
     const allow = el("button", "perm-btn allow", isPlan ? "Approve & proceed" : "Allow once");
     const always = el("button", "perm-btn always", isPlan ? "Auto-accept edits" : "Allow, don't ask again");
     const deny = el("button", "perm-btn deny", isPlan ? "Keep planning" : "Deny");
+    // Neither yes nor no: the call does not run, MIST explains it, and Alex
+    // replies in the composer (bridge.CHAT_ABOUT_THIS).
+    const chat = el("button", "perm-btn chat", "Chat about this");
     const answer = (decision, remember) => {
       if (card._answered) return;
       card._answered = true;
       card.classList.add("answered");
       row.remove();
       head.appendChild(el("span", "perm-verdict",
-        decision === "allow" ? (remember ? "allowed · session" : "allowed") : "denied"));
+        decision === "allow" ? (remember ? "allowed · session" : "allowed")
+          : decision === "chat" ? "talking it over" : "denied"));
       if (this.permCards) { this.permCards.delete(o.request_id); crystalRefresh(); }
       fetch("/sessions/" + this.id + "/permission-response", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -2304,9 +2308,14 @@ class Session {
     allow.addEventListener("click", () => answer("allow", false));
     always.addEventListener("click", () => answer("allow", true));
     deny.addEventListener("click", () => answer("deny", false));
+    chat.addEventListener("click", () => {
+      answer("chat", false);
+      try { input.focus(); } catch (_) {}
+    });
     row.appendChild(allow);
     if ((o.suggestions || []).length) row.appendChild(always);
     row.appendChild(deny);
+    row.appendChild(chat);
     card.appendChild(row);
     (this.current && this.current.body ? this.current.body : this.logEl).appendChild(card);
     this.permCards.set(o.request_id, card); crystalRefresh();

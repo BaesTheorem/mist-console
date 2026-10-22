@@ -1433,7 +1433,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .perm-body .perm-plan { padding: 8px 11px; max-height: none; }
 .perm-body .perm-sum { padding: 8px 11px; font-family: var(--mono); font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
 .perm-cmd { margin: 0; padding: 8px 11px; font-family: var(--mono); font-size: 12px; color: var(--md-sys-color-on-surface-variant); white-space: pre-wrap; overflow-x: auto; }
-.perm-actions { display: flex; gap: 8px; padding: 8px 11px; }
+.perm-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 11px; }
 .perm-btn {
   font-family: var(--mono); font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
   background: var(--md-sys-color-surface-container-lowest); color: var(--text); border: 1px solid var(--line);
@@ -1445,6 +1445,8 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .perm-btn.always { color: var(--teal); }
 .perm-btn.deny { color: var(--err); }
 .perm-btn.deny:hover { border-color: var(--err); }
+.perm-btn.chat { color: var(--md-sys-color-primary); }
+.perm-btn.chat:hover { border-color: var(--md-sys-color-primary); }
 .perm-btn:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
 
 /* ---------- question cards (AskUserQuestion) ---------- */

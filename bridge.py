@@ -188,6 +188,14 @@ CONSOLE_URL = os.environ.get("MIST_CONSOLE_URL", "http://127.0.0.1:5014")
 # Where the CLI keeps its session transcripts (CLAUDE_CONFIG_DIR moves ~/.claude).
 CLI_PROJECTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR")
                             or os.path.expanduser("~/.claude"), "projects")
+# The tool result for a "Chat about this" answer on a permission card.
+CHAT_ABOUT_THIS = (
+    "Alex chose \"Chat about this\" on the permission card. He has not approved "
+    "or denied this call, and it did not run. Do not retry it, and do not do the "
+    "same work another way. In plain text, say what the call does, why it is "
+    "needed, and what the risk is. Then end your turn and wait for his reply. "
+    "If he approves it in chat, run the same call again. It will show a new card.")
+
 # Banners for blocking permission asks (see _notify_permission).
 NOTIFY_BIN = os.path.join(HARNESS, "mist-voice", "bin", "mist-notify")
 
@@ -1876,7 +1884,9 @@ class ClaudeSession:
                  "--action", button("Allow", {"request_id": req_id, "decision": "allow"}),
                  "--action", button("Always allow", {"request_id": req_id,
                                                      "decision": "allow", "remember": True}),
-                 "--action", button("Deny", {"request_id": req_id, "decision": "deny"})],
+                 "--action", button("Deny", {"request_id": req_id, "decision": "deny"}),
+                 "--action", button("Chat about this", {"request_id": req_id,
+                                                        "decision": "chat"})],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass   # a missing/broken notifier must never swallow the permission card
@@ -2198,7 +2208,8 @@ class ClaudeSession:
                            updated_input=None, message=None, answers=None,
                            response=None):
         """Answer a can_use_tool permission request the UI surfaced. `decision`
-        is "allow" or "deny". `remember=True` returns the CLI's own suggestions
+        is "allow", "deny", or "chat" (did not run, Alex wants to talk about it
+        first; see CHAT_ABOUT_THIS). `remember=True` returns the CLI's own suggestions
         as updatedPermissions (the "don't ask again this session" affordance).
         Sends the control_response the CLI is blocked waiting on.
 
@@ -2224,6 +2235,14 @@ class ClaudeSession:
             result = {"behavior": "allow", "updatedInput": new_input}
             if remember and pend.get("suggestions"):
                 result["updatedPermissions"] = pend["suggestions"]
+        elif decision == "chat" and not is_question:
+            # "Chat about this": Alex wants to ask about the call before he
+            # decides. The call does not run, the turn is not interrupted, and
+            # the model is told to explain and stop. If he then approves in
+            # chat, the retried call raises a fresh card.
+            result = {"behavior": "deny",
+                      "message": message or CHAT_ABOUT_THIS,
+                      "interrupt": False}
         elif is_question:
             result = {"behavior": "deny",
                       "message": message or ("The user dismissed the question card "
