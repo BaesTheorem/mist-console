@@ -460,6 +460,9 @@ body.log-drag #jumpBtn, body.log-drag .msg-actions, body.log-drag .copy-btn { vi
 #logs { cursor: auto; }
 .msg .body { cursor: text; }
 ::selection { background: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent); color: var(--text); }
+/* app.js repaint(): a moment below full opacity forces WebKit to repaint the
+   log and drop stale selection highlight. */
+.session-log.sel-repaint { opacity: .999; }
 
 /* ---- transcript right-click menu ----
    Shift+right-click bypasses this and gets WebKit's own menu (Look Up, Speech,

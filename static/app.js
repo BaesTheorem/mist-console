@@ -6868,10 +6868,30 @@ logs.addEventListener("scroll", hideCtxMenu, true);
     if (sel.focusNode === caret.startContainer && sel.focusOffset === caret.startOffset) return;
     sel.extend(caret.startContainer, caret.startOffset);
   }
+  // WebKit can leave old selection paint on screen after the range shrinks or
+  // clears: stray highlight on lines the live selection does not cover (the
+  // range itself is correct, probed 2026-10-23; the tiles are stale). Scrawl
+  // 2026-10-23 shows the remnants surviving a new drag. A one-frame opacity
+  // change on the log invalidates its whole painted area, which clears them.
+  function repaint(log) {
+    if (!log) return;
+    log.classList.add("sel-repaint");
+    // A timer, not rAF: rAF stalls in an occluded window and the class would stay on.
+    clearTimeout(log._selRepaint);
+    log._selRepaint = setTimeout(() => log.classList.remove("sel-repaint"), 60);
+  }
+  let hadSel = false;
+  document.addEventListener("selectionchange", () => {
+    const sel = window.getSelection();
+    const has = !!sel && sel.rangeCount > 0 && !sel.isCollapsed;
+    if (hadSel && !has && !drag) repaint(logs.querySelector(".session-log:not([hidden])"));
+    hadSel = has;
+  });
   function endDrag() {
     if (!drag) return;
     document.body.classList.remove("log-drag");
-    setTimeout(() => { clampSelection(); drag = null; }, 0);
+    const log = drag.log;
+    setTimeout(() => { clampSelection(); drag = null; repaint(log); }, 0);
   }
   logs.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
