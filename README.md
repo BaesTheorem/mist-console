@@ -379,6 +379,11 @@ way speech does.
   macOS never prompts and the tap records silence. The first run after a rebuild
   asks once (System Settings > Privacy & Security > Screen & System Audio Recording).
   Nothing plays until the mode is switched on.
+- **Bluetooth.** Tools MIST runs from a chat (bleak scripts such as the harness
+  `bin/ble-run` scan, `flipper_ble.py`, the NIU scooter CLI) are attributed to the
+  Console too, so the .app carries `NSBluetoothAlwaysUsageDescription`. Without it
+  macOS kills the process with exit 134 and no message. The first Bluetooth call
+  after a rebuild asks once (System Settings > Privacy & Security > Bluetooth).
 
 ## Share links (public read-only snapshots)
 
@@ -624,6 +629,7 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | PDFs | inline viewer in the bubble, 520px tall, attachment card under it; drawer tile opens a full-size preview | same viewer at 60vh; scrolling inside the frame scrolls the PDF, outside it scrolls the chat |
 | Save a file | copies into the Mac's `~/Downloads` | the shell downloads it over the pairing token and opens the share sheet (`ArtifactSaver.swift`, `shellSave` in app.js) |
 | HTML preview | sandboxed frame, plus "Open in browser" | sandboxed frame only (Safari has no cookie) |
+| Bluetooth from chat tools | the Mac's radio, granted to the Console | same: a phone chat's tools run on the Mac, so they reach devices near the Mac, not the phone |
 | Conversation mode | column beside the chat | gap: the pane is hidden on phones |
 | Mod panes | dock beside the chat | gap: the dock is hidden on phones |
 | Repo switching | repo badge | gap: needs a folder picker |

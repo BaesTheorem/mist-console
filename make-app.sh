@@ -93,6 +93,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Conversation mode listens to you through the microphone. Speech is transcribed on this Mac and never leaves it.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>Tools MIST runs from a chat (BLE scans, the Flipper, the scooter, the Plaud) talk to your Bluetooth devices. Nothing is sent off this Mac.</string>
   <key>NSAudioCaptureUsageDescription</key><string>Light sync (govee-music) reads the audio of one app on this Mac to move the room lights with it. The sound stays on this Mac.</string>
 </dict>
 </plist>
