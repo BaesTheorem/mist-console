@@ -38,9 +38,7 @@ html, body {
   background: var(--bg); color: var(--text);
   font-family: var(--mono); font-size: 13px; line-height: 1.55;
 }
-/* rows: top bar, limit-resets strip (always in flow, 0px while empty, so the
-   row count never changes), the chat, the composer */
-body { display: grid; grid-template-rows: auto auto 1fr auto; height: 100vh; }
+body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
 /* The grid rows must never dictate the window's width. Grid items default to
    min-width:auto, which floors a row at its min-content width even when that is
    wider than the window; intrinsic sizing ignores overflow, so .meta's
@@ -2254,25 +2252,18 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
 #phoneSheet .sh-grid button:active { background: var(--md-sys-color-surface-container); }
 @media (prefers-reduced-motion: reduce) { #phoneSheet .sheet-body { transition: none; } }
 
-/* ---- limit resets strip (under the top bar; phone: same, full width) ------ */
-.limit-resets {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
-  padding: 6px 14px; font-size: 12px;
-  background: var(--md-sys-color-tertiary-container);
-  color: var(--md-sys-color-on-tertiary-container);
-  border-bottom: 1px solid var(--line); position: relative; z-index: 39;
-}
-.limit-resets[hidden] { display: flex; height: 0; min-height: 0; padding: 0; border: 0; overflow: hidden; }
-.limit-resets .lr-head { font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
-.limit-resets .lr-head .msi { font-size: 16px; }
-.limit-resets .lr-grant { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.limit-resets .lr-when { opacity: .85; }
-.limit-resets .lr-when.soon { color: var(--err); opacity: 1; font-weight: 600; }
-.limit-resets button.lr-use {
-  border: 1px solid currentColor; color: inherit; background: transparent;
-  padding: 2px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
-}
-.limit-resets button.lr-use:hover { background: var(--md-sys-color-tertiary); color: var(--md-sys-color-on-tertiary); border-color: transparent; }
-.limit-resets button.lr-use[disabled] { opacity: .5; cursor: default; }
-.limit-resets .lr-result { font-style: italic; }
-@media (hover: none) { .limit-resets button.lr-use { min-height: 32px; padding: 4px 14px; } }
+/* ---- Resets chip + card (the plan's /limit-reset grants) ------------------- */
+.badge.resets { color: var(--md-sys-color-on-tertiary-container); background: var(--md-sys-color-tertiary-container); border-color: transparent; font-weight: 600; }
+.badge.resets[hidden] { display: none; }
+#resetsCard { position: fixed; top: 44px; right: 14px; width: 360px; z-index: 30;
+  background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line); }
+#resetsCard[hidden] { display: none; }
+#resetsBody { padding: 6px 12px; font-size: 12px; }
+#resetsBody .lr-grant { display: flex; flex-direction: column; gap: 3px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+#resetsBody .lr-grant:last-child { border-bottom: 0; }
+#resetsBody .lr-name { font-weight: 600; color: var(--text); }
+#resetsBody .lr-when { color: var(--dim); }
+#resetsBody .lr-when.soon { color: var(--err); font-weight: 600; }
+#resetsBody .lr-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+#resetsBody .lr-result { font-style: italic; color: var(--dim); }
+#resetsBody .lr-at { color: var(--warn); font-weight: 600; }

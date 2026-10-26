@@ -51,6 +51,10 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
     <span class="badge usage clickable" id="ctx" title="Context window used · click for the breakdown and compaction">ctx —</span>
     <span class="badge usage clickable" id="r5h" title="5-hour limit used · click for every window + this chat's cost">5h —</span>
     <span class="badge usage clickable" id="r7d" title="7-day limit used · click for every window + this chat's cost">7d —</span>
+    <!-- Limit resets the plan holds (Claude Code's /limit-reset grants). The chip
+         exists only while a grant with a count left exists; the card lists them
+         with a Use now button that posts to /limit-reset/claim. -->
+    <span class="badge clickable resets" id="resets" hidden title="Limit resets the plan holds · click to see and use them">Resets</span>
   </div>
   <div class="actions">
     <md-icon-button id="artBtn" touch-target="none" title="Artifacts · every image, audio clip, video, 3D model and file made in this chat" aria-label="Artifacts" aria-pressed="false"><md-icon>perm_media</md-icon></md-icon-button>
@@ -58,12 +62,6 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
   </div>
   <md-icon-button id="phoneNew" class="phone-only" touch-target="none" title="New chat" aria-label="New chat"><md-icon>edit_square</md-icon></md-icon-button>
 </header>
-
-<!-- Limit resets the plan holds (Claude Code's /limit-reset grants). Shown only
-     while a grant with a count left exists; app.js fills it from /usage and the
-     Use-now button posts to /limit-reset/claim. The hourly watcher spends one at
-     the wall or before it expires; this strip is the hand-redeem path. -->
-<div id="limitResets" class="limit-resets" role="status" hidden></div>
 
 <aside id="shareCard" hidden>
   <div class="capHead">share this chat <button id="shareClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
@@ -98,6 +96,12 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
     <button id="ctxRefresh" class="perm-btn">Refresh</button>
   </div>
   <div class="modelnote">What fills this chat's context. Compacting replaces the history with a summary, so every later message re-bills far less.</div>
+</aside>
+
+<aside id="resetsCard" hidden>
+  <div class="capHead">limit resets <button id="resetsClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
+  <div id="resetsBody" class="ctx-body"></div>
+  <div class="modelnote">Resets Anthropic put on the plan. The hourly watcher uses one at a limit or before it expires; this is the hand path.</div>
 </aside>
 
 <aside id="usageCard" hidden>

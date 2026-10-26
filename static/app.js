@@ -4990,13 +4990,15 @@ async function pollUsage() {
   renderLimitResets(u && u.limit_resets);
 }
 
-// ---- limit resets strip (the plan's /limit-reset grants) ---------------------
-// Shown under the top bar while the account holds a reset with a count left.
-// The hourly watcher (harness com.exobrain.limit-reset) spends one at the wall
-// or before it expires; this is the hand path. A click posts to
-// /limit-reset/claim, which runs bin/limit-reset for that grant id.
-let _lrLast = "";
-let _lrResult = null;   // {id, text, ts} shown for a few seconds after a click
+// ---- Resets chip + card (the plan's /limit-reset grants) ---------------------
+// The chip exists only while the account holds a reset with a count left. The
+// card lists each grant with its use-by date and a Use now button. The hourly
+// watcher (harness com.exobrain.limit-reset) spends one at the wall or before it
+// expires; this is the hand path. A click posts to /limit-reset/claim, which
+// runs bin/limit-reset for that grant id.
+let _lrGrants = [];
+let _lrState = null;
+let _lrResult = null;   // {id, text, ts} shown under that grant after a click
 function _lrKindName(g) {
   const t = g.type || "";
   const label = (g.label || "").toLowerCase();
@@ -5007,68 +5009,74 @@ function _lrKindName(g) {
   return g.label || "reset";
 }
 function renderLimitResets(lr) {
-  const box = document.getElementById("limitResets");
-  if (!box) return;
-  const grants = (lr && lr.grants) || [];
-  if (!grants.length) {
-    if (!box.hidden) { box.hidden = true; box.textContent = ""; _lrLast = ""; }
+  const chip = document.getElementById("resets");
+  if (!chip) return;
+  _lrGrants = (lr && lr.grants) || [];
+  _lrState = lr || null;
+  if (!_lrGrants.length) {
+    chip.hidden = true;
+    const card = $("#resetsCard");
+    if (card) card.hidden = true;
     return;
   }
-  const key = JSON.stringify([grants, lr.at_limit, lr.exhausted, _lrResult]);
-  if (key === _lrLast) return;
-  _lrLast = key;
-  box.textContent = "";
-  const head = document.createElement("span");
-  head.className = "lr-head";
-  head.innerHTML = '<span class="msi">bolt</span>';
-  head.appendChild(document.createTextNode(grants.length === 1 ? "Limit reset held" : "Limit resets held"));
-  box.appendChild(head);
+  const total = _lrGrants.reduce((n, g) => n + (g.resets_left || 0), 0);
+  chip.textContent = total === 1 ? "Resets · 1" : "Resets · " + total;
+  chip.dataset.short = "Resets";
+  const soonest = _lrGrants.map((g) => Date.parse(g.ends_at || "")).filter(Number.isFinite).sort()[0];
+  chip.title = "Limit resets the plan holds · click to see and use them"
+    + (soonest ? " · first expires " + new Date(soonest).toLocaleString() : "");
+  chip.hidden = false;
+  if (!$("#resetsCard").hidden) renderResetsCard();
+}
+function renderResetsCard() {
+  const body = $("#resetsBody");
+  if (!body) return;
+  body.textContent = "";
+  const lr = _lrState || {};
+  const atLimit = !!(lr.at_limit || (lr.exhausted || []).length);
+  if (atLimit) body.appendChild(el("div", "lr-at", "You are at a limit (" + esc((lr.exhausted || []).join(", ") || "plan") + ")"));
   const now = Date.now();
-  for (const g of grants) {
-    const row = document.createElement("span");
-    row.className = "lr-grant";
+  for (const g of _lrGrants) {
+    const row = el("div", "lr-grant");
     const n = g.resets_left || 0;
-    const name = _lrKindName(g) + (n === 1 ? "" : "s");
-    row.appendChild(document.createTextNode(`${n} ${name}`));
-    if (g.ends_at) {
-      const t = Date.parse(g.ends_at);
-      const when = document.createElement("span");
-      when.className = "lr-when";
-      if (Number.isFinite(t)) {
-        const left = t - now;
-        if (left < 24 * 3600e3) when.classList.add("soon");
-        when.textContent = `· use by ${new Date(t).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` +
-          (left < 48 * 3600e3 ? ` (in ${fmtResetRel(t / 1000)})` : "");
-      }
+    row.appendChild(el("div", "lr-name", esc(n + " " + _lrKindName(g) + (n === 1 ? "" : "s"))));
+    const t = Date.parse(g.ends_at || "");
+    if (Number.isFinite(t)) {
+      const left = t - now;
+      const when = el("div", "lr-when" + (left < 24 * 3600e3 ? " soon" : ""),
+        "use by " + esc(new Date(t).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))
+        + (left < 48 * 3600e3 ? " (in " + esc(fmtResetRel(t / 1000)) + ")" : ""));
       row.appendChild(when);
     }
-    const how = document.createElement("span");
-    how.className = "lr-when";
-    how.textContent = g.paused ? "· paused"
-      : g.unavailable_reason ? `· not usable: ${g.unavailable_reason}`
-      : !g.usable_now ? "· not usable now"
-      : (lr.at_limit || (lr.exhausted || []).length) ? "· you are at a limit"
-      : g.use_requires_limit ? "· works at a limit" : "· works any time";
-    row.appendChild(how);
-    const btn = document.createElement("button");
-    btn.className = "lr-use";
+    const how = g.paused ? "paused"
+      : g.unavailable_reason ? "not usable: " + g.unavailable_reason
+      : !g.usable_now ? "not usable now"
+      : g.use_requires_limit ? "works at a limit" : "works any time";
+    const ctl = el("div", "lr-row");
+    ctl.appendChild(el("span", "lr-when", esc(how)));
+    const btn = el("button", "perm-btn", "");
     btn.type = "button";
-    const early = g.use_requires_limit && !(lr.at_limit || (lr.exhausted || []).length);
+    const early = g.use_requires_limit && !atLimit;
     btn.textContent = early ? "Try now" : "Use now";
     btn.title = early ? "The server only honors this one at a limit; it will say so if not"
                       : "Refill the plan's limits now with this reset";
     btn.disabled = !!(g.paused || g.unavailable_reason || !g.usable_now);
     btn.addEventListener("click", () => claimLimitReset(g.id, btn, !g.use_requires_limit));
-    row.appendChild(btn);
-    if (_lrResult && _lrResult.id === g.id && now - _lrResult.ts < 20000) {
-      const res = document.createElement("span");
-      res.className = "lr-result";
-      res.textContent = _lrResult.text;
-      row.appendChild(res);
-    }
-    box.appendChild(row);
+    ctl.appendChild(btn);
+    if (_lrResult && _lrResult.id === g.id && now - _lrResult.ts < 30000) ctl.appendChild(el("span", "lr-result", esc(_lrResult.text)));
+    row.appendChild(ctl);
+    body.appendChild(row);
   }
-  box.hidden = false;
+  if (!_lrGrants.length) body.appendChild(el("div", "lr-when", "No resets on the plan right now."));
+}
+function openResetsCard(ev) {
+  const card = $("#resetsCard");
+  if (!card.hidden) { card.hidden = true; return; }   // click the trigger again to dismiss
+  closeAnchoredCards("#resetsCard");
+  renderResetsCard();
+  card.hidden = false;
+  anchorCard(card, (ev && ev.currentTarget) || $("#resets"));
+  pollUsage();
 }
 async function claimLimitReset(id, btn, anytime) {
   if (btn) { btn.disabled = true; btn.textContent = "Using…"; }
@@ -5081,7 +5089,7 @@ async function claimLimitReset(id, btn, anytime) {
     text = j.ok ? `used: ${j.text}` : (j.text || "not used");
   } catch (e) { text = "request failed"; }
   _lrResult = { id, text, ts: Date.now() };
-  _lrLast = "";
+  renderResetsCard();
   setTimeout(pollUsage, 1500);
   setTimeout(pollUsage, 6000);
   pollUsage();
@@ -6057,6 +6065,7 @@ const ANCHORED_CARDS = [
   { card: "#ctxCard",   trigger: "#ctx"   },
   { card: "#shareCard", trigger: "#shareBtn" },
   { card: "#usageCard", trigger: "#r5h, #r7d" },
+  { card: "#resetsCard", trigger: "#resets" },
 ];
 function closeAnchoredCards(except) {
   ANCHORED_CARDS.forEach(({ card }) => {
@@ -6117,6 +6126,8 @@ $("#modelClose").addEventListener("click", () => { $("#modelCard").hidden = true
 // The model info badge doubles as the switcher (the old dedicated toolbar button
 // was redundant with this, so it's gone).
 $("#model").addEventListener("click", openModelCard);
+$("#resets").addEventListener("click", openResetsCard);
+$("#resetsClose").addEventListener("click", () => { $("#resetsCard").hidden = true; });
 
 // The perm info badge opens the permission-mode picker.
 function openPermCard(ev) {
@@ -6261,7 +6272,7 @@ function closeTopOverlay() {
   if (closeRailDrawer()) return true;   // phone: the chat drawer sits over everything
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
-  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#usageCard", "#shareCard", "#diffCard", "#capPanel", "#bmPanel", "#artPanel"]) {
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#usageCard", "#resetsCard", "#shareCard", "#diffCard", "#capPanel", "#bmPanel", "#artPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }
@@ -8065,6 +8076,10 @@ function openChatSheet() {
     meter("5 hours", "#r5h", () => { const b = $("#r5h"); if (b) b.click(); });
     meter("7 days", "#r7d", () => { const b = $("#r7d"); if (b) b.click(); });
     if (meters.children.length) c.appendChild(meters);
+    // the Resets chip is hidden with the rest of .meta on a phone: same card from here
+    if ($("#resets") && !$("#resets").hidden) {
+      c.appendChild(R("bolt", "Resets", () => openResetsCard(anchor), { value: txt("#resets").replace(/^Resets\s*·\s*/, ""), chevron: true }));
+    }
     const grid = el("div", "sh-grid");
     const cell = (icon, label, run) => {
       const b = el("button", null, '<span class="msi">' + icon + "</span>" + esc(label));
