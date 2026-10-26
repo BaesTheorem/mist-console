@@ -5040,11 +5040,17 @@ function renderResetsCard() {
     const row = el("div", "lr-grant");
     const n = g.resets_left || 0;
     row.appendChild(el("div", "lr-name", esc(n + " " + _lrKindName(g) + (n === 1 ? "" : "s"))));
-    const t = Date.parse(g.ends_at || "");
+    // A use-by date with no time counts as the start of that day (local): the
+    // watcher redeems such a grant on the day before, and the card says so.
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test((g.ends_at || "").trim());
+    const t = dateOnly ? new Date(g.ends_at + "T00:00:00").getTime() : Date.parse(g.ends_at || "");
     if (Number.isFinite(t)) {
       const left = t - now;
       const when = el("div", "lr-when" + (left < 24 * 3600e3 ? " soon" : ""),
-        "use by " + esc(new Date(t).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))
+        "use by " + esc(new Date(t).toLocaleString([], dateOnly
+          ? { weekday: "short", month: "short", day: "numeric" }
+          : { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))
+        + (dateOnly ? " (no time given: gone at the start of that day)" : "")
         + (left < 48 * 3600e3 ? " (in " + esc(fmtResetRel(t / 1000)) + ")" : ""));
       row.appendChild(when);
     }
