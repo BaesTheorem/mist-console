@@ -24,6 +24,7 @@ INVARIANTS
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -38,6 +39,15 @@ INDEX_PATH = os.path.join(SNAP_DIR, "index.jsonl")
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm"}
+# /file takes its Content-Type from Python's mimetypes, which reads macOS's
+# /etc/apache2/mime.types: .flac comes out audio/x-flac and .m4a audio/mp4a-latm.
+# WebKit's canPlayType answers "" for both. A FLAC served as audio/x-flac stops
+# with MEDIA_ERR_SRC_NOT_SUPPORTED and plays as audio/flac; an .m4a plays either
+# way (WebKit sniffs the MP4 box), so it only gets its registered type (probed
+# in a system WKWebView, 2026-10-25).
+WEBKIT_TYPES = {".flac": "audio/flac", ".m4a": "audio/mp4"}
+for _ext, _type in WEBKIT_TYPES.items():
+    mimetypes.add_type(_type, _ext)
 # 3D models render inline through static/model.js (three.js). None of these
 # formats can carry script: STL is triangles, 3MF is zipped XML, OBJ is text,
 # glTF/GLB is JSON plus buffers.
