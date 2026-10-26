@@ -2550,7 +2550,35 @@ def usage():
     return jsonify({"available": bool(rl or live or util),
                     "five_hour": lim("five_hour"), "seven_day": lim("seven_day"),
                     "context_window_pct": cw.get("used_percentage"),
-                    "age_seconds": age})
+                    "age_seconds": age,
+                    "limit_resets": bridge.read_limit_resets()})
+
+
+LIMIT_RESET_TOOL = os.path.join(bridge.HARNESS, "bin", "limit-reset")
+
+
+@app.route("/limit-reset/claim", methods=["POST"])
+def limit_reset_claim():
+    """Spend one of the plan's limit resets by hand (the strip's Use-now button).
+    Runs the harness tool, which reads the account first and claims only a grant
+    the server offered; `force` uses it before a limit is reached (the CLI's
+    "use anyway"). Then the usage read runs again so the strip and badges update."""
+    body = request.get_json(silent=True) or {}
+    gid = str(body.get("grant_id") or "").strip()
+    args = [LIMIT_RESET_TOOL, "claim"]
+    if gid and all(c.isalnum() or c in "_-" for c in gid) and len(gid) <= 40:
+        args.append(gid)
+    elif body.get("force"):
+        args.append("--force")
+    else:
+        args.append("--auto")
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=90)
+    except Exception as e:
+        return jsonify({"ok": False, "text": "could not run limit-reset: %s" % e}), 500
+    threading.Thread(target=bridge._probe_rate_util, daemon=True).start()
+    text = (r.stdout.strip() or r.stderr.strip() or "no answer").splitlines()[-1]
+    return jsonify({"ok": r.returncode == 0, "rc": r.returncode, "text": text})
 
 
 # ---- bookmarks + checklists (see bookmarks.py for the addressing rule) -------

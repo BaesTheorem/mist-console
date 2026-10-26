@@ -59,6 +59,12 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
   <md-icon-button id="phoneNew" class="phone-only" touch-target="none" title="New chat" aria-label="New chat"><md-icon>edit_square</md-icon></md-icon-button>
 </header>
 
+<!-- Limit resets the plan holds (Claude Code's /limit-reset grants). Shown only
+     while a grant with a count left exists; app.js fills it from /usage and the
+     Use-now button posts to /limit-reset/claim. The hourly watcher spends one at
+     the wall or before it expires; this strip is the hand-redeem path. -->
+<div id="limitResets" class="limit-resets" role="status" hidden></div>
+
 <aside id="shareCard" hidden>
   <div class="capHead">share this chat <button id="shareClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
   <div id="shareBody" class="share-body">

@@ -156,6 +156,8 @@ LIMIT_WAITED=0
 # 5-hour or weekly window is at 100%. The gate fails closed.
 unset ANTHROPIC_API_KEY
 API_GATE="$HOME/Documents/Exobrain harness/bin/claude-api-gate"
+LIMIT_RESET="$HOME/Documents/Exobrain harness/bin/limit-reset"
+LIMIT_RESET_USED=0
 PLAN_LIMIT_RE='session limit|weekly limit|usage limit|hit your limit|limit reached|out of usage credits'
 API_MODE=0
 NOTIFY="$HOME/Documents/Exobrain harness/mist-voice/bin/mist-notify"
@@ -259,9 +261,22 @@ while :; do
 		exit "$RC"
 	fi
 
-	# Plan at its 5-hour or weekly limit: re-run once on the API credits. The
-	# gate decides from the usage endpoint, not from this text, so a routine
-	# that only writes one of these phrases cannot open it. Exit 3 = gate closed.
+	# Plan at its 5-hour or weekly limit: a held limit reset (the CLI's
+	# /limit-reset, bin/limit-reset) comes first, because it is free and the
+	# plan is the default. The claim reads the account before it acts, so this
+	# text alone cannot spend one. Exit 0 = a reset refilled the plan: retry at
+	# once on the plan, no attempt spent.
+	if [ "$LIMIT_RESET_USED" -eq 0 ] && [ -x "$LIMIT_RESET" ] && printf '%s' "$OUT" | grep -qiE "$PLAN_LIMIT_RE" \
+		&& "$LIMIT_RESET" claim --auto --quiet >/dev/null 2>&1; then
+		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: plan limit reached; a held limit reset refilled the plan, retrying."
+		LIMIT_RESET_USED=1
+		attempt=$((attempt - 1))
+		continue
+	fi
+
+	# Still at the limit: re-run once on the API credits. The gate decides from
+	# the usage endpoint, not from this text, so a routine that only writes one
+	# of these phrases cannot open it. Exit 3 = gate closed.
 	if [ "$API_MODE" -eq 0 ] && [ -x "$API_GATE" ] && printf '%s' "$OUT" | grep -qiE "$PLAN_LIMIT_RE" \
 		&& "$API_GATE" status >/dev/null 2>&1; then
 		echo "[$(date '+%Y-%m-%d %H:%M:%S')] $DIR: plan limit reached; re-running once on the API credits."

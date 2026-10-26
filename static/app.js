@@ -2759,9 +2759,17 @@ class Session {
     let expected = norm(this.model) || norm(lastInit && lastInit.model) || this.servedBase
       || norm(fb && fb.from && fb.from.model);
     if (!expected) { this.servedBase = norm(served); return; }
-    const isFallback = !!fb || norm(served) !== expected;
+    // Only the CLI's own "fallback" block starts a fallback. A served model that
+    // merely differs from the chat's choice is a switch by hand (the live
+    // set_model path, or a badge pick that landed before the chat's record
+    // caught up), and it used to light the badge and tag every bubble
+    // "served by" (Alex, 2026-10-26). Once a fallback is on, it stays on while
+    // turns keep coming back on that fallback model, and clears on the first
+    // turn served by anything else.
+    const isFallback = !!fb || (!!this.fallbackModel && norm(served) === this.fallbackModel
+                                && norm(served) !== expected);
     if (!isFallback) {
-      this.servedBase = this.servedBase || norm(served);
+      this.servedBase = norm(served);
       if (this.fallbackModel) { this.fallbackModel = ""; if (this.active) setFallbackBadge(""); }
       return;
     }
@@ -4973,11 +4981,110 @@ function applyRateEvent(info) {
   renderUsageBadges();
 }
 async function pollUsage() {
+  let u = null;
   try {
-    const u = await (await fetch("/usage")).json();
+    u = await (await fetch("/usage")).json();
     _usageCache = u && u.available ? u : null;
   } catch (_) { _usageCache = null; }
   renderUsageBadges();
+  renderLimitResets(u && u.limit_resets);
+}
+
+// ---- limit resets strip (the plan's /limit-reset grants) ---------------------
+// Shown under the top bar while the account holds a reset with a count left.
+// The hourly watcher (harness com.exobrain.limit-reset) spends one at the wall
+// or before it expires; this is the hand path. A click posts to
+// /limit-reset/claim, which runs bin/limit-reset for that grant id.
+let _lrLast = "";
+let _lrResult = null;   // {id, text, ts} shown for a few seconds after a click
+function _lrKindName(g) {
+  const t = g.type || "";
+  const label = (g.label || "").toLowerCase();
+  if (t === "session" || (!t && (g.clears || []).join() === "five_hour")) return "5-hour reset";
+  if (label.includes("fable")) return "Fable reset";
+  if (t === "weekly") return "weekly reset";
+  if (t === "full") return "full reset";
+  return g.label || "reset";
+}
+function renderLimitResets(lr) {
+  const box = document.getElementById("limitResets");
+  if (!box) return;
+  const grants = (lr && lr.grants) || [];
+  if (!grants.length) {
+    if (!box.hidden) { box.hidden = true; box.textContent = ""; _lrLast = ""; }
+    return;
+  }
+  const key = JSON.stringify([grants, lr.at_limit, lr.exhausted, _lrResult]);
+  if (key === _lrLast) return;
+  _lrLast = key;
+  box.textContent = "";
+  const head = document.createElement("span");
+  head.className = "lr-head";
+  head.innerHTML = '<span class="msi">bolt</span>';
+  head.appendChild(document.createTextNode(grants.length === 1 ? "Limit reset held" : "Limit resets held"));
+  box.appendChild(head);
+  const now = Date.now();
+  for (const g of grants) {
+    const row = document.createElement("span");
+    row.className = "lr-grant";
+    const n = g.resets_left || 0;
+    const name = _lrKindName(g) + (n === 1 ? "" : "s");
+    row.appendChild(document.createTextNode(`${n} ${name}`));
+    if (g.ends_at) {
+      const t = Date.parse(g.ends_at);
+      const when = document.createElement("span");
+      when.className = "lr-when";
+      if (Number.isFinite(t)) {
+        const left = t - now;
+        if (left < 24 * 3600e3) when.classList.add("soon");
+        when.textContent = `· use by ${new Date(t).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` +
+          (left < 48 * 3600e3 ? ` (in ${fmtResetRel(t / 1000)})` : "");
+      }
+      row.appendChild(when);
+    }
+    const how = document.createElement("span");
+    how.className = "lr-when";
+    how.textContent = g.paused ? "· paused"
+      : g.unavailable_reason ? `· not usable: ${g.unavailable_reason}`
+      : !g.usable_now ? "· not usable now"
+      : (lr.at_limit || (lr.exhausted || []).length) ? "· you are at a limit"
+      : g.use_requires_limit ? "· works at a limit" : "· works any time";
+    row.appendChild(how);
+    const btn = document.createElement("button");
+    btn.className = "lr-use";
+    btn.type = "button";
+    const early = g.use_requires_limit && !(lr.at_limit || (lr.exhausted || []).length);
+    btn.textContent = early ? "Try now" : "Use now";
+    btn.title = early ? "The server only honors this one at a limit; it will say so if not"
+                      : "Refill the plan's limits now with this reset";
+    btn.disabled = !!(g.paused || g.unavailable_reason || !g.usable_now);
+    btn.addEventListener("click", () => claimLimitReset(g.id, btn, !g.use_requires_limit));
+    row.appendChild(btn);
+    if (_lrResult && _lrResult.id === g.id && now - _lrResult.ts < 20000) {
+      const res = document.createElement("span");
+      res.className = "lr-result";
+      res.textContent = _lrResult.text;
+      row.appendChild(res);
+    }
+    box.appendChild(row);
+  }
+  box.hidden = false;
+}
+async function claimLimitReset(id, btn, anytime) {
+  if (btn) { btn.disabled = true; btn.textContent = "Using…"; }
+  let text = "no answer";
+  try {
+    const j = await (await fetch("/limit-reset/claim", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant_id: id, force: !!anytime }),
+    })).json();
+    text = j.ok ? `used: ${j.text}` : (j.text || "not used");
+  } catch (e) { text = "request failed"; }
+  _lrResult = { id, text, ts: Date.now() };
+  _lrLast = "";
+  setTimeout(pollUsage, 1500);
+  setTimeout(pollUsage, 6000);
+  pollUsage();
 }
 setInterval(pollUsage, 20000);           // re-read the merged usage cache often
 setInterval(renderUsageBadges, 15000);   // keep the reset times/countdowns fresh

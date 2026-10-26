@@ -15,7 +15,7 @@ class _Sync(threading.Thread):
 
 
 def _session(monkeypatch, gate_open):
-    monkeypatch.setattr(bridge, "api_gate_open", lambda: gate_open)
+    monkeypatch.setattr(bridge, "api_gate_status", lambda: (gate_open, "x"))
     monkeypatch.setattr(bridge.threading, "Thread", _Sync)
     s = bridge.ClaudeSession.__new__(bridge.ClaudeSession)
     s.api_mode = False
@@ -43,7 +43,7 @@ def test_limit_but_gate_closed_stays_on_plan(monkeypatch):
 
 def test_normal_turn_never_reads_gate(monkeypatch):
     s = _session(monkeypatch, True)
-    monkeypatch.setattr(bridge, "api_gate_open", lambda: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(bridge, "api_gate_status", lambda: (_ for _ in ()).throw(AssertionError))
     s._api_after_result({"type": "result", "is_error": False, "result": "usage limit text in a reply"})
     assert not s.api_mode
 
@@ -53,3 +53,12 @@ def test_api_chat_returns_to_plan_when_gate_closes(monkeypatch):
     s.api_mode = s._api_running = True
     s._api_after_result({"type": "result", "is_error": False, "result": "ok"})
     assert not s.api_mode and s.restarts
+
+
+def test_limit_refilled_by_a_reset_stays_on_plan_and_says_so(monkeypatch):
+    s = _session(monkeypatch, False)
+    monkeypatch.setattr(bridge, "api_gate_status",
+                        lambda: (False, "CLOSED: five_hour=0% seven_day=40%; limit reset applied, plan has capacity"))
+    s._api_after_result(LIMIT)
+    assert not s.api_mode and not s.restarts
+    assert any("limit reset" in e.get("text", "") for e in s.events)

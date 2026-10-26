@@ -32,13 +32,19 @@ PLAN_LIMIT_MARKERS = ("session limit", "weekly limit", "usage limit", "hit your 
                       "limit reached", "out of usage credits")
 
 
+def api_gate_status():
+    """(open, reason) from claude-api-gate. Fails closed. The gate spends a held
+    limit reset before it opens, and says so in the reason."""
+    try:
+        r = subprocess.run([API_GATE, "status"], capture_output=True, text=True, timeout=150)
+    except Exception:
+        return False, ""
+    return r.returncode == 0, r.stdout.strip()
+
+
 def api_gate_open():
     """True only when claude-api-gate says the plan is at its limit. Fails closed."""
-    try:
-        r = subprocess.run([API_GATE, "status"], capture_output=True, text=True, timeout=30)
-    except Exception:
-        return False
-    return r.returncode == 0
+    return api_gate_status()[0]
 
 
 def _find_claude():
@@ -496,10 +502,16 @@ def _probe_rate_util():
     token = _read_oauth_token()
     if not token:
         return
+    # cedar_ember=1 adds the plan's limit resets (the CLI's /limit-reset grants)
+    # to the same free read; the server only answers it to a CLI surface, so the
+    # request carries the CLI's own x-app and User-Agent. See bin/limit-reset
+    # in the harness for the claim side.
     req = urllib.request.Request(
-        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
         headers={"Authorization": "Bearer " + token,
-                 "anthropic-beta": "oauth-2025-04-20"})
+                 "anthropic-beta": "oauth-2025-04-20",
+                 "User-Agent": "claude-cli/%s (external, cli)" % _cli_version(),
+                 "x-app": "cli"})
     try:
         with v4first.opener.open(req, timeout=15) as resp:   # v4 first: an AAAA stall cost 15s a poll
             data = json.loads(resp.read().decode()) or {}
@@ -537,6 +549,7 @@ def _probe_rate_util():
                         "ts": now}
         except (TypeError, ValueError):
             continue
+    _write_limit_resets(data.get("cedar_ember"), now)
     if not rec:
         return
     tmp = RATE_UTIL_PATH + ".tmp.%d" % os.getpid()
@@ -546,6 +559,60 @@ def _probe_rate_util():
         os.replace(tmp, RATE_UTIL_PATH)
     except Exception:
         pass
+
+
+LIMIT_RESETS_PATH = os.path.join(DATA_DIR, "limit-resets.json")
+_cli_version_cache = {}
+
+
+def _cli_version():
+    """The installed CLI's version for the usage read's User-Agent (cached)."""
+    v = _cli_version_cache.get("v")
+    if v:
+        return v
+    v = "2.1.310"
+    try:
+        out = subprocess.run([_find_claude(), "--version"], capture_output=True, text=True, timeout=10)
+        first = (out.stdout.split() or [""])[0]
+        if first and first[0].isdigit():
+            v = first
+    except Exception:
+        pass
+    _cli_version_cache["v"] = v
+    return v
+
+
+def _write_limit_resets(block, now):
+    """Persist the usage read's limit-reset block (grants with a count left, the
+    at-limit state) for /usage and the top-bar strip. A missing block clears it,
+    so a grant that was spent elsewhere disappears on the next read."""
+    grants = []
+    if isinstance(block, dict):
+        for g in block.get("grants") or []:
+            if isinstance(g, dict) and isinstance(g.get("id"), str) and (g.get("resets_left") or 0) > 0:
+                grants.append({k: g.get(k) for k in ("id", "label", "type", "resets_left", "resets_total",
+                                                     "ends_at", "clears", "paused", "usable_now",
+                                                     "use_requires_limit", "unavailable_reason")})
+    rec = {"ts": now, "grants": grants,
+           "at_limit": bool(isinstance(block, dict) and block.get("at_limit")),
+           "exhausted": list((block or {}).get("exhausted") or []) if isinstance(block, dict) else [],
+           "ineligible_reason": (block or {}).get("ineligible_reason") if isinstance(block, dict) else None}
+    tmp = LIMIT_RESETS_PATH + ".tmp.%d" % os.getpid()
+    try:
+        with open(tmp, "w") as f:
+            json.dump(rec, f)
+        os.replace(tmp, LIMIT_RESETS_PATH)
+    except Exception:
+        pass
+
+
+def read_limit_resets():
+    try:
+        with open(LIMIT_RESETS_PATH) as f:
+            rec = json.load(f) or {}
+        return rec if isinstance(rec, dict) else {}
+    except Exception:
+        return {}
 
 
 def _probe_failed(why):
@@ -1206,7 +1273,11 @@ class ClaudeSession:
             return
 
         def decide():
-            is_open = api_gate_open()
+            is_open, why = api_gate_status()
+            if hit and not is_open and "limit reset applied" in why:
+                # The gate used a held limit reset: the plan is refilled.
+                self._broadcast({"type": "notice", "text": "Plan limit reached; a held limit reset refilled it. Send the message again."})
+                return
             if self._api_running and not is_open:
                 # The plan has capacity again: back to it at the next send.
                 self.api_mode = False
