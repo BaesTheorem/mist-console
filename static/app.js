@@ -6191,7 +6191,11 @@ async function renderCtxCard() {
   }
   const u = j.usage || {};
   const cats = Array.isArray(u.categories) ? u.categories : [];
-  const used = cats.reduce((a, c) => a + ((c && c.kind !== "free" && c.tokens) || 0), 0);
+  // Only kind "used" occupies the window. "deferred" tool schemas (300K+ of MCP
+  // tools) load on demand and "buffer" is the autocompact reserve; summing them
+  // read 429K on a chat at 87K. Prefer the CLI's own total when it sends one.
+  const used = (typeof u.totalTokens === "number") ? u.totalTokens
+    : cats.reduce((a, c) => a + ((c && c.kind === "used" && c.tokens) || 0), 0);
   const win = u.contextWindow || u.context_window || u.maxTokens || s.ctxWindow || 0;
   if (win) {
     row("used", used.toLocaleString() + " / " + win.toLocaleString());
@@ -6202,7 +6206,8 @@ async function renderCtxCard() {
     body.appendChild(bar);
   }
   cats.filter((c) => c && c.tokens).sort((a, b) => b.tokens - a.tokens)
-    .forEach((c) => row(String(c.name || "?"), Number(c.tokens).toLocaleString()));
+    .forEach((c) => row(String(c.name || "?") + (c.kind && c.kind !== "used" ? " (" + c.kind + ", not counted)" : ""),
+                        Number(c.tokens).toLocaleString()));
   Object.keys(u).forEach((k) => {
     if (k === "categories" || typeof u[k] !== "number" || /window|max/i.test(k)) return;
     row(k.replace(/([A-Z])/g, " $1").toLowerCase(), Number(u[k]).toLocaleString());
