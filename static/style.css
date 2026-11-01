@@ -1822,7 +1822,7 @@ html[data-shell="ios"] .shell-only { display: inline-block !important; }
 
 /* ---- phone, third pass: the top bar ----
    One row: menu, the chat's title, a status chip, settings. The badge strip
-   (model, permissions, thinking, status, context, 5h, 7d) no longer scrolls
+   (model, permissions, thinking, status, context, 7d) no longer scrolls
    sideways under a thumb; it folds out as a full-width row under the title
    when the chip is tapped, with finger-sized badges, and the chip itself
    mirrors the three things worth seeing at a glance: status, model, context. */

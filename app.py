@@ -2548,7 +2548,7 @@ def usage():
                 "pct_age_seconds": pct_age if pct is not None else None}
 
     return jsonify({"available": bool(rl or live or util),
-                    "five_hour": lim("five_hour"), "seven_day": lim("seven_day"),
+                    "seven_day": lim("seven_day"),
                     "context_window_pct": cw.get("used_percentage"),
                     "age_seconds": age,
                     "limit_resets": bridge.read_limit_resets()})

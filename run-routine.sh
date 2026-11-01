@@ -153,7 +153,7 @@ LIMIT_WAITED=0
 # API-credit fallback. The plan (OAuth) is the default, and ANTHROPIC_API_KEY
 # is never in this environment, because the CLI prefers a key when one is set.
 # Only claude-api-gate adds the key, only to one child, and only when the plan's
-# 5-hour or weekly window is at 100%. The gate fails closed.
+# weekly window is at 100%. The gate fails closed.
 unset ANTHROPIC_API_KEY
 API_GATE="$HOME/Documents/Exobrain harness/bin/claude-api-gate"
 LIMIT_RESET="$HOME/Documents/Exobrain harness/bin/limit-reset"
@@ -261,7 +261,7 @@ while :; do
 		exit "$RC"
 	fi
 
-	# Plan at its 5-hour or weekly limit: a held limit reset (the CLI's
+	# Plan at its weekly limit: a held limit reset (the CLI's
 	# /limit-reset, bin/limit-reset) comes first, because it is free and the
 	# plan is the default. The claim reads the account before it acts, so this
 	# text alone cannot spend one. Exit 0 = a reset refilled the plan: retry at

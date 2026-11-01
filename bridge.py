@@ -26,7 +26,7 @@ import v4first
 HARNESS = "/Users/alexhedtke/Documents/Exobrain harness"
 # API-credit fallback (see claude-api-gate's docstring). Chats run on the plan.
 # A chat moves to the API key only after a turn fails on the plan limit AND the
-# gate reads a 5-hour or weekly window at 100%; it moves back when the gate closes.
+# gate reads the weekly window at 100%; it moves back when the gate closes.
 API_GATE = os.path.join(HARNESS, "bin", "claude-api-gate")
 PLAN_LIMIT_MARKERS = ("session limit", "weekly limit", "usage limit", "hit your limit",
                       "limit reached", "out of usage credits")
@@ -380,7 +380,7 @@ def fold_history(events, cap=None):
 # WHY: the usage badges' % comes from ~/.claude/usage-cache.json, which only the
 # interactive-CLI statusline refreshes. During Console-only use that cache goes
 # stale and, once its window's resets_at passes, the front-end drops it and the
-# 5h/7d badges go BLANK. The headless stream still emits rate_limit_event every
+# 7d badge goes BLANK. The headless stream still emits rate_limit_event every
 # turn carrying the live resets_at + status (but not the %), so we persist that
 # here and /usage merges it — keeping a fresh reset countdown + blocked status
 # (and preserving the cached % while the window hasn't rolled) so the badge
@@ -391,8 +391,10 @@ _rate_lock = threading.Lock()
 
 def record_rate_limit(info):
     """Persist a live rate_limit_event's resets_at + status per window (atomic)."""
+    # Only the weekly window exists: Anthropic removed the 5-hour window on
+    # 2026-11-01, so a stray five_hour event is ignored.
     t = (info or {}).get("rateLimitType")
-    if t not in ("five_hour", "seven_day"):
+    if t != "seven_day":
         return
     now = int(time.time())
     rec = {"resets_at": info.get("resetsAt"), "status": info.get("status"),
@@ -400,13 +402,13 @@ def record_rate_limit(info):
     if not rec["resets_at"]:
         return
     # Threshold events (seven_day ones, in practice) also carry the live
-    # utilization of BOTH windows under unifiedWindows. Keep it: /usage treats
+    # utilization of the other windows under unifiedWindows. Keep it: /usage treats
     # it as a probe-quality % and it costs no API call.
     if isinstance(info.get("utilization"), (int, float)):
         rec["utilization"] = float(info["utilization"])
     extra = {}
     for k, w in (info.get("unifiedWindows") or {}).items():
-        if k == t or k not in ("five_hour", "seven_day") or not isinstance(w, dict):
+        if k == t or k != "seven_day" or not isinstance(w, dict):
             continue
         if isinstance(w.get("utilization"), (int, float)) and w.get("resetsAt"):
             extra[k] = {"utilization": float(w["utilization"]),
@@ -429,7 +431,7 @@ def record_rate_limit(info):
             os.replace(tmp, RATE_LIVE_PATH)
         except Exception:
             pass
-    # A rate_limit_event means a real turn just ran, so the 5h/7d windows are
+    # A rate_limit_event means a real turn just ran, so the 7d window is
     # ACTIVE right now — the one safe moment to read the live utilization %.
     maybe_probe_rate_util()
 
@@ -535,7 +537,7 @@ def _probe_rate_util():
         # extra read per half interval.
         st["next_ok"] = time.time() + st["interval"] / 2
     rec, now = {}, int(time.time())
-    for win in ("five_hour", "seven_day"):
+    for win in ("seven_day",):
         w = data.get(win) or {}
         util = w.get("utilization")
         if util is None:

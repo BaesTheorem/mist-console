@@ -942,7 +942,7 @@
     const fmtReset = (iso) => { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? "" : " · resets " + (typeof fmtResetRel === "function" ? fmtResetRel(d.getTime() / 1000) : d.toLocaleString()); };
     body.appendChild(el("div", "u-head", "plan windows" + (u.subscription_type ? " · " + esc(u.subscription_type) : "")));
     const rl = u.rate_limits || {};
-    const names = { five_hour: "5 hours", seven_day: "7 days", seven_day_oauth_apps: "7 days · apps", seven_day_opus: "7 days · Opus", seven_day_sonnet: "7 days · Sonnet", seven_day_cowork: "7 days · Cowork" };
+    const names = { seven_day: "7 days", seven_day_oauth_apps: "7 days · apps", seven_day_opus: "7 days · Opus", seven_day_sonnet: "7 days · Sonnet", seven_day_cowork: "7 days · Cowork" };
     let any = false;
     Object.keys(rl).forEach((k) => {
       const w = rl[k];
@@ -969,14 +969,14 @@
     if (typeof closeAnchoredCards === "function") closeAnchoredCards("#usageCard");
     renderUsageCard();
     card.hidden = false;
-    if (typeof anchorCard === "function") anchorCard(card, (ev && ev.currentTarget) || $("#r5h"));
+    if (typeof anchorCard === "function") anchorCard(card, (ev && ev.currentTarget) || $("#r7d"));
   }
-  ["#r5h", "#r7d"].forEach((id) => { const b = $(id); if (b) b.addEventListener("click", openUsageCard); });
+  ["#r7d"].forEach((id) => { const b = $(id); if (b) b.addEventListener("click", openUsageCard); });
   const usageClose = $("#usageClose"); if (usageClose) usageClose.addEventListener("click", () => { $("#usageCard").hidden = true; });
   const usageRefresh = $("#usageRefresh"); if (usageRefresh) usageRefresh.addEventListener("click", renderUsageCard);
   document.addEventListener("pointerdown", (e) => {
     const c = $("#usageCard");
-    if (c && !c.hidden && !(e.target.closest && e.target.closest("#usageCard, #r5h, #r7d"))) c.hidden = true;
+    if (c && !c.hidden && !(e.target.closest && e.target.closest("#usageCard, #r7d"))) c.hidden = true;
   });
 
   /* ------------------------------------------------------------------ */

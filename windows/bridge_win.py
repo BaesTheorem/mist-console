@@ -111,7 +111,7 @@ _rate_lock = threading.Lock()
 def record_rate_limit(info):
     """Persist a live rate_limit_event's resets_at + status per window (atomic)."""
     t = (info or {}).get("rateLimitType")
-    if t not in ("five_hour", "seven_day"):
+    if t != "seven_day":   # the 5-hour window is gone (2026-11-01)
         return
     rec = {"resets_at": info.get("resetsAt"), "status": info.get("status"),
            "ts": int(time.time())}
@@ -131,7 +131,7 @@ def record_rate_limit(info):
             os.replace(tmp, RATE_LIVE_PATH)
         except Exception:
             pass
-    # A rate_limit_event means a real turn just ran, so the 5h/7d windows are
+    # A rate_limit_event means a real turn just ran, so the 7d window is
     # active right now: the one safe moment to read the live utilization %.
     maybe_probe_rate_util()
 
@@ -175,7 +175,7 @@ def _probe_rate_util():
     except Exception:
         return
     rec, now = {}, int(time.time())
-    for win, tag in (("five_hour", "5h"), ("seven_day", "7d")):
+    for win, tag in (("seven_day", "7d"),):
         util = hdrs.get("anthropic-ratelimit-unified-%s-utilization" % tag)
         if util is None:
             continue

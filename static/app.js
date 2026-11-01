@@ -185,7 +185,7 @@ function updateJumpBtn() {
         s1 = t.replace(/⚙ (\d+) running/, "⚙$1 running");
         s2 = t.replace(/⚙ (\d+) running/, "⚙$1"); break;
       case "ctx": s2 = t.replace(/(\d+\.\d+)%/, (_, n) => Math.round(parseFloat(n)) + "%"); break;
-      case "r5h": case "r7d":
+      case "r7d":
         s1 = t.replace(" limit reached", " limit").replace(" · resets ", " · ");
         s2 = t.replace(" limit reached", " limit").replace(/ · resets .*$/, ""); break;
     }
@@ -4886,7 +4886,7 @@ function fmtResetExact(ts) {
 // /usage cache (`used_percentage`) is only a fallback before the first live event,
 // since it's refreshed solely by the interactive CLI and is often very stale.
 let _usageCache = null;
-const _liveRate = { five_hour: null, seven_day: null };  // {resetsAt, status, util}
+const _liveRate = { seven_day: null };  // {resetsAt, status, util}
 // "allowed_warning" means you've crossed a usage threshold but are STILL allowed —
 // it is not a block. Only a status outside this set is a real limit-reached.
 const _ALLOWED_STATUS = { allowed: 1, allowed_warning: 1 };
@@ -4951,7 +4951,6 @@ function _renderRateBadge(sel, label, key, fullName) {
   el.title = fullName + srcNote + resetNote;
 }
 function renderUsageBadges() {
-  _renderRateBadge("#r5h", "5h", "five_hour", "5-hour limit");
   _renderRateBadge("#r7d", "7d", "seven_day", "Weekly (7-day) limit");
 }
 function applyRateEvent(info) {
@@ -4967,7 +4966,7 @@ function applyRateEvent(info) {
     ts: now,
   };
   // A threshold event also carries `unifiedWindows`: the current utilization and
-  // reset of BOTH windows. Free, fresh data for the other badge; take it, but
+  // reset of every window. Free, fresh data for the other badge; take it, but
   // never let it overwrite that window's own status with a guess.
   const uw = info.unifiedWindows || {};
   for (const k of Object.keys(_liveRate)) {
@@ -5002,7 +5001,6 @@ let _lrResult = null;   // {id, text, ts} shown under that grant after a click
 function _lrKindName(g) {
   const t = g.type || "";
   const label = (g.label || "").toLowerCase();
-  if (t === "session" || (!t && (g.clears || []).join() === "five_hour")) return "5-hour reset";
   if (label.includes("fable")) return "Fable reset";
   if (t === "weekly") return "weekly reset";
   if (t === "full") return "full reset";
@@ -6070,7 +6068,7 @@ const ANCHORED_CARDS = [
   { card: "#thinkCard", trigger: "#think" },
   { card: "#ctxCard",   trigger: "#ctx"   },
   { card: "#shareCard", trigger: "#shareBtn" },
-  { card: "#usageCard", trigger: "#r5h, #r7d" },
+  { card: "#usageCard", trigger: "#r7d" },
   { card: "#resetsCard", trigger: "#resets" },
 ];
 function closeAnchoredCards(except) {
@@ -8079,7 +8077,6 @@ function openChatSheet() {
       meters.appendChild(b);
     };
     meter("Context", "#ctx", () => openCtxCard(anchor));
-    meter("5 hours", "#r5h", () => { const b = $("#r5h"); if (b) b.click(); });
     meter("7 days", "#r7d", () => { const b = $("#r7d"); if (b) b.click(); });
     if (meters.children.length) c.appendChild(meters);
     // the Resets chip is hidden with the rest of .meta on a phone: same card from here

@@ -58,7 +58,7 @@ def test_api_chat_returns_to_plan_when_gate_closes(monkeypatch):
 def test_limit_refilled_by_a_reset_stays_on_plan_and_says_so(monkeypatch):
     s = _session(monkeypatch, False)
     monkeypatch.setattr(bridge, "api_gate_status",
-                        lambda: (False, "CLOSED: five_hour=0% seven_day=40%; limit reset applied, plan has capacity"))
+                        lambda: (False, "CLOSED: seven_day=40%; limit reset applied, plan has capacity"))
     s._api_after_result(LIMIT)
     assert not s.api_mode and not s.restarts
     assert any("limit reset" in e.get("text", "") for e in s.events)

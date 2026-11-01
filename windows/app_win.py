@@ -884,7 +884,7 @@ def usage():
                 "pct_source": pct_source, "pct_age_seconds": pct_age}
 
     return jsonify({"available": bool(rl or live or util),
-                    "five_hour": lim("five_hour"), "seven_day": lim("seven_day"),
+                    "seven_day": lim("seven_day"),
                     "context_window_pct": cw.get("used_percentage"),
                     "age_seconds": age})
 
