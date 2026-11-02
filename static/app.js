@@ -724,6 +724,11 @@ window.addEventListener("pointerup", () => setTimeout(() => {
 const recipeData = new Map();    // rid -> parsed recipe object
 const recipeTimers = new Map();  // timer id -> {dur, endAt, remaining, state}
 const recipeChecks = new Set();  // "rid:idx" of checked-off ingredients
+const recipeViews = new Map();   // rid -> "list" | "cfe" (the Cooking for Engineers table, static/cfe.js)
+// A new card opens in the view Alex picked last, so a table person stays in tables.
+function recipeViewDefault() {
+  try { return localStorage.getItem("mist.recipeView") === "cfe" ? "cfe" : "list"; } catch (_) { return "list"; }
+}
 
 function recipeSlug(s) {
   return String(s || "recipe").toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -831,23 +836,89 @@ function recipeCardHTML(obj) {
   if (time.prep) meta.push("prep " + time.prep);
   if (time.cook) meta.push("cook " + time.cook);
   if (time.total) meta.push("total " + time.total);
-  const steps = (obj.steps || []).map((s, i) =>
-    '<li class="rc-step">' + stepHTML(rid, i, s) + "</li>").join("");
-  return '<div class="recipe-card" data-rid="' + esc(rid) + '">' +
+  const hasCfe = cfeUsable(obj);
+  const view = hasCfe ? (recipeViews.get(rid) || recipeViewDefault()) : "list";
+  return '<div class="recipe-card' + (view === "cfe" ? " rc-in-cfe" : "") + '" data-rid="' + esc(rid) + '">' +
     '<div class="rc-head">' +
       '<span class="rc-glyph msi">restaurant</span>' +
       '<div class="rc-titles"><div class="rc-title">' + esc(obj.title || "Recipe") + "</div>" +
         (meta.length ? '<div class="rc-meta">' + esc(meta.join(" · ")) + "</div>" : "") + "</div>" +
+      (hasCfe ? recipeViewToggleHTML(rid, view) : "") +
       '<button type="button" class="rc-cook-btn" data-cook="' + esc(rid) + '">' +
         '<span class="msi">skillet</span> cooking mode</button>' +
     "</div>" +
-    '<div class="rc-body">' +
+    recipeBodyHTML(rid, obj, view) +
+    (obj.notes ? '<div class="rc-notes">' + esc(String(obj.notes)) + "</div>" : "") +
+  "</div>";
+}
+// The card body in one view: "list" (ingredients + steps) or "cfe" (the table).
+function recipeBodyHTML(rid, obj, view) {
+  if (view === "cfe") return '<div class="rc-body rc-cfe">' + cfeTableHTML(rid, obj) + "</div>";
+  const steps = (obj.steps || []).map((s, i) =>
+    '<li class="rc-step">' + stepHTML(rid, i, s) + "</li>").join("");
+  return '<div class="rc-body">' +
       '<div class="rc-col rc-ings"><div class="rc-col-head">ingredients</div><ul>' +
         ingredientRows(rid, obj.ingredients) + "</ul></div>" +
       '<div class="rc-col rc-steps"><div class="rc-col-head">steps</div><ol>' + steps + "</ol></div>" +
-    "</div>" +
-    (obj.notes ? '<div class="rc-notes">' + esc(String(obj.notes)) + "</div>" : "") +
-  "</div>";
+    "</div>";
+}
+function recipeViewToggleHTML(rid, view) {
+  const b = (v, icon, label, title) =>
+    '<button type="button" class="rc-view-btn' + (view === v ? " on" : "") + '" data-rview="' + v +
+    '" data-rid="' + esc(rid) + '" aria-pressed="' + (view === v) + '" title="' + title + '">' +
+    '<span class="msi">' + icon + "</span> " + label + "</button>";
+  return '<div class="rc-view" role="group" aria-label="Recipe view">' +
+    b("list", "list", "list", "Ingredients and steps") +
+    b("cfe", "table", "table", "Cooking for Engineers table") + "</div>";
+}
+// The Cooking for Engineers view: one table per root (normally one), laid out
+// by cfeLayout (static/cfe.js). Ingredient cells reuse the list view's checkbox
+// row (same data-ing key, so a check shows in both views); op cells and setup
+// rows get timer chips through stepHTML under their own ids (rid:cfe:k, rid:cfeb:i).
+function cfeTableHTML(rid, obj) {
+  const before = cfeBefore(obj);
+  return '<div class="cfe-scroll">' + cfeLayout(obj).map((t, n) => {
+    let html = '<table class="cfe-table">';
+    if (n === 0) before.forEach((text, i) => {
+      html += '<tr><td class="cfe-before" colspan="' + t.cols + '">' + stepHTML(rid + ":cfeb", i, text) + "</td></tr>";
+    });
+    const byRow = new Map();
+    t.cells.forEach((c) => { if (!byRow.has(c.r)) byRow.set(c.r, []); byRow.get(c.r).push(c); });
+    for (let r = 0; r < t.rows; r++) {
+      html += "<tr>" + (byRow.get(r) || []).map((c) => {
+        const span = (c.rs > 1 ? ' rowspan="' + c.rs + '"' : "") + (c.cs > 1 ? ' colspan="' + c.cs + '"' : "");
+        if (c.kind === "ing") {
+          const key = rid + ":" + c.index;
+          const on = recipeChecks.has(key);
+          return '<td class="cfe-ing"' + span + '><div class="rc-ing' + (on ? " checked" : "") +
+            '" data-ing="' + esc(key) + '"><span class="rc-box msi">' + (on ? "check_box" : "check_box_outline_blank") +
+            '</span><span class="rc-ing-text">' + esc(c.text) + "</span></div></td>";
+        }
+        return '<td class="cfe-op"' + span + ">" +
+          stepHTML(rid + ":cfe", c.index, c.timer ? { text: c.text, timer: c.timer } : c.text) + "</td>";
+      }).join("") + "</tr>";
+    }
+    return html + "</table>";
+  }).join("") + "</div>";
+}
+// Switch every card of this recipe in place (finished messages keep their DOM;
+// a streaming one rebuilds from recipeCardHTML, which reads recipeViews).
+function setRecipeView(rid, view) {
+  const obj = recipeData.get(rid);
+  if (!obj || (view !== "cfe" && view !== "list")) return;
+  recipeViews.set(rid, view);
+  try { localStorage.setItem("mist.recipeView", view); } catch (_) {}
+  document.querySelectorAll('.recipe-card[data-rid="' + CSS.escape(rid) + '"]').forEach((card) => {
+    const body = card.querySelector(".rc-body");
+    if (body) body.outerHTML = recipeBodyHTML(rid, obj, view);
+    card.classList.toggle("rc-in-cfe", view === "cfe");
+    card.querySelectorAll("[data-rview]").forEach((b) => {
+      const on = b.getAttribute("data-rview") === view;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
+  });
+  paintTimers(); paintChecks();
 }
 
 /* inline-only formatting, used inside table cells where the block passes don't run */
@@ -6642,6 +6713,8 @@ setInterval(() => {
   if (act && act.current && act.logEl.querySelector(".tcb")) hydrateTaskBoxes(act.logEl, act);
 }, 1000);
 function handleRecipeClick(e) {
+  const vbtn = e.target.closest("[data-rview]");
+  if (vbtn) { setRecipeView(vbtn.getAttribute("data-rid"), vbtn.getAttribute("data-rview")); return true; }
   const reset = e.target.closest(".rt-reset");
   if (reset) { e.stopPropagation(); resetTimer(reset.closest("[data-rt]").getAttribute("data-rt")); return true; }
   const chip = e.target.closest("[data-rt]");

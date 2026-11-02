@@ -706,8 +706,17 @@ RECIPE_PROMPT = (
     '"steps": [{"text": str, "timer": seconds} or str, ...], "notes": str}\n'
     "Set \"timer\" (integer seconds) on every step that involves timed waiting "
     "(simmer, bake, rest, proof); omit it otherwise. Only title, ingredients, "
-    "and steps are required. Keep prose around the block brief — the card IS "
-    "the recipe. Use the block for any real recipe, not for one-line food tips."
+    "and steps are required. Keep prose around the block brief: the card IS "
+    "the recipe. Use the block for any real recipe, not for one-line food tips.\n"
+    "Also add \"cfe\", which gives the card its Cooking for Engineers table view: "
+    '{"before": [str], "ops": [{"op": str, "in": [...], "timer": seconds, "name": str}]}. '
+    "An int in \"in\" is an ingredient index (the flattened list, from 0); \"@k\" is "
+    "the result of op k (earlier ops only). Each ingredient goes into exactly one op, "
+    "each op except the last feeds exactly one later op, and the last op is the "
+    "finished dish. \"op\" is a short verb phrase (\"whisk\", \"simmer 10 min\"); "
+    "\"before\" holds setup steps (preheat the oven); \"name\" labels a sub-recipe. "
+    "For a recipe in the vault, run `recipes/bin/recipe card \"<title>\"` and paste "
+    "its fence instead of typing the recipe."
 )
 
 # Markdown task lines (`- [ ] item`) render as real checkboxes whose state is

@@ -204,6 +204,21 @@ and are shared between the card and the overlay (a timer started in one is
 already ticking in the other). A parse failure falls back to a plain code block;
 a still-streaming recipe shows a "plating…" stub instead of raw JSON.
 
+**list / table toggle (Cooking for Engineers).** A recipe with a `cfe` field
+gets a two-button toggle in the card header. **table** swaps the body for a
+Cooking for Engineers table (Michael Chu's format): ingredients down the left,
+each operation in the column after its inputs, spanning the rows it combines,
+and setup steps ("preheat the oven") as full-width rows on top. The contract is
+the harness's `recipes/recipekit/model.py`: `"cfe": {"before": [str], "ops":
+[{"op", "in", "timer", "name"}]}`, where an int input is an ingredient index and
+`"@k"` is the result of op k. `static/cfe.js` lays the table out with the same
+rules as recipe_grid, which draws the vault's tables, and
+`tests/test_cfe_layout.py` checks the two cell for cell. Ingredient cells are
+the list view's checkbox rows (same keys, so a check shows in both views), and
+an operation with a timer or a duration gets a chip. The card remembers the
+last view picked (`localStorage` `mist.recipeView`). The vault's recipe notes
+make the fence: `recipes/bin/recipe card "<title>"` in the harness.
+
 ## Progress bars (in-place, not a scroll of ticks)
 
 A download, upload, or install renders as **one element that updates in place**: a
@@ -626,6 +641,7 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | Artifacts drawer | top-bar button | chat-details sheet, **Artifacts**, or swipe from the right edge |
 | Permission cards (Allow, Deny, Chat about this) | inline, plus a banner with the same buttons | inline; the button row wraps to a second line on a narrow screen |
 | Inline images, audio, video, recipe cards, task checkboxes, progress bars, per-turn time stamps | inline | inline, same markup |
+| Recipe card table view (Cooking for Engineers) | toggle in the card header | same toggle; the header wraps to a second line, and the table scrolls sideways with the ingredient column pinned (`position: sticky`) |
 | 3D models | drag orbits, wheel zooms, double-click resets, tools on hover | a sideways drag orbits, a vertical drag scrolls the chat (`touch-action: pan-y`), pinch zooms, double-tap resets, tools always shown at 44px (`@media (hover: none)`) |
 | PDFs | inline viewer in the bubble, 520px tall, attachment card under it; drawer tile opens a full-size preview | same viewer at 60vh; scrolling inside the frame scrolls the PDF, outside it scrolls the chat |
 | Save a file | copies into the Mac's `~/Downloads` | the shell downloads it over the pairing token and opens the share sheet (`ArtifactSaver.swift`, `shellSave` in app.js) |

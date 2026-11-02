@@ -1132,6 +1132,39 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   padding: 7px 12px; margin: 8px 0; color: var(--dim); font-size: 12px; }
 .recipe-stub .msi { color: var(--teal); animation: pulse 1.4s ease-in-out infinite; }
 
+/* recipe card: the list / table toggle and the Cooking for Engineers table
+   (static/cfe.js lays it out). No new tokens: the card's hairlines, teal for
+   structure and operations, square corners, the body face. */
+.rc-view { flex: 0 0 auto; display: inline-flex; border: 1px solid var(--teal); }
+.rc-view-btn {
+  font-family: var(--mono); font-size: 12px; cursor: pointer; border: 0; padding: 6px 10px;
+  background: var(--md-sys-color-surface-container-lowest); color: var(--dim);
+}
+.rc-view-btn + .rc-view-btn { border-left: 1px solid var(--teal); }
+.rc-view-btn:hover { color: var(--teal); }
+.rc-view-btn.on { color: var(--teal); background: color-mix(in srgb, var(--md-sys-color-primary) 14%, var(--md-sys-color-surface-container-high)); }
+.rc-view-btn .msi { font-size: 14px; vertical-align: -2px; }
+.rc-body.rc-cfe { display: block; padding: 10px 12px; }
+.cfe-scroll { overflow-x: auto; }
+.cfe-table { border-collapse: separate; border-spacing: 0; margin: 0 0 8px; }
+.cfe-table td {
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  padding: 4px 8px; vertical-align: middle; color: var(--text);
+}
+.cfe-table tr:first-child td { border-top: 1px solid var(--line); }
+.cfe-table td:first-child { border-left: 1px solid var(--line); }
+.cfe-table td.cfe-ing { min-width: 170px; }
+.cfe-table td.cfe-ing .rc-ing { padding: 0; }
+.cfe-table td.cfe-op { color: var(--teal); text-align: center; min-width: 76px; }
+.cfe-table td.cfe-before { color: var(--dim); font-size: 12px; }
+@media (max-width: 760px) {
+  .rc-head { flex-wrap: wrap; }
+  .cfe-table td.cfe-ing {
+    position: sticky; left: 0; z-index: 1; min-width: 140px;
+    background: var(--md-sys-color-surface-container-low);
+  }
+}
+
 /* timer chips — inline in step text; gold while running, error-red when done
    so a finished timer is unmissable at a glance from across the kitchen */
 .rt-chip {
