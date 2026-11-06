@@ -30,7 +30,7 @@ import json
 import os
 import time
 
-ARCHIVE_AFTER_DAYS = 90
+ARCHIVE_AFTER_DAYS = 30    # 90 until 2026-11-06; data/ grew about 3GB a month at 90
 RESULT_CAP = 6000          # chars of tool result kept (renderHistMsg shows this much)
 
 
