@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""console-health: how the MIST Console performs, read from data it already keeps.
+
+Sources:
+  data/<sid>.jsonl     every stream event, stamped with `ts` by bridge._record
+  data/metrics.jsonl   front-end beacons (boot, chat switch, stream reconnect),
+                       POSTed to /metrics by app.js on the Mac and the phone
+  claude --version     the local CLI, compared with the npm `latest` tag
+
+A turn starts at a `user_text` record and ends at the next `result`. Time to
+first token (TTFT) is the gap from `user_text` to the first `message_start`. A
+turn is "cold" when a SessionStart hook fires inside that gap (the backend had
+to spawn or --resume), else "warm". The CLI emits `init` on EVERY turn in
+stream-json mode, so `init` cannot mark a spawn. A `user_text` that arrives
+while a turn is still open is a queued message: its wait includes the turn
+before it, so it is not counted.
+
+Targets are the TARGETS dict below. Exit code 1 when a target fails, so the
+report can gate a watcher or a test.
+
+Usage:
+  bin/console-health [--days N] [--json] [--no-npm]
+"""
+import argparse
+import glob
+import json
+import os
+import statistics
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+DATA = os.path.join(HERE, "data")
+METRICS = os.path.join(DATA, "metrics.jsonl")
+
+# Seconds unless the name ends in _ms. "max" = the p90 must be at or under it.
+TARGETS = {
+    "ttft_warm_p90": 8.0,       # a live backend starts to answer
+    "ttft_cold_p90": 20.0,      # spawn or --resume, then the first token
+    "boot_ms_p90": 2500,        # page load to a painted chat
+    "switch_ms_p90": 150,       # click a chat to its log on screen
+    "crash_rate": 0.02,         # nonzero process exits per turn
+    "reconnects_per_day": 20,   # stream reconnects (any client)
+}
+
+
+def pct(xs, q):
+    if not xs:
+        return None
+    xs = sorted(xs)
+    k = max(0, min(len(xs) - 1, int(round(q * (len(xs) - 1)))))
+    return xs[k]
+
+
+n_queued = [0]
+
+
+def scan_turns(days):
+    cut = time.time() - days * 86400
+    warm, cold, turns = [], [], []
+    exits = {"clean": 0, "crash": 0}
+    errors = {}
+    for path in glob.glob(os.path.join(DATA, "*.jsonl")):
+        if os.path.basename(path) == "metrics.jsonl" or os.path.getmtime(path) < cut:
+            continue
+        t0 = first = None
+        saw_spawn = False
+        queued = 0
+        with open(path, errors="ignore") as f:
+            for line in f:
+                # Cheap prefilter: deltas are most of the file and never matter here.
+                if '"content_block_delta"' in line[:80] or '"thinking_tokens"' in line[:80]:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                ts = e.get("ts")
+                if not ts or ts < cut:
+                    continue
+                typ = e.get("type")
+                if typ == "user_text":
+                    if t0 is not None:          # sent while a turn runs: queued
+                        queued += 1
+                        continue
+                    t0, first, saw_spawn = ts, None, False
+                elif t0 is None:
+                    if typ == "process_exit":
+                        exits["clean" if e.get("code") in (0, None) else "crash"] += 1
+                    continue
+                elif typ == "system" and e.get("subtype") == "hook_response" \
+                        and str(e.get("hook_name", "")).startswith("SessionStart"):
+                    saw_spawn = True
+                elif typ == "stream_event" and first is None and \
+                        (e.get("event") or {}).get("type") == "message_start":
+                    first = ts - t0
+                    (cold if saw_spawn else warm).append(first)
+                elif typ == "result":
+                    turns.append(ts - t0)
+                    if e.get("is_error"):
+                        k = (e.get("subtype") or "error")[:40]
+                        errors[k] = errors.get(k, 0) + 1
+                    t0 = None
+                elif typ == "process_exit":
+                    exits["clean" if e.get("code") in (0, None) else "crash"] += 1
+                    t0 = None
+        n_queued[0] += queued
+    return warm, cold, turns, exits, errors
+
+
+def scan_beacons(days):
+    cut = time.time() - days * 86400
+    out = {}
+    try:
+        f = open(METRICS)
+    except OSError:
+        return out
+    with f:
+        for line in f:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if (e.get("ts") or 0) < cut:
+                continue
+            key = (e.get("kind"), e.get("client") or "mac")
+            out.setdefault(key, []).append(e.get("ms"))
+    return out
+
+
+def cli_freshness(use_npm):
+    local = latest = None
+    try:
+        local = subprocess.run(["claude", "--version"], capture_output=True, text=True,
+                               timeout=20).stdout.split()[0]
+    except Exception:
+        pass
+    if use_npm:
+        try:
+            latest = subprocess.run(["npm", "view", "@anthropic-ai/claude-code", "version"],
+                                    capture_output=True, text=True, timeout=30).stdout.strip() or None
+        except Exception:
+            pass
+    return local, latest
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--days", type=float, default=14)
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--no-npm", action="store_true")
+    a = ap.parse_args()
+
+    warm, cold, turns, exits, errors = scan_turns(a.days)
+    beacons = scan_beacons(a.days)
+    local, latest = cli_freshness(not a.no_npm)
+    n_turns = len(turns)
+    reconnects = sum(len(v) for (k, _), v in beacons.items() if k == "reconnect")
+
+    m = {
+        "days": a.days, "turns": n_turns,
+        "ttft_warm_p50": pct(warm, .5), "ttft_warm_p90": pct(warm, .9), "ttft_warm_n": len(warm),
+        "ttft_cold_p50": pct(cold, .5), "ttft_cold_p90": pct(cold, .9), "ttft_cold_n": len(cold),
+        "queued_sends": n_queued[0],
+        "turn_p50": pct(turns, .5), "turn_p90": pct(turns, .9),
+        "crashes": exits["crash"], "clean_exits": exits["clean"],
+        "crash_rate": (exits["crash"] / n_turns) if n_turns else None,
+        "error_results": errors,
+        "reconnects_per_day": reconnects / a.days if beacons else None,
+        "cli_local": local, "cli_latest": latest,
+        "cli_behind": bool(local and latest and local != latest),
+    }
+    for (kind, client), xs in sorted(beacons.items()):
+        xs = [x for x in xs if isinstance(x, (int, float))]
+        if kind in ("boot", "switch") and xs:
+            m[f"{kind}_ms_p50_{client}"] = pct(xs, .5)
+            m[f"{kind}_ms_p90_{client}"] = pct(xs, .9)
+            m[f"{kind}_n_{client}"] = len(xs)
+
+    fails = []
+    for k, limit in TARGETS.items():
+        vals = [v for kk, v in m.items() if (kk == k or kk.startswith(k + "_")) and isinstance(v, (int, float))]
+        for v in vals:
+            if v > limit:
+                fails.append(f"{k} = {v:.3g} (target <= {limit})")
+    if m["cli_behind"]:
+        fails.append(f"CLI {local} is behind npm latest {latest}: new models stay hidden until it updates")
+    m["fails"] = fails
+
+    if a.json:
+        print(json.dumps(m, indent=1))
+    else:
+        f = lambda v, u="s": "n/a" if v is None else (f"{v:.1f}{u}" if u == "s" else f"{v:.0f}{u}")
+        print(f"MIST Console health, last {a.days:g} days, {n_turns} turns")
+        print(f"  first token, warm   p50 {f(m['ttft_warm_p50'])}  p90 {f(m['ttft_warm_p90'])}  (n={len(warm)})")
+        print(f"  first token, cold   p50 {f(m['ttft_cold_p50'])}  p90 {f(m['ttft_cold_p90'])}  (n={len(cold)})")
+        print(f"  queued messages     {n_queued[0]} (sent during a running turn, not timed)")
+        print(f"  whole turn          p50 {f(m['turn_p50'])}  p90 {f(m['turn_p90'])}")
+        print(f"  process exits       {exits['crash']} nonzero, {exits['clean']} clean")
+        if errors:
+            print("  error results       " + ", ".join(f"{k} {v}" for k, v in sorted(errors.items(), key=lambda x: -x[1])))
+        for k in sorted(m):
+            if k.startswith(("boot_ms_p", "switch_ms_p")):
+                print(f"  {k:<20}{f(m[k], 'ms')}")
+        if beacons:
+            print(f"  stream reconnects   {reconnects} ({m['reconnects_per_day']:.1f}/day)")
+        else:
+            print("  front-end beacons   none yet (data/metrics.jsonl is empty)")
+        print(f"  claude CLI          {local or '?'} (npm latest {latest or 'not checked'})")
+        print("FAIL:\n  " + "\n  ".join(fails) if fails else "All targets met.")
+    sys.exit(1 if fails else 0)
+
+
+if __name__ == "__main__":
+    main()

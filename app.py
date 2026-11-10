@@ -1735,7 +1735,8 @@ def session_models(sid):
     ok, resp = s.list_models()
     if not ok:
         return jsonify({"ok": False, "error": str(resp)}), 502
-    return jsonify({"ok": True, "models": (resp or {}).get("models") or []})
+    return jsonify({"ok": True, "models": (resp or {}).get("models") or [],
+                    "outdated": s._binary_newer_than_backend()})
 
 
 @app.route("/sessions/<sid>/diff")
@@ -2465,6 +2466,71 @@ def quick_access_get():
 @app.route("/quick-access", methods=["POST"])
 def quick_access_set():
     return jsonify(quickaccess.save(request.get_json(silent=True) or {}))
+
+
+# ---- Fleet: everything running, across every chat ------------------------------
+# One view of the work in flight: open turns, the agents / shells / monitors each
+# backend still owns (bridge.fleet_snapshot), and headless routines that
+# run-routine.sh is running right now (read from the process table, because a
+# routine is a separate `claude -p`, not a Console chat).
+def _running_routines():
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,etime=,command="], capture_output=True,
+                             text=True, timeout=5).stdout
+    except Exception:
+        return []
+    rows = []
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3 or "run-routine" not in parts[2] or parts[2].lstrip().startswith(("grep", "ps ")):
+            continue
+        cmd = parts[2].split()
+        name = next((c for c in reversed(cmd) if not c.startswith("-") and "run-routine" not in c
+                     and not c.endswith(("bash", "sh", "mist-launch"))), "routine")
+        rows.append({"pid": int(parts[0]), "name": os.path.basename(name), "elapsed": parts[1]})
+    return rows
+
+
+@app.route("/fleet")
+def fleet():
+    chats = []
+    for sid, s in list(_sessions.items()):
+        try:
+            snap = s.fleet_snapshot()
+        except Exception:
+            continue
+        if not snap["turn"] and not snap["tasks"]:
+            continue
+        chats.append(dict(snap, id=sid, title=s.title or "chat"))
+    chats.sort(key=lambda c: -max([c["turn"]["age"] if c["turn"] else 0]
+                                  + [t["age"] or 0 for t in c["tasks"]]))
+    return jsonify({"chats": chats, "routines": _running_routines(), "now": time.time()})
+
+
+# ---- Front-end beacons -> data/metrics.jsonl (read by bin/console-health) -----
+METRICS_PATH = os.path.join(DATA_DIR, "metrics.jsonl")
+_METRIC_KINDS = {"boot", "switch", "reconnect", "stale"}
+_metrics_lock = threading.Lock()
+
+
+@app.route("/metrics", methods=["POST"])
+def metrics():
+    j = request.get_json(silent=True) or {}
+    rows = j.get("events") if isinstance(j.get("events"), list) else [j]
+    keep = []
+    for e in rows[:50]:
+        if not isinstance(e, dict) or e.get("kind") not in _METRIC_KINDS:
+            continue
+        ms = e.get("ms")
+        keep.append({"ts": time.time(), "kind": e["kind"],
+                     "client": str(e.get("client") or "mac")[:12],
+                     "ms": round(float(ms), 1) if isinstance(ms, (int, float)) else None,
+                     "what": str(e.get("what") or "")[:60]})
+    if keep:
+        with _metrics_lock, open(METRICS_PATH, "a") as f:
+            for e in keep:
+                f.write(json.dumps(e) + "\n")
+    return jsonify({"ok": True, "kept": len(keep)})
 
 
 @app.route("/usage")

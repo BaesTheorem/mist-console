@@ -54,6 +54,9 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
          exists only while a grant with a count left exists; the card lists them
          with a Use now button that posts to /limit-reset/claim. -->
     <span class="badge clickable resets" id="resets" hidden title="Limit resets the plan holds · click to see and use them">Resets</span>
+    <!-- Fleet: open turns, background agents/shells/monitors in every chat, and
+         headless routines (GET /fleet). Hidden while nothing runs. -->
+    <span class="badge clickable fleet" id="fleet" hidden title="Everything running across all chats">running</span>
   </div>
   <div class="actions">
     <md-icon-button id="artBtn" touch-target="none" title="Artifacts · every image, audio clip, video, 3D model and file made in this chat" aria-label="Artifacts" aria-pressed="false"><md-icon>perm_media</md-icon></md-icon-button>
@@ -101,6 +104,12 @@ if(_rw>=120&&_rw<=560&&_rw!==196)document.documentElement.style.setProperty("--r
   <div class="capHead">limit resets <button id="resetsClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
   <div id="resetsBody" class="ctx-body"></div>
   <div class="modelnote">Resets Anthropic put on the plan. The hourly watcher uses one at a limit or before it expires; this is the hand path.</div>
+</aside>
+
+<aside id="fleetCard" hidden>
+  <div class="capHead">running now <button id="fleetClose" class="xclose" aria-label="Close"><span class="msi">close</span></button></div>
+  <div id="fleetBody" class="ctx-body"></div>
+  <div class="modelnote">Open turns and background tasks in every chat, plus headless routines. Click a chat to open it.</div>
 </aside>
 
 <aside id="usageCard" hidden>

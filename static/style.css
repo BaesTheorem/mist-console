@@ -2300,3 +2300,33 @@ body.pane-open.voice-open #usage { right: calc(232px + var(--pane-w, 380px) + 20
 #resetsBody .lr-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
 #resetsBody .lr-result { font-style: italic; color: var(--dim); }
 #resetsBody .lr-at { color: var(--warn); font-weight: 600; }
+
+/* ---- Freshness rule: a live number past its age limit ------------------------ */
+.badge.stale { opacity: .55; border-style: dashed; }
+.badge .stale-age { font-weight: 400; }
+
+/* ---- Fleet chip + card (GET /fleet) ----------------------------------------- */
+.badge.fleet { color: var(--md-sys-color-on-secondary-container); background: var(--md-sys-color-secondary-container); border-color: transparent; font-weight: 600; }
+.badge.fleet[hidden] { display: none; }
+#fleetCard { position: fixed; top: 44px; right: 14px; width: 400px; max-height: 70vh; overflow-y: auto; z-index: 30;
+  background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line); }
+#fleetCard[hidden] { display: none; }
+#fleetBody { padding: 4px 12px; font-size: 12px; }
+#fleetBody .fl-empty { color: var(--dim); padding: 8px 0; }
+#fleetBody .fl-chat { padding: 6px 0; border-bottom: 1px solid var(--line); }
+#fleetBody .fl-chat:last-child { border-bottom: 0; }
+#fleetBody .fl-head { display: flex; width: 100%; gap: 8px; align-items: baseline; background: none; border: 0; padding: 2px 0;
+  font: inherit; color: var(--text); text-align: left; cursor: pointer; }
+#fleetBody .fl-head.static { cursor: default; }
+#fleetBody .fl-chat.here .fl-title { color: var(--md-sys-color-primary); }
+#fleetBody .fl-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#fleetBody .fl-when { color: var(--dim); white-space: nowrap; }
+#fleetBody .fl-task { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0 4px 8px; }
+#fleetBody .fl-task:not(.bg) { opacity: .75; }
+#fleetBody .fl-glyph { font-size: 16px; color: var(--dim); }
+#fleetBody .fl-main { flex: 1; min-width: 0; }
+#fleetBody .fl-desc { color: var(--text); overflow-wrap: anywhere; }
+#fleetBody .fl-meta { color: var(--dim); }
+#fleetBody .fl-stop { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 18px; padding: 0; }
+#fleetBody .fl-stop:hover { color: var(--err); }
+@media (max-width: 760px) { #fleetCard { left: 8px; right: 8px; width: auto; } }

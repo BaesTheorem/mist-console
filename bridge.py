@@ -818,6 +818,11 @@ class ClaudeSession:
         # still here when it exits gets a synthesized terminal event (see
         # _close_open_tasks); otherwise the monitor shows them "running" forever.
         self._open_tasks = {}
+        # Same ids, with what the fleet panel shows (/fleet): type, start time,
+        # background flag, newest progress line. Kept beside _open_tasks, not in
+        # it, so the ledger's id -> description contract stays as tested.
+        self._task_info = {}
+        self._turn_started = 0.0     # time the open turn was sent (0 = no turn)
         self._last_task_event = 0.0  # time of the newest task_* event (reaper grace)
         self._pending_perms = {}     # can_use_tool request_id -> {input, suggestions}
         self._init_sent = False      # control-protocol initialize handshake sent?
@@ -1201,15 +1206,40 @@ class ClaudeSession:
         self._last_task_event = time.time()
         if sub in ("task_started", "task_progress"):
             self._open_tasks.setdefault(tid, obj.get("description") or "background task")
+            info = self._task_info.setdefault(tid, {
+                "desc": obj.get("description") or "background task",
+                "type": obj.get("task_type") or "",
+                "background": bool(obj.get("is_backgrounded")),
+                "started": obj.get("ts") or time.time()})
+            if sub == "task_progress" and obj.get("description"):
+                info["last"] = obj.get("description")
+            if obj.get("is_backgrounded"):
+                info["background"] = True
         elif sub in ("task_notification", "task_updated"):
             status = obj.get("status") or (obj.get("patch") or {}).get("status")
             if status in self.TASK_TERMINAL:
                 self._open_tasks.pop(tid, None)
+                self._task_info.pop(tid, None)
 
     def _take_open_tasks(self):
         """Atomically hand over the open-task ledger (caller may hold _lock)."""
         tasks, self._open_tasks = self._open_tasks, {}
+        self._task_info = {}
         return tasks
+
+    def fleet_snapshot(self):
+        """What this backend is doing right now, for the cross-chat fleet
+        panel: the open turn (if any) and every task it still owns."""
+        now = time.time()
+        tasks = [dict(info, id=tid, age=round(now - (info.get("started") or now)))
+                 for tid, info in list(self._task_info.items()) if tid in self._open_tasks]
+        tasks += [{"id": tid, "desc": d, "type": "", "background": True, "age": None}
+                  for tid, d in list(self._open_tasks.items()) if tid not in self._task_info]
+        turn = None
+        if self._turn_active:
+            started = self._turn_started or self.last_activity or now
+            turn = {"since": started, "age": round(now - started)}
+        return {"alive": bool(self.alive), "turn": turn, "tasks": tasks}
 
     def _close_tasks(self, tasks):
         """Broadcast a synthesized terminal event for each orphaned task. Same
@@ -1312,6 +1342,13 @@ class ClaudeSession:
         self.model = model
         if not self.alive:
             return False
+        if self._binary_newer_than_backend():
+            # The CLI updated after this backend started. The running process
+            # has the old model catalog, so a model the update added may not be
+            # known to it: restart under the new binary (--resume keeps context).
+            self._resume_tried = False
+            self.stop()
+            return False
         payload = {"model": model} if model else {}
         ok, _ = self.control_call("set_model", payload)
         if ok:
@@ -1319,6 +1356,12 @@ class ClaudeSession:
         self._resume_tried = False
         self.stop()
         return False
+
+    def _binary_newer_than_backend(self):
+        try:
+            return os.path.getmtime(os.path.realpath(CLAUDE)) > (self._started_at or 0) > 0
+        except Exception:
+            return False
 
     def set_effort(self, effort):
         """Switch thinking depth. Goes dormant; next send revives with the new
@@ -1518,6 +1561,7 @@ class ClaudeSession:
                 if task_id:
                     if resp.get("subtype") == "success":
                         self._open_tasks.pop(task_id, None)
+                        self._task_info.pop(task_id, None)
                         self._broadcast({"type": "system", "subtype": "task_updated",
                                          "task_id": task_id, "status": "killed"})
                     else:
@@ -2212,6 +2256,7 @@ class ClaudeSession:
                 return False
             self.last_activity = time.time()
             self._turn_active = True   # cleared on the matching result (or exit)
+            self._turn_started = time.time()
             self.paused = False        # any message after a pause is a resume
             self._pause_pending = kind == "pause"
         self._notify_activity()   # the rail's busy flag (a phone with this stream closed reopens it)

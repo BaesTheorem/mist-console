@@ -163,6 +163,24 @@ The bridge also keeps a ledger of every open task id per backend (`_open_tasks`)
 
 The idle reaper reads the same ledger. A turn can end while its agents or shells still run inside the process, so `reap_if_idle` skips a backend that has an open task. Before this guard, the reaper stopped the backend `IDLE_REAP_SEC` (15 min) after the turn ended and killed the agents with it: on 2026-10-15 the backend exited 15 min 37 s after the turn ended, and three research agents died with it (their transcripts stop within 4 s of each other, with no API error). If a terminal event never arrives, the guard expires `BG_TASK_REAP_SEC` (4 h, `MIST_CONSOLE_BG_TASK_REAP_SEC`) after the newest task event, so a lost notification cannot keep a backend alive forever.
 
+### Fleet panel (everything running, across chats)
+
+`GET /fleet` answers every chat that has an open turn or background tasks, plus the headless routines `run-routine.sh` is running (read from `ps`). The bridge keeps `_task_info` beside the `_open_tasks` ledger (type, start time, background flag, newest progress line) and `fleet_snapshot()` reads it. The top-bar **N running** chip counts open turns, background tasks and routines; it is hidden at zero. The card lists each chat (click to open it), its tasks with a stop button (`/sessions/<sid>/tasks/<id>/stop`), and the routines. The page polls every 5 s while visible, once a minute when hidden. Tests: `tests/test_fleet_and_health.py`.
+
+### Health report and front-end beacons
+
+`bin/console-health [--days N] [--json] [--no-npm]` reads the stamped events in `data/*.jsonl` and the beacons in `data/metrics.jsonl`, prints p50/p90 for time to first token (warm and cold), whole turns, boot and chat switch per client, stream reconnects per day, nonzero process exits, and whether the local CLI is behind npm `latest`. It exits 1 when a target in its `TARGETS` dict fails. A cold turn is one with a SessionStart hook in the gap; the CLI emits `init` on every stream-json turn, so `init` does not mark a spawn. Messages sent during a running turn are queued and not timed.
+
+The page sends beacons to `POST /metrics` (kinds `boot`, `switch`, `reconnect`, `stale`), batched every 15 s and on hide, with `client` = `mac` or `phone`. Baseline on 2026-11-09 over 14 days and 802 turns: first token p50 1.9 s / p90 4.2 s warm, 5.3 s / 11.4 s cold; whole turn p50 62 s. The beacons start with this change, so boot and switch have no baseline yet.
+
+### Freshness rule
+
+A live number carries its age. `markStale(el, ageS, limitS, what)` dims a badge past its limit, adds a dashed border and an age tag (`· 3h old`), says so in the title, and sends one `stale` beacon per item per hour. The 7-day usage badge goes stale at 30 min, the fleet chip at 60 s. New live indicators must use it.
+
+### Model list after a CLI update
+
+The model card refetches `/config` on every open, so a model the CLI update added shows without a page reload. A live chat lists its backend's own catalog; models from the binary scan that the catalog lacks are added with the note "new in the updated CLI". `set_model` on a backend that started before the binary changed restarts it under the new CLI (`--resume` keeps the context) instead of a live switch. `/sessions/<sid>/models` reports `outdated` for that case.
+
 ## Look: theme, font, text size
 
 Settings carries three appearance controls, all persisted **twice** — localStorage
@@ -652,6 +670,8 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | Repo switching | repo badge | gap: needs a folder picker |
 | Quick access (double-tap Option) | always-on agent | widgets and the icon's long-press menu |
 | Resets (the plan's /limit-reset grants, with Use now) | **Resets · N** chip in the top bar, only while a grant is held; click for the card | chat-details sheet, **Resets** row, same card |
+| Running now (fleet: open turns, background agents/shells/monitors in every chat, headless routines) | **N running** chip in the top bar, only while something runs; click for the card, a row opens its chat, a task has a stop button | chat-details sheet, **Running** row, same card at full width |
+| Stale live numbers (freshness rule) | a badge past its age limit dims, gets a dashed border and shows its age (`· 3h old`) | same on the 7-day meter in the chat-details sheet (it reads the badge text) |
 | Chat streams | every visited chat keeps its stream open, so the rail sees a turn another client starts | the active chat and busy chats stream; an idle chat closes its stream a few seconds after you leave it (six-connection limit) and resumes on return, so its rail dot does not show a turn started elsewhere until you open it |
 
 ## Archive tier (data/ growth)

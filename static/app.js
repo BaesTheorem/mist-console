@@ -17,6 +17,23 @@ const PHONE_MQ = window.matchMedia("(max-width: 760px)");
 const TOUCH_MQ = window.matchMedia("(hover: none) and (pointer: coarse)");
 const IS_SHELL = document.documentElement.dataset.shell === "ios";
 function isPhone() { return PHONE_MQ.matches; }
+// Front-end beacons for bin/console-health: boot, chat switch, stream
+// reconnects, stale live badges. Batched, flushed every 15 s and on hide.
+const _metricQ = [];
+function metric(kind, ms, what) {
+  _metricQ.push({ kind, ms: ms == null ? null : Math.round(ms), what: what || "", client: isPhone() ? "phone" : "mac" });
+  if (_metricQ.length >= 40) flushMetrics();
+}
+function flushMetrics() {
+  if (!_metricQ.length) return;
+  const events = _metricQ.splice(0);
+  try {
+    fetch("/metrics", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ events }) }).catch(() => {});
+  } catch (_) {}
+}
+setInterval(flushMetrics, 15000);
+document.addEventListener("visibilitychange", () => { if (document.hidden) flushMetrics(); });
 function isTouch() { return IS_SHELL || TOUCH_MQ.matches; }
 let closeRailDrawer = () => false;   // wired once the rail exists (end of file)
 let setRailOpen = () => {};
@@ -1476,6 +1493,7 @@ const checksLoaded = new Set();   // sids whose checks have been fetched
 function bmKey(sid, role, seq) { return sid + "|" + role + ":" + seq; }
 let SPINNER_VERBS = ["Thinking it through, properly"];
 let MODELS = [];
+let _booted = false;   // the first chat has painted (switch beacons start after it)
 let spinnerIdx = 0;
 let lastInit = null;
 try { lastInit = JSON.parse(localStorage.getItem("lastInit") || "null"); } catch (_) {}
@@ -1635,7 +1653,7 @@ class Session {
       // either resumes (first event "resumed": keep the transcript, the missed
       // events follow as live ones) or replays everything (wipe first). The
       // decision waits for that first event.
-      if (this._openCount++) this._pendingReconnect = true;
+      if (this._openCount++) { this._pendingReconnect = true; metric("reconnect", null, "chat"); }
       clearTimeout(this._downTimer); this._downTimer = null;
       // a successful (re)connect clears the sticky "disconnected" badge
       if (this.statusState === "error" && this.statusLabel === "disconnected")
@@ -3806,7 +3824,19 @@ function renderModelCard() {
   const list = $("#modelList");
   list.innerHTML = "";
   const cur = (activeId && sessions.get(activeId) && sessions.get(activeId).model) || "";
-  const rows = (activeId && liveModels.get(activeId)) || MODELS;
+  const live = activeId && liveModels.get(activeId);
+  let rows = live || MODELS;
+  if (live) {
+    // A backend started before a CLI update lists the OLD catalog. Add the
+    // models the binary scan (/config) found that this list lacks; picking one
+    // restarts the backend under the new CLI (bridge.set_model).
+    const known = new Set();
+    live.forEach((m) => { known.add(m.id); if (m.resolved) known.add(m.resolved); });
+    const strip = (id) => String(id).replace(/\[1m\]$/, "");
+    const extra = MODELS.filter((m) => m.id && !known.has(m.id) && !known.has(strip(m.id))
+                                    && !live.some((l) => strip(l.resolved || "") === strip(m.id)));
+    rows = live.concat(extra.map((m) => Object.assign({}, m, { desc: "new in the updated CLI · switching restarts this chat" })));
+  }
   rows.forEach((m) => {
     const row = el("div", "modelrow" + (m.id === cur ? " sel" : ""), esc(m.label)
       + (m.desc ? '<span class="flag-code">' + esc(m.desc) + "</span>" : ""));
@@ -4512,6 +4542,10 @@ function switchTo(id) {
   crystal.emotion = null; crystal.lastActivity = Date.now();
   const s = sessions.get(id);
   if (!s) return;
+  if (id !== activeId && _booted) {
+    const t0 = performance.now();
+    requestAnimationFrame(() => metric("switch", performance.now() - t0));
+  }
   // The chat being left sheds what it unfolded or streamed since its last
   // fold; coming back lands on its newest message anyway.
   const left = activeId !== id && activeId && sessions.get(activeId);
@@ -4923,6 +4957,31 @@ setInterval(loadNotifs, 120000);               // keep it honest while open all 
 /* periodically refresh tab status dots */
 setInterval(renderTabs, 1500);
 
+/* ---------- freshness rule ---------- */
+// Every live indicator carries its age. Past its limit it dims, shows the age
+// on its face ("· 3h old") and says so in its title. One stale beacon per item
+// per hour goes to /metrics so console-health counts stale states.
+const USAGE_STALE_S = 30 * 60;
+const _staleSent = {};
+function fmtAgeShort(s) {
+  return s >= 86400 ? Math.round(s / 86400) + "d" : s >= 3600 ? Math.round(s / 3600) + "h"
+    : s >= 60 ? Math.round(s / 60) + "m" : Math.round(s) + "s";
+}
+function markStale(el, ageS, limitS, what) {
+  if (!el) return false;
+  const stale = ageS != null && ageS > limitS;
+  el.classList.toggle("stale", stale);
+  let tag = el.querySelector(":scope > .stale-age");
+  if (stale) {
+    if (!tag) { tag = document.createElement("span"); tag.className = "stale-age"; el.appendChild(tag); }
+    tag.textContent = " · " + fmtAgeShort(ageS) + " old";
+    if (!/\(stale\)/.test(el.title)) el.title += "\n(stale: this number is " + fmtAgeShort(ageS) + " old)";
+    const now = Date.now();
+    if (!_staleSent[what] || now - _staleSent[what] > 3600e3) { _staleSent[what] = now; metric("stale", ageS * 1000, what); }
+  } else if (tag) tag.remove();
+  return stale;
+}
+
 /* ---------- usage badges (5h / 7d) ---------- */
 // Relative countdown ("<1h", "2h", "3d") — kept for the hover title.
 function fmtResetRel(ts) {
@@ -4991,7 +5050,7 @@ function _renderRateBadge(sel, label, key, fullName) {
   const blocked = !!((live && live.status && !_ALLOWED_STATUS[live.status])
                   || (cache && cache.status && !_ALLOWED_STATUS[cache.status]));
   if (pct == null && !resetsAt && !blocked) {
-    el.textContent = label + " —"; setUsageLevel(el, null); el.title = fullName; return;
+    el.textContent = label + " —"; setUsageLevel(el, null); el.title = fullName; el.classList.remove("stale"); return;
   }
   if (blocked) {
     el.textContent = `${label} limit reached · resets ${fmtResetExact(resetsAt)}`;
@@ -5020,6 +5079,10 @@ function _renderRateBadge(sel, label, key, fullName) {
     ? `\nresets ${new Date(resetsAt * 1000).toLocaleString()} (in ${fmtResetRel(resetsAt)})`
     : "";
   el.title = fullName + srcNote + resetNote;
+  // Freshness rule: a live number older than USAGE_STALE_S is shown as stale
+  // (dimmed, with its age on the badge), never as if it were current.
+  const pctAge = pct == null ? null : useLive ? (Date.now() - liveTs) / 1000 : (cache && cache.pct_age_seconds);
+  markStale(el, pctAge, USAGE_STALE_S, "usage " + key);
 }
 function renderUsageBadges() {
   _renderRateBadge("#r7d", "7d", "seven_day", "Weekly (7-day) limit");
@@ -5059,6 +5122,104 @@ async function pollUsage() {
   renderUsageBadges();
   renderLimitResets(u && u.limit_resets);
 }
+
+// ---- Fleet chip + card: everything running, across every chat ----------------
+// GET /fleet lists each chat with an open turn or background tasks (agents,
+// backgrounded shells, monitors) plus headless routines from the process table.
+// The chip shows the count and hides at zero. A row opens its chat; a task's
+// stop button uses the same /tasks/<id>/stop route as the per-chat panel.
+let _fleet = null, _fleetAt = 0;
+function _fleetCount(f) {
+  if (!f) return 0;
+  return f.chats.reduce((n, c) => n + (c.turn ? 1 : 0) + c.tasks.filter((t) => t.background).length, 0)
+    + f.routines.length;
+}
+async function pollFleet() {
+  try {
+    _fleet = await (await fetch("/fleet")).json();
+    _fleetAt = Date.now();
+  } catch (_) { /* keep the last answer; markStale shows its age */ }
+  renderFleetChip();
+  if (!$("#fleetCard").hidden) renderFleetCard();
+}
+function renderFleetChip() {
+  const chip = $("#fleet");
+  if (!chip) return;
+  const n = _fleetCount(_fleet);
+  if (!n) { chip.hidden = true; return; }
+  chip.textContent = n + " running";
+  chip.dataset.short = String(n);
+  chip.title = "Everything running across all chats and routines · click for the list";
+  chip.hidden = false;
+  markStale(chip, (Date.now() - _fleetAt) / 1000, 60, "fleet");
+}
+function _fleetAge(s) { return s == null ? "" : fmtBgDur(s); }
+function renderFleetCard() {
+  const body = $("#fleetBody");
+  if (!body) return;
+  body.textContent = "";
+  const f = _fleet || { chats: [], routines: [] };
+  if (!f.chats.length && !f.routines.length) {
+    body.appendChild(el("div", "fl-empty", "Nothing is running."));
+    return;
+  }
+  for (const c of f.chats) {
+    const box = el("div", "fl-chat" + (c.id === activeId ? " here" : ""));
+    const head = el("button", "fl-head");
+    head.appendChild(el("span", "fl-title", esc(c.title)));
+    head.appendChild(el("span", "fl-when", c.turn ? "answering · " + _fleetAge(c.turn.age) : (c.alive ? "idle" : "dormant")));
+    head.title = "Open this chat";
+    head.addEventListener("click", () => { $("#fleetCard").hidden = true; if (sessions.has(c.id)) switchTo(c.id); });
+    box.appendChild(head);
+    const tasks = c.tasks.slice().sort((a, b) => (b.background ? 1 : 0) - (a.background ? 1 : 0) || (b.age || 0) - (a.age || 0));
+    for (const t of tasks) {
+      const row = el("div", "fl-task" + (t.background ? " bg" : ""));
+      row.appendChild(el("span", "fl-glyph msi", t.type === "local_agent" || /agent/.test(t.type) ? "smart_toy"
+        : /monitor/i.test(t.type) ? "monitor_heart" : "terminal"));
+      const main = el("div", "fl-main");
+      main.appendChild(el("div", "fl-desc", esc(t.desc)));
+      const meta = [t.background ? "background" : "in turn", t.type || "", t.age != null ? _fleetAge(t.age) : ""].filter(Boolean);
+      main.appendChild(el("div", "fl-meta", esc(meta.join(" · ") + (t.last && t.last !== t.desc ? " · " + t.last : ""))));
+      row.appendChild(main);
+      const stop = el("button", "fl-stop msi", "stop_circle");
+      stop.title = "Stop this task";
+      stop.addEventListener("click", async (e) => {
+        e.stopPropagation(); stop.disabled = true;
+        try { await fetch("/sessions/" + c.id + "/tasks/" + encodeURIComponent(t.id) + "/stop", { method: "POST" }); } catch (_) {}
+        setTimeout(pollFleet, 800);
+      });
+      row.appendChild(stop);
+      box.appendChild(row);
+    }
+    body.appendChild(box);
+  }
+  if (f.routines.length) {
+    const box = el("div", "fl-chat");
+    box.appendChild(el("div", "fl-head static", '<span class="fl-title">Routines</span>'));
+    for (const r of f.routines) {
+      const row = el("div", "fl-task bg");
+      row.appendChild(el("span", "fl-glyph msi", "schedule"));
+      const main = el("div", "fl-main");
+      main.appendChild(el("div", "fl-desc", esc(r.name)));
+      main.appendChild(el("div", "fl-meta", esc("headless routine · running " + r.elapsed + " · pid " + r.pid)));
+      row.appendChild(main);
+      box.appendChild(row);
+    }
+    body.appendChild(box);
+  }
+}
+function openFleetCard(ev) {
+  const card = $("#fleetCard");
+  if (!card.hidden) { card.hidden = true; return; }
+  closeAnchoredCards("#fleetCard");
+  renderFleetCard();
+  card.hidden = false;
+  anchorCard(card, (ev && ev.currentTarget) || $("#fleet"));
+  pollFleet();
+}
+// 5 s while the window is visible; a hidden window polls once a minute.
+setInterval(() => { if (!document.hidden || Date.now() - _fleetAt > 60000) pollFleet(); }, 5000);
+setTimeout(pollFleet, 1500);
 
 // ---- Resets chip + card (the plan's /limit-reset grants) ---------------------
 // The chip exists only while the account holds a reset with a count left. The
@@ -6141,6 +6302,7 @@ const ANCHORED_CARDS = [
   { card: "#shareCard", trigger: "#shareBtn" },
   { card: "#usageCard", trigger: "#r7d" },
   { card: "#resetsCard", trigger: "#resets" },
+  { card: "#fleetCard", trigger: "#fleet" },
 ];
 function closeAnchoredCards(except) {
   ANCHORED_CARDS.forEach(({ card }) => {
@@ -6195,13 +6357,20 @@ function openModelCard(ev) {
   renderModelCard();
   card.hidden = false;
   anchorCard(card, (ev && ev.currentTarget) || $("#model"));
-  if (activeId && !liveModels.has(activeId)) fetchLiveModels(activeId).then((rows) => { if (rows && !card.hidden) renderModelCard(); });
+  // Refetch both lists on every open: /config follows the binary's mtime, so a
+  // CLI update shows here without a page reload (the 11-09 Fable 5.2 miss).
+  fetch("/config").then((r) => r.json()).then((cfg) => {
+    if (cfg && Array.isArray(cfg.models) && cfg.models.length) { MODELS = cfg.models; if (!card.hidden) renderModelCard(); }
+  }).catch(() => {});
+  if (activeId) fetchLiveModels(activeId).then((rows) => { if (rows && !card.hidden) renderModelCard(); });
 }
 $("#modelClose").addEventListener("click", () => { $("#modelCard").hidden = true; });
 // The model info badge doubles as the switcher (the old dedicated toolbar button
 // was redundant with this, so it's gone).
 $("#model").addEventListener("click", openModelCard);
 $("#resets").addEventListener("click", openResetsCard);
+$("#fleet").addEventListener("click", openFleetCard);
+$("#fleetClose").addEventListener("click", () => { $("#fleetCard").hidden = true; });
 $("#resetsClose").addEventListener("click", () => { $("#resetsCard").hidden = true; });
 
 // The perm info badge opens the permission-mode picker.
@@ -6352,7 +6521,7 @@ function closeTopOverlay() {
   if (closeRailDrawer()) return true;   // phone: the chat drawer sits over everything
   // #ctxMenu first: Esc should dismiss the right-click menu before any panel it
   // may be floating over.
-  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#usageCard", "#resetsCard", "#shareCard", "#diffCard", "#capPanel", "#bmPanel", "#artPanel"]) {
+  for (const id of ["#ctxMenu", "#modelCard", "#permCard", "#thinkCard", "#ctxCard", "#usageCard", "#resetsCard", "#fleetCard", "#shareCard", "#diffCard", "#capPanel", "#bmPanel", "#artPanel"]) {
     const p = $(id);
     if (p && !p.hidden) { p.hidden = true; return true; }
   }
@@ -7247,6 +7416,7 @@ async function boot() {
   if (existing.length) {
     existing.forEach((info) => sessions.set(info.id, new Session(info.id, info.title, info)));
     switchTo(((await lastChat()) || bootChat()).id);
+    requestAnimationFrame(() => { metric("boot", performance.now()); _booted = true; });
   } else {
     await createSession();
   }
@@ -7327,7 +7497,7 @@ async function syncSessions() {
   const connect = () => {
     if (es) es.close();
     es = new EventSource("/events");
-    es.onopen = () => { if (opens++) syncSessions(); };
+    es.onopen = () => { if (opens++) { syncSessions(); metric("reconnect", null, "events"); } };
     es.onmessage = (m) => {
       let ev;
       try { ev = JSON.parse(m.data); } catch (_) { return; }
@@ -8160,6 +8330,10 @@ function openChatSheet() {
     // the Resets chip is hidden with the rest of .meta on a phone: same card from here
     if ($("#resets") && !$("#resets").hidden) {
       c.appendChild(R("bolt", "Resets", () => openResetsCard(anchor), { value: txt("#resets").replace(/^Resets\s*·\s*/, ""), chevron: true }));
+    }
+    // the fleet chip too: everything running across chats and routines
+    if ($("#fleet") && !$("#fleet").hidden) {
+      c.appendChild(R("manufacturing", "Running", () => openFleetCard(anchor), { value: String(_fleetCount(_fleet)), chevron: true }));
     }
     const grid = el("div", "sh-grid");
     const cell = (icon, label, run) => {

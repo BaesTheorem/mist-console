@@ -21,13 +21,13 @@
   font-family: "Material Symbols Sharp";
   font-style: normal;
   font-display: block;
-  src: url("vendor/MaterialSymbolsSharp.subset.woff?v=284fa47ffd") format("woff");
+  src: url("vendor/MaterialSymbolsSharp.subset.woff?v=8a585d65a3") format("woff");
 }
 @font-face {
   font-family: "Material Symbols Sharp Fill";
   font-style: normal;
   font-display: block;
-  src: url("vendor/MaterialSymbolsSharp.fill.woff?v=019b816693") format("woff");
+  src: url("vendor/MaterialSymbolsSharp.fill.woff?v=bda0db8fe3") format("woff");
 }
 /* Raw icon span (ligature-based): <span class="msi">settings</span> */
 .msi {
