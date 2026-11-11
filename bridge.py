@@ -1608,6 +1608,7 @@ class ClaudeSession:
                 })
                 self._notify_question(req_id, questions)
                 return True
+            why = self._perm_reason(req, self.permission_mode)
             self._broadcast({
                 "type": "permission_request",
                 "request_id": req_id,
@@ -1615,9 +1616,10 @@ class ClaudeSession:
                 "input": req.get("input") or {},
                 "suggestions": req.get("permission_suggestions") or [],
                 "blocked_path": req.get("blocked_path"),
+                "why": why,
             })
             self._notify_permission(req_id, req.get("tool_name"),
-                                    req.get("input") or {})
+                                    req.get("input") or {}, why)
             return True
         if sub == "elicitation":
             # An MCP server wants input from the user (MCP elicitation): a form
@@ -1905,6 +1907,63 @@ class ClaudeSession:
         return self.control_call("rewind_files", {"user_message_id": uuid, "dry_run": bool(dry_run)},
                                  timeout=60.0)
 
+    _MODE_NAMES = {"default": "Default", "acceptEdits": "Accept edits", "plan": "Plan",
+                   "auto": "Auto", "dontAsk": "Don't ask",
+                   "bypassPermissions": "Bypass"}
+
+    @staticmethod
+    def _perm_reason(req, mode=None):
+        """Why the CLI raised this ask, in plain language for the card and the
+        banner. Returns {"text", "short", "raw"} or None when there is nothing
+        to say (a plan, a question).
+
+        The CLI states its own reason on every can_use_tool request, in
+        `decision_reason` and `decision_reason_type` (probed 2026-11-11,
+        claude 2.1.322: "safetyCheck", "hook", "other", or absent with a
+        `blocked_path`). The card used to drop it, so an ask in bypass mode
+        looked like the mode had failed. `raw` keeps the CLI's exact words so
+        a reason this map does not know still reaches the reader."""
+        req = req if isinstance(req, dict) else {}
+        if req.get("tool_name") in ("AskUserQuestion", "ExitPlanMode"):
+            return None
+        raw = " ".join(str(req.get("decision_reason") or "").split())
+        kind = str(req.get("decision_reason_type") or "")
+        bypass = mode == "bypassPermissions"
+        even = " It asks in every mode, bypass too." if bypass else ""
+        if kind == "safetyCheck":
+            if "working directory or its ancestor" in raw:
+                target = raw.rsplit(": ", 1)[-1] if ": " in raw else ""
+                text = ("This command deletes the folder that MIST's shell is in, or a "
+                        "folder above it. Claude Code always stops to check before a "
+                        "delete like that." + even)
+                if target:
+                    text += f" Folder: {target}"
+                return {"text": text, "short": "deletes its own working folder", "raw": raw}
+            return {"text": "A built-in Claude Code safety check stopped this command."
+                            + even, "short": "built-in safety check", "raw": raw}
+        if kind == "hook":
+            if raw.startswith("Identity guard:"):
+                what = raw[len("Identity guard:"):].split(". ")[0].strip().rstrip(".")
+                what = what.replace("Alex's", "your")
+                text = (f"The identity guard stopped it: {what}. Your personal details "
+                        "do not leave this Mac in a web request unless you approve it.")
+                return {"text": text, "short": "identity guard", "raw": raw}
+            return {"text": "A safety hook on this Mac asked for your decision." + even,
+                    "short": "safety hook", "raw": raw}
+        if kind == "rule":
+            return {"text": "A permission rule in the settings says to ask before this.",
+                    "short": "a settings rule says ask", "raw": raw}
+        if bypass:
+            return {"text": "Claude Code asked for approval although this chat is in "
+                            "Bypass mode.", "short": "asked in bypass", "raw": raw}
+        name = ClaudeSession._MODE_NAMES.get(mode or "", mode or "this")
+        path = req.get("blocked_path")
+        text = (f"This chat is in {name} mode, and no rule allows this action "
+                "automatically, so MIST asks first.")
+        if isinstance(path, str) and path:
+            text += f" It changes {path}"
+        return {"text": text, "short": f"{name} mode asks first", "raw": raw}
+
     @staticmethod
     def _perm_summary(tool_name, tool_input):
         """One line describing what is being asked for, for the banner body."""
@@ -1979,7 +2038,7 @@ class ClaudeSession:
         except Exception:
             pass
 
-    def _notify_permission(self, req_id, tool_name, tool_input):
+    def _notify_permission(self, req_id, tool_name, tool_input, why=None):
         """Put a blocking permission ask on a banner with the decision buttons
         wired straight back to /permission-response.
 
@@ -2002,7 +2061,8 @@ class ClaudeSession:
             subprocess.Popen(
                 [NOTIFY_BIN, self._perm_summary(tool_name, tool_input),
                  "MIST needs permission", "Purr", f"console:{self.id}",
-                 "--subtitle", str(tool_name or "tool"),
+                 "--subtitle", (f"{tool_name or 'tool'}: {why['short']}"
+                                if why else str(tool_name or "tool")),
                  "--urgency", "timeSensitive",
                  "--group", f"perm-{self.id}",
                  "--id", f"perm-{req_id}",

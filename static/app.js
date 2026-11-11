@@ -2371,6 +2371,16 @@ class Session {
       ? '<span class="perm-icon msi">checklist</span> MIST has a plan ready'
       : '<span class="perm-icon msi">gpp_maybe</span> Allow <b>' + esc(o.tool_name || "tool") + '</b>?';
     card.appendChild(head);
+    // Why the CLI asked, in plain language (bridge._perm_reason). The CLI's
+    // own wording sits under it, because a reason the bridge has no sentence
+    // for must still reach the reader.
+    if (o.why && o.why.text) {
+      const w = el("div", "perm-why");
+      w.innerHTML = '<span class="msi">info</span><span><b>Why MIST asks.</b> ' + esc(o.why.text)
+        + (o.why.raw ? '<span class="perm-why-raw">Claude Code: ' + esc(o.why.raw) + '</span>' : "")
+        + '</span>';
+      card.appendChild(w);
+    }
     const preview = permPreview(o.tool_name, o.input || {});
     if (preview) { const p = el("div", "perm-body"); p.innerHTML = preview; card.appendChild(p); }
     const row = el("div", "perm-actions");
