@@ -1,6 +1,9 @@
 #!/bin/bash
 # Restart the Console server once nobody is using it: no chat transcript
 # written for QUIET_MIN minutes AND no keyboard/mouse input for the same span.
+# CHATS_ONLY=1 skips the input check (Alex asked for the restart, so his own
+# typing must not hold it off). Only chat transcripts (s*.jsonl) count:
+# data/metrics.jsonl is written on every chat switch and kept it busy forever.
 # For backend edits landed while other chats are mid-turn, where an immediate
 # bin/restart-server would cut them off.
 #
@@ -15,7 +18,8 @@ QUIET=${QUIET_MIN:-3}
 for _ in $(seq 1 720); do
   idle_ns=$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print $NF; exit}')
   idle_s=$(( ${idle_ns:-0} / 1000000000 ))
-  busy=$(find "$HERE/../data" -maxdepth 1 -name '*.jsonl' -mmin "-$QUIET" 2>/dev/null | wc -l | tr -d ' ')
+  [ "${CHATS_ONLY:-0}" = 1 ] && idle_s=$((QUIET * 60))
+  busy=$(find "$HERE/../data" -maxdepth 1 -name 's*.jsonl' -mmin "-$QUIET" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$busy" -eq 0 ] && [ "$idle_s" -ge $((QUIET * 60)) ]; then
     exec /bin/bash "$HERE/restart-server"
   fi
