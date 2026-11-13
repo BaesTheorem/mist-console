@@ -801,6 +801,61 @@ def _save_pasted_image(data_url):
     return path
 
 
+# Files picked on the phone (videos from the photo library, documents) have no
+# path MIST could read, so the page streams each one here and puts the Mac path
+# in the composer. tmp/uploads is gitignored and inside the /file allowlist, so
+# an uploaded video also plays as an embed. The body is copied in chunks: a
+# phone video is often hundreds of MB, and this is an 8 GB machine.
+_UPLOAD_DIR = os.path.join(HARNESS, "tmp", "uploads")
+_UPLOAD_MAX = 4 * 1024 * 1024 * 1024
+_UPLOAD_CHUNK = 1024 * 1024
+_UPLOAD_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _upload_name(raw):
+    """A safe, unique file name that keeps the original stem and extension."""
+    base = os.path.basename((raw or "").replace("\\", "/")).strip() or "upload"
+    stem, ext = os.path.splitext(base)
+    stem = _UPLOAD_NAME_RE.sub("-", stem).strip("-.")[:60] or "upload"
+    ext = _UPLOAD_NAME_RE.sub("", ext)[:10].lower()
+    if ext.lower() in embeds.SECRET_EXTS:
+        ext = ext + ".txt"
+    return f"{time.strftime('%Y%m%d-%H%M%S')}-{random.randrange(1 << 16):04x}-{stem}{ext}"
+
+
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    """Raw request body -> tmp/uploads/<stamp>-<name>. ?name= gives the
+    original file name. Returns {ok, path, name, size}."""
+    size = request.content_length
+    if size is not None and size > _UPLOAD_MAX:
+        return jsonify({"ok": False, "error": "file is over the 4 GB upload limit"}), 413
+    os.makedirs(_UPLOAD_DIR, exist_ok=True)
+    path = os.path.join(_UPLOAD_DIR, _upload_name(request.args.get("name")))
+    part = path + ".part"
+    written = 0
+    try:
+        with open(part, "wb") as f:
+            while True:
+                chunk = request.stream.read(_UPLOAD_CHUNK)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > _UPLOAD_MAX:
+                    raise ValueError("file is over the 4 GB upload limit")
+                f.write(chunk)
+        if not written:
+            raise ValueError("empty upload")
+        os.replace(part, path)
+    except Exception as e:
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "path": path, "name": os.path.basename(path), "size": written})
+
+
 def _versioned_path(raw, at):
     """The file to serve for `raw` as embedded in a bubble stamped `at`: the
     snapshot taken for that message when there is one, else the live file.

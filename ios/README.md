@@ -32,7 +32,9 @@ running.
     and settings.
   - The composer is `+` (attach), the field, and one button: voice while the
     field is empty, send when it has text. The return key inserts a newline.
-    A photo from the library rides along as an image attachment.
+    A photo from the library rides along as an image attachment. A video
+    (or any other file) uploads to the Mac (`POST /upload`, saved under the
+    harness `tmp/uploads/`) and its Mac path goes into the field.
 - **This directory** is the shell: `MIST/Sources` (Swift), `MIST/Resources`
   (icon, colors), `project.yml` (XcodeGen), `scripts/`.
 

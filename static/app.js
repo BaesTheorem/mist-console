@@ -6588,7 +6588,7 @@ $("#fileBtn").addEventListener("click", async () => {
   try {
     if (window.pywebview && window.pywebview.api && window.pywebview.api.pick_file) {
       insertPaths(await window.pywebview.api.pick_file());
-    } else { hiddenFile.accept = isTouch() ? "image/*" : ""; hiddenFile.click(); }
+    } else { hiddenFile.accept = isTouch() ? "image/*,video/*" : ""; hiddenFile.click(); }
   } catch (e) { if (activeId) sessions.get(activeId).notice("File picker error: " + e, true); }
 });
 hiddenFile.addEventListener("change", () => {
@@ -6596,10 +6596,35 @@ hiddenFile.addEventListener("change", () => {
   const img = files.find((f) => /^image\//.test(f.type || ""));
   // A phone has no paths MIST could read; a picked photo becomes the pending
   // image attachment instead, exactly like a pasted screenshot on the Mac.
-  if (img && isTouch()) attachImageFile(img);
-  else insertPaths(files.map((f) => f.name));
+  // Anything else picked on a phone (a video from the library) is uploaded
+  // to the Mac, and its Mac path goes into the composer.
+  if (isTouch()) {
+    if (img) attachImageFile(img);
+    files.filter((f) => f !== img).forEach(uploadToMac);
+  } else insertPaths(files.map((f) => f.name));
   hiddenFile.value = "";
 });
+function fmtBytes(n) {
+  return n >= 1 << 30 ? (n / (1 << 30)).toFixed(1) + " GB"
+    : n >= 1 << 20 ? Math.round(n / (1 << 20)) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+}
+function uploadToMac(file) {
+  const a = activeId && sessions.get(activeId);
+  const say = (msg, err) => { if (a) a.notice(msg, err); };
+  say("Uploading " + file.name + " (" + fmtBytes(file.size) + ") to the Mac...");
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/upload?name=" + encodeURIComponent(file.name || "upload"));
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.onload = () => {
+    let j = {};
+    try { j = JSON.parse(xhr.responseText); } catch (_) {}
+    if (xhr.status === 200 && j.ok) { insertPaths([j.path]); say("Uploaded " + file.name + "."); }
+    else if (xhr.status === 413) say("Upload refused: " + file.name + " is too large for this connection (the tunnel caps a request at 100 MB; use home Wi-Fi).", true);
+    else say("Upload failed: " + (j.error || "HTTP " + xhr.status), true);
+  };
+  xhr.onerror = () => say("Upload failed: the Mac did not answer.", true);
+  xhr.send(file);
+}
 
 /* ---------- jump to present ---------- */
 if (jumpBtn) {
