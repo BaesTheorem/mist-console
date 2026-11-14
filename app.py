@@ -2908,6 +2908,41 @@ def _plist_path(d):
     return os.path.join(LAUNCH_AGENTS, _label(d) + ".plist")
 
 
+def _loaded_labels():
+    """Labels of the launchd jobs loaded in this GUI session, or None when
+    launchctl cannot be read (then callers fall back to the plist files)."""
+    r = _launchctl(["list"])
+    if not r or r.returncode != 0:
+        return None
+    return {ln.split("\t")[-1] for ln in r.stdout.splitlines()[1:] if ln.strip()}
+
+
+def _rt_job(d, meta, loaded):
+    """Find the launchd job that runs routine d. Returns (label, external, live).
+
+    A routine's job is com.mist.routine.<d>, or the label in its meta
+    "launchd" key, or com.exobrain.<d>. external is True when the Console did
+    not generate the job (another runner script, or another label): the
+    Console must then show it but never rewrite or remove it on save."""
+    cands = [(_label(d), _plist_path(d))]
+    if meta.get("launchd"):
+        cands.append((meta["launchd"], os.path.join(LAUNCH_AGENTS, meta["launchd"] + ".plist")))
+    ex = "com.exobrain." + d
+    cands.append((ex, os.path.join(LAUNCH_AGENTS, ex + ".plist")))
+    for label, path in cands:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "rb") as f:
+                argv = plistlib.load(f).get("ProgramArguments") or []
+        except Exception:
+            argv = []
+        external = label != _label(d) or RUNNER not in argv
+        live = (label in loaded) if loaded is not None else True
+        return label, external, live
+    return "", False, False
+
+
 def _launchctl(args):
     try:
         return subprocess.run(["launchctl"] + args, capture_output=True, text=True, timeout=15)
@@ -2964,6 +2999,7 @@ def routines():
     """List routines (from ~/.claude/scheduled-tasks) with their Console-owned
     schedule + enabled state."""
     out = []
+    loaded = _loaded_labels()
     try:
         for d in sorted(os.listdir(SCHED_DIR)):
             sk = os.path.join(SCHED_DIR, d, "SKILL.md")
@@ -2976,8 +3012,14 @@ def routines():
             r["dir"] = d
             meta = _rt_load_meta(d)
             r["cron"] = meta.get("cron", "")
-            r["enabled"] = bool(meta.get("enabled"))
-            r["scheduled"] = os.path.exists(_plist_path(d))
+            label, external, live = _rt_job(d, meta, loaded)
+            # The badge and the switch show what launchd really holds, not the
+            # meta flag: routines installed outside the Console have no meta
+            # and showed "off" while they ran every day.
+            r["enabled"] = live
+            r["scheduled"] = live
+            r["job"] = label
+            r["external"] = external
             out.append(r)
     except Exception:
         pass
@@ -3021,6 +3063,13 @@ def routines_save():
         json.dumps(name), json.dumps(desc), ("model: %s\n" % model) if model else "", prompt)
     with open(os.path.join(rdir, "SKILL.md"), "w") as f:
         f.write(fm)
+    # A job the Console did not generate (catch-up runner, a harness script,
+    # a hand-made plist) keeps its schedule: saving the text must not boot it
+    # out or delete its plist.
+    meta = _rt_load_meta(d)
+    label, external, _live = _rt_job(d, meta, None)
+    if external:
+        return jsonify({"ok": True, "dir": d, "error": "schedule kept: managed outside the Console by " + label})
     _rt_save_meta(d, cron, enabled)
     ok, err = _apply_schedule(d, cron, enabled)
     return jsonify({"ok": ok, "dir": d, "error": err})

@@ -6036,7 +6036,10 @@ function buildRoutineForm(r, isNew) {
   if (isNew) d.open = true;
   const s = el("summary");
   s.appendChild(el("span", "rname", esc(r.name || "new routine")));
-  s.appendChild(el("span", "rdot " + (r.enabled ? "on" : "off"), r.enabled ? "● scheduled" : "○ off"));
+  const dot = el("span", "rdot " + (r.scheduled ? "on" : "off"),
+    r.scheduled ? (r.external ? "● launchd" : "● scheduled") : "○ off");
+  if (r.job) dot.title = r.job + (r.scheduled ? " (loaded)" : " (not loaded)");
+  s.appendChild(dot);
   if (r.description) s.appendChild(el("div", "rdesc", esc(r.description)));
   d.appendChild(s);
 
@@ -6054,6 +6057,10 @@ function buildRoutineForm(r, isNew) {
   const en = el("md-switch"); en.selected = !!r.enabled;   // Lit re-applies pre-upgrade props
   enWrap.appendChild(en);
   enWrap.appendChild(document.createTextNode(" enabled (schedule via launchd)"));
+  if (r.external) {   // the server keeps this job's schedule on save
+    en.disabled = true; fCron.inp.disabled = true;
+    hint.textContent = "Schedule managed outside the Console by " + r.job + ".";
+  }
 
   const actions = el("div", "rt-actions");
   const save = el("button", null, "Save");

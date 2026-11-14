@@ -506,7 +506,7 @@ details.steps > summary {
 }
 details.steps > summary::-webkit-details-marker { display: none; }
 details.steps > summary::before {
-  content: "chevron_right"; font-family: "Material Symbols Sharp"; font-size: 14px; line-height: 1;
+  content: "chevron_right"; font-family: "Material Symbols Sharp"; font-size: 14px; line-height: 1; text-transform: none; letter-spacing: normal;
 }
 details.steps[open] > summary::before { content: "expand_more"; }
 details.steps > .steps-body { padding: 0 8px 4px; }
@@ -538,7 +538,7 @@ details.tool > summary.tool-head {
 details.tool > summary.tool-head::-webkit-details-marker { display: none; }
 details.tool > summary.tool-head::before {
   content: "chevron_right"; font-family: "Material Symbols Sharp";
-  font-size: 14px; line-height: 1; color: var(--dim);
+  font-size: 14px; line-height: 1; color: var(--dim); text-transform: none; letter-spacing: normal;
 }
 details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .tool .tname { font-weight: 700; }
@@ -630,7 +630,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .routine > summary::before {
   content: "chevron_right"; font-family: "Material Symbols Sharp";
   color: var(--teal); font-size: 12px; line-height: 1;
-  display: inline-block; vertical-align: -2px; margin-right: 3px;
+  display: inline-block; vertical-align: -2px; margin-right: 3px; text-transform: none; letter-spacing: normal;
 }
 .routine[open] > summary::before { content: "expand_more"; }
 .routine .rname { color: var(--text); font-size: 12px; }
@@ -670,9 +670,9 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
   color: var(--dim); font-size: 11px; text-transform: uppercase; margin: 12px 0 6px;
   cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px;
 }
-.capBody h4::before {
-  content: "expand_more"; font-family: "Material Symbols Sharp";
-  font-size: 12px; line-height: 1; color: var(--teal);
+.capBody h4::before {   /* text-transform: none, or the h4's uppercase turns the ligature into the word */
+  content: "expand_more"; font-family: "Material Symbols Sharp"; text-transform: none;
+  font-size: 12px; line-height: 1; color: var(--teal); letter-spacing: normal;
 }
 .capBody h4.collapsed::before { content: "chevron_right"; }
 .capBody h4.collapsed + * { display: none; }
@@ -716,7 +716,7 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
 .modelrow::before { content: ""; width: 15px; flex: 0 0 15px; display: inline-block; }
 .modelrow.sel::before {
   content: "check"; font-family: "Material Symbols Sharp";
-  font-size: 14px; line-height: 1; color: var(--teal);
+  font-size: 14px; line-height: 1; color: var(--teal); text-transform: none; letter-spacing: normal;
 }
 .modelnote { padding: 8px 12px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11px; }
 
