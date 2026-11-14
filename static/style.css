@@ -916,10 +916,12 @@ details.tool[open] > summary.tool-head::before { content: "expand_more"; }
    like the slash menu), plus the bubble image that rides a sent message */
 #attachPreview {
   position: absolute; left: 14px; bottom: calc(100% + 0px); z-index: 41;
-  display: flex; align-items: flex-start; gap: 6px; padding: 8px;
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding: 8px;
+  max-width: calc(100% - 28px); max-height: 40vh; overflow-y: auto;
   background: var(--md-sys-color-surface-container-low); border: 1px solid var(--line); border-bottom: 0;
 }
 #attachPreview[hidden] { display: none; }
+.attach-item { display: flex; align-items: flex-start; gap: 4px; }
 .attach-thumb { display: block; max-width: 120px; max-height: 90px; border: 1px solid var(--line); }
 .attach-x {
   background: var(--md-sys-color-surface-container-lowest); color: var(--dim); border: 1px solid var(--line);

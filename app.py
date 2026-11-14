@@ -724,6 +724,9 @@ _IMG_LIMIT = 5 * 1024 * 1024
 # Don't even attempt to decode/re-encode an absurdly large payload — this is an
 # 8 GB machine and a single huge image in RAM can hurt. (~64 MB raw bytes.)
 _IMG_DECODE_MAX = 64 * 1024 * 1024
+# Images per message. Each one is up to 5 MB of base64 on the CLI's stdin, so
+# the cap keeps one send from holding ~100 MB in RAM on this 8 GB machine.
+_IMG_MAX_COUNT = 20
 
 
 def _fit_image(raw, ext, limit):
@@ -2199,12 +2202,19 @@ def send(sid):
         return jsonify({"ok": False, "error": "no session"}), 404
     body = request.get_json(silent=True) or {}
     text = (body.get("text") or "").strip()
-    image_path = _save_pasted_image(body.get("image")) if body.get("image") else None
-    if body.get("image") and not image_path:
-        # Never send the text alone when the image was dropped: the reply would
+    # `images` is the composer's list of data URLs; `image` is the older
+    # single-image field (kept for any client that still sends it).
+    raw_imgs = body.get("images") if isinstance(body.get("images"), list) else []
+    if body.get("image"):
+        raw_imgs = [body.get("image"), *raw_imgs]
+    if len(raw_imgs) > _IMG_MAX_COUNT:
+        return jsonify({"ok": False, "error": "image", "too_many": _IMG_MAX_COUNT})
+    image_paths = [_save_pasted_image(d) for d in raw_imgs]
+    if not all(image_paths):
+        # Never send the text alone when an image was dropped: the reply would
         # answer a message the user did not write. The front end restores both.
         return jsonify({"ok": False, "error": "image"})
-    if not text and not image_path:
+    if not text and not image_paths:
         return jsonify({"ok": False, "error": "empty"}), 400
     # Auth slash commands (/login, /logout, /auth) can't run inside the headless
     # claude process — handle them out of band instead of forwarding to stdin.
@@ -2220,9 +2230,9 @@ def send(sid):
     if body.get("voice") and text:
         # A spoken turn: the chat shows what was said; the model also gets the
         # spoken-reply hint (voice.VOICE_HINT) so the answer suits the ear.
-        ok = s.send(text + "\n\n" + voice.VOICE_HINT, image_path=image_path, display=text)
+        ok = s.send(text + "\n\n" + voice.VOICE_HINT, image_paths=image_paths, display=text)
     else:
-        ok = s.send(text, image_path=image_path)
+        ok = s.send(text, image_paths=image_paths)
     _touch(s)   # the first send titles the chat
     _save_meta()
     return jsonify({"ok": ok, "title": s.title})

@@ -89,8 +89,10 @@ def messages(events, stop_seq=None):
         kind = ev.get("type")
         if kind == "user_text" and not ev.get("kind"):
             text = (ev.get("text") or "").strip()
-            if ev.get("image"):
-                text = (text + "\n" if text else "") + "[image attached]"
+            n_img = len(ev.get("images") or []) or (1 if ev.get("image") else 0)
+            if n_img:
+                text = (text + "\n" if text else "") + (
+                    "[image attached]" if n_img == 1 else f"[{n_img} images attached]")
             # A send that failed and was sent again shows up twice in a row
             # with no reply between; keep one copy.
             if text and not (out and out[-1][0] == "Alex" and out[-1][2] == text):

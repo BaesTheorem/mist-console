@@ -517,7 +517,7 @@ The gesture is owned by a tiny windowless background agent (`mist-hotkey-agent.p
 - [x] **Slash-command palette**: `/` autocomplete from the init `slash_commands` list.
 - [x] **Interrupt / stop**: Esc / stop button cancels an in-flight turn (`interrupt` control_request, no restart).
 - [x] **Diff viewer**: Edit/Write/MultiEdit render as red/green diffs; TodoWrite as a checklist.
-- [x] **Image paste**: clipboard + drag-drop attachments.
+- [x] **Image paste**: clipboard + drag-drop attachments, several images per message (`images` in `POST /send`; `tests/test_multi_image_send.py`).
 - [x] **Session list / resume**: dormant revival via `--resume <session_id>`.
 - [ ] **@-file mentions**: `@` path autocomplete in the composer.
 - [ ] **MIST voice**: speak responses via `mist-voice`; reactive avatar.
@@ -658,6 +658,7 @@ The phone is the same page, so a feature is on the phone the moment it ships, un
 | Text size | `textSize`, saved to the server so a wiped store keeps it | `textSizePhone`, local to the phone, default 100%; the Mac's size never reaches the phone; a window that crosses 760px switches lanes live |
 | Artifacts drawer | top-bar button | chat-details sheet, **Artifacts**, or swipe from the right edge |
 | Permission cards (Allow, Deny, Chat about this) and their **Why MIST asks** line | inline, plus a banner with the same buttons and the short reason in its subtitle | inline; the reason wraps (long paths break anywhere) and the button row wraps to a second line on a narrow screen |
+| Image attachments | paste or drop one or more images; each paste adds to the row of thumbnails above the composer, each thumbnail has its own remove button, up to 20 per message | the + picker takes several photos in one pick and adds them to the same row |
 | Inline images, audio, video, recipe cards, task checkboxes, progress bars, per-turn time stamps | inline | inline, same markup |
 | Recipe card table view (Cooking for Engineers) | toggle in the card header | same toggle; the header wraps to a second line, and the table scrolls sideways with the ingredient column pinned (`position: sticky`) |
 | 3D models | drag orbits, wheel zooms, double-click resets, tools on hover | a sideways drag orbits, a vertical drag scrolls the chat (`touch-action: pan-y`), pinch zooms, double-tap resets, tools always shown at 44px (`@media (hover: none)`) |

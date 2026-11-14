@@ -3169,8 +3169,10 @@ class Session {
         if (o.seq != null) this.setMsgSeq(ubody.parentNode, o.seq);
         ubody.parentNode._utext = o.text || "";
         if (window.MODS && !o.kind) MODS.siteUser(this, ubody.parentNode, o);
-        if (o.image) {
-          const html = imageThumbHTML(o.image, "pasted image");
+        // `images` holds every image of a multi-image send; `image` is the first
+        // (and the only field older logs have).
+        for (const src of (o.images && o.images.length ? o.images : (o.image ? [o.image] : []))) {
+          const html = imageThumbHTML(src, "pasted image");
           if (html) {
             const wrap = el("div", "user-img");
             wrap.innerHTML = html;
@@ -3411,7 +3413,7 @@ class Session {
   // Put an undelivered draft back where the user can see it: the live composer
   // if this chat is still active, else this chat's saved draft (so switching
   // chats mid-flight can't clobber the other chat's composer).
-  restoreDraft(text, image) {
+  restoreDraft(text, images) {
     if (this.active) {
       // Never clobber typing that happened after the send: a held/failed send
       // restoring "over" the next message in progress silently destroyed it.
@@ -3419,15 +3421,15 @@ class Session {
       const cur = input.value;
       input.value = cur && cur !== text ? (text || "") + (text ? "\n" : "") + cur
                                         : (text || "");
-      if (image) setPendingImage(image);
+      if (images && images.length) setPendingImages(images.concat(pendingImages));
       input.dispatchEvent(new Event("input"));   // re-grow the textarea
     } else {
       this.draft = this.draft && this.draft !== text
         ? (text || "") + (text ? "\n" : "") + this.draft : (text || "");
-      if (image) this.draftImage = image;
+      if (images && images.length) this.draftImages = images.concat(this.draftImages || []);
     }
   }
-  async send(text, image, restoreOnFail = true, extra = null) {
+  async send(text, images, restoreOnFail = true, extra = null) {
     // The user bubble is rendered from the broadcast user_text event (so it
     // also appears on replay); don't add it optimistically here.
     // `extra` merges into the request body (voice.js sends {voice: true}).
@@ -3439,23 +3441,24 @@ class Session {
     try {
       const r = await fetch("/send/" + this.id, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.assign({ text, image: image || undefined }, extra || {})),
+        body: JSON.stringify(Object.assign({ text, images: images && images.length ? images : undefined }, extra || {})),
       });
       const j = await r.json();
       if (j.held) {
         // Context-cost cap held this send. Restore the user's text + attachment
         // (both cleared optimistically) so nothing is lost, drop back to idle, and
         // explain. The next send overrides the cap on the backend.
-        this.restoreDraft(text, image);
+        this.restoreDraft(text, images);
         this.setStatus("idle", "idle");
         this.ctxNotice(j.reason, ["compact", "new"]);
         return false;
       }
       if (!j.ok) {
         this.notice(j.error === "image"
-          ? "Could not attach that image (unreadable, or too large to shrink under 5 MB)."
+          ? (j.too_many ? "Too many images: send at most " + j.too_many + " in one message."
+            : "Could not attach an image (unreadable, or too large to shrink under 5 MB).")
           : "Could not deliver message to Claude.", true);
-        if (restoreOnFail) this.restoreDraft(text, image);
+        if (restoreOnFail) this.restoreDraft(text, images);
       }
       if (j.title && this.title === "New chat") { this.title = j.title; renderTabs(); }
       return !!j.ok;
@@ -3463,7 +3466,7 @@ class Session {
       // Backend unreachable: nothing was queued and no user_text event will ever
       // render this message — put the draft back instead of silently eating it.
       this.notice("Send failed: " + err, true);
-      if (restoreOnFail) this.restoreDraft(text, image);
+      if (restoreOnFail) this.restoreDraft(text, images);
       this.setStatus("idle", "idle");
       return false;
     }
@@ -4607,7 +4610,7 @@ function switchTo(id) {
   renderTabs();
   // restore this chat's own draft + image attachment (neither bleeds across chats)
   input.value = s.draft || "";
-  setPendingImage(s.draftImage || null);
+  setPendingImages(s.draftImages || []);
   hideSlash();
   reportActiveChat();   // AirDropped photos follow the chat you switch to
   if (window.MODS) MODS.switched(s);   // this chat's status lines, panes, band, suggestion
@@ -5447,41 +5450,50 @@ function insertPaths(paths) {
 }
 function sendActive() {
   const text = input.value.trim();
-  const image = pendingImage;
-  if ((!text && !image) || !activeId) return;
+  const images = pendingImages.slice();
+  if ((!text && !images.length) || !activeId) return;
   // Slash commands are text-only; skip the local-command path when an image rides
   // along so an image attachment is never swallowed by a "/new"-style match.
-  if (text && !image && handleLocalCommand(text)) return;
+  if (text && !images.length && handleLocalCommand(text)) return;
   input.value = ""; growInput();
-  setPendingImage(null);
+  setPendingImages([]);
   const a = sessions.get(activeId);
   a.draft = "";
   if (window.VOICE && VOICE.on) VOICE.stopSpeaking(true);   // a typed turn cuts her off like a spoken one
-  a.send(text, image);
+  a.send(text, images);
 }
 
 /* ---------- composer image attachment (paste / drag-drop) ----------
-   pendingImage holds a data:image/... URL for the active composer; it's mirrored
-   onto the active session (draftImage) so it survives chat switches like a draft. */
-let pendingImage = null;
+   pendingImages holds the data:image/... URLs for the active composer, in the
+   order they were added. Each paste, drop or pick adds to the list; each
+   thumbnail has its own remove button. The list is mirrored onto the active
+   session (draftImages) so it survives chat switches like a draft. */
+let pendingImages = [];
 const attachPreview = $("#attachPreview");
-function setPendingImage(dataUrl) {
-  pendingImage = dataUrl || null;
+function setPendingImages(list) {
+  pendingImages = (list || []).filter(Boolean);
   const a = activeId && sessions.get(activeId);
-  if (a) a.draftImage = pendingImage;
+  if (a) a.draftImages = pendingImages.slice();
   if (typeof reflectSend === "function") reflectSend();
   if (!attachPreview) return;
   attachPreview.innerHTML = "";
-  if (!pendingImage) { attachPreview.hidden = true; return; }
-  const thumb = el("img", "attach-thumb");
-  thumb.src = pendingImage;
-  const x = el("button", "attach-x", '<span class="msi">close</span>');
-  x.type = "button";
-  x.title = "Remove attachment";
-  x.setAttribute("aria-label", "Remove attachment");
-  x.addEventListener("click", () => { setPendingImage(null); input.focus(); });
-  attachPreview.appendChild(thumb);
-  attachPreview.appendChild(x);
+  if (!pendingImages.length) { attachPreview.hidden = true; return; }
+  pendingImages.forEach((src, i) => {
+    const item = el("div", "attach-item");
+    const thumb = el("img", "attach-thumb");
+    thumb.src = src;
+    const x = el("button", "attach-x", '<span class="msi">close</span>');
+    x.type = "button";
+    x.title = "Remove attachment";
+    x.setAttribute("aria-label", "Remove attachment " + (i + 1));
+    x.addEventListener("click", () => {
+      setPendingImages(pendingImages.filter((_, j) => j !== i));
+      input.focus();
+    });
+    item.appendChild(thumb);
+    item.appendChild(x);
+    attachPreview.appendChild(item);
+  });
   attachPreview.hidden = false;
 }
 function fileToDataURL(file) {
@@ -5494,18 +5506,18 @@ function fileToDataURL(file) {
 }
 async function attachImageFile(file) {
   if (!file || !/^image\//.test(file.type || "")) return;
-  try { setPendingImage(await fileToDataURL(file)); }
+  // Read first, then append to the list as it is NOW: two files read in
+  // parallel must both land, not the second over the first.
+  try { const url = await fileToDataURL(file); setPendingImages(pendingImages.concat([url])); }
   catch (_) { if (activeId) sessions.get(activeId).notice("Couldn't read that image.", true); }
 }
 // Paste an image straight from the clipboard (screenshot, copied image, etc.).
 input.addEventListener("paste", (e) => {
-  const items = (e.clipboardData && e.clipboardData.items) || [];
-  for (const it of items) {
-    if (it.kind === "file" && (it.type || "").startsWith("image/")) {
-      const f = it.getAsFile();
-      if (f) { e.preventDefault(); attachImageFile(f); return; }
-    }
-  }
+  // One paste can carry several image files (copied from Finder); attach each.
+  const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+  const files = items.filter((it) => it.kind === "file" && (it.type || "").startsWith("image/"))
+    .map((it) => it.getAsFile()).filter(Boolean);
+  if (files.length) { e.preventDefault(); files.forEach(attachImageFile); }
 });
 // Drag an image file onto the composer to attach it.
 (function () {
@@ -5518,8 +5530,9 @@ input.addEventListener("paste", (e) => {
   ["dragleave", "dragend"].forEach((ev) => composer.addEventListener(ev, () => composer.classList.remove("drag")));
   composer.addEventListener("drop", (e) => {
     composer.classList.remove("drag");
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f && (f.type || "").startsWith("image/")) { e.preventDefault(); attachImageFile(f); }
+    const imgs = Array.from((e.dataTransfer && e.dataTransfer.files) || [])
+      .filter((f) => (f.type || "").startsWith("image/"));
+    if (imgs.length) { e.preventDefault(); imgs.forEach(attachImageFile); }
   });
 })();
 
@@ -5682,7 +5695,7 @@ const sendBtn = $("#sendBtn");
 function reflectSend() {
   const a = activeId && sessions.get(activeId);
   const busy = a && (a.statusState === "thinking" || a.statusState === "working");
-  const empty = !input.value.trim() && !pendingImage;
+  const empty = !input.value.trim() && !pendingImages.length;
   const stop = busy && empty;
   sendBtn.dataset.mode = stop ? "stop" : "send";
   // the phone shows one button: voice while the field is empty, send once it has text
@@ -6600,14 +6613,14 @@ $("#fileBtn").addEventListener("click", async () => {
 });
 hiddenFile.addEventListener("change", () => {
   const files = Array.from(hiddenFile.files);
-  const img = files.find((f) => /^image\//.test(f.type || ""));
+  const imgs = files.filter((f) => /^image\//.test(f.type || ""));
   // A phone has no paths MIST could read; a picked photo becomes the pending
   // image attachment instead, exactly like a pasted screenshot on the Mac.
   // Anything else picked on a phone (a video from the library) is uploaded
   // to the Mac, and its Mac path goes into the composer.
   if (isTouch()) {
-    if (img) attachImageFile(img);
-    files.filter((f) => f !== img).forEach(uploadToMac);
+    imgs.forEach(attachImageFile);
+    files.filter((f) => !imgs.includes(f)).forEach(uploadToMac);
   } else insertPaths(files.map((f) => f.name));
   hiddenFile.value = "";
 });

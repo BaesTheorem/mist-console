@@ -2271,7 +2271,7 @@ class ClaudeSession:
                 self._subscribers.remove(q)
 
     # ---- public api --------------------------------------------------------
-    def send(self, text, image_path=None, url=None, kind=None, display=None):
+    def send(self, text, image_path=None, url=None, kind=None, display=None, image_paths=None):
         """`kind` marks a Console control message (pause / resume): it is shown
         as `display` in a control chip and never titles the chat."""
         self.ensure_started()
@@ -2289,24 +2289,25 @@ class ClaudeSession:
             full = (text + "\n\n" if text else "") + f"[Current page: {url}]"
             display = (text + "\n" if text else "") + f"🔗 {url}"
         content = [{"type": "text", "text": full or "(see attachment)"}]
-        img_for_display = None
-        if image_path and os.path.exists(image_path):
+        paths = [p for p in [image_path, *(image_paths or [])] if p and os.path.exists(p)]
+        imgs_for_display = []
+        for p in paths:
             try:
                 import base64
-                ext = os.path.splitext(image_path)[1].lower().lstrip(".")
+                ext = os.path.splitext(p)[1].lower().lstrip(".")
                 media = {"jpg": "jpeg", "jpeg": "jpeg", "gif": "gif",
                          "webp": "webp"}.get(ext, "png")
-                with open(image_path, "rb") as f:
+                with open(p, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode()
                 content.append({"type": "image", "source": {
                     "type": "base64", "media_type": "image/" + media, "data": b64}})
                 # Hand the front-end the path so it renders an inline thumbnail
                 # (served via /file); falls back to a 📷 marker if it can't.
-                img_for_display = image_path
+                imgs_for_display.append(p)
             except Exception:
                 pass
         if not self.title and not kind:
-            t = text or "Screenshot" if image_path else (text or url or "New chat")
+            t = text or "Screenshot" if paths else (text or url or "New chat")
             self.title = (t[:40] + "…") if len(t) > 40 else t
         # Reserve the turn BEFORE broadcasting/writing, under the session lock:
         # once _turn_active is set the reaper (which checks it under the same
@@ -2323,8 +2324,11 @@ class ClaudeSession:
         ev = {"type": "user_text", "text": display}   # for live + replay
         if kind:
             ev["kind"] = kind
-        if img_for_display:
-            ev["image"] = img_for_display
+        if imgs_for_display:
+            # `image` (the first) stays for readers of older logs; `images` has all.
+            ev["image"] = imgs_for_display[0]
+            if len(imgs_for_display) > 1:
+                ev["images"] = imgs_for_display
         self._broadcast(ev)
         return self._write_user(content, ev.get("seq"))
 
