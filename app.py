@@ -497,14 +497,26 @@ def _load_meta():
         _save_meta()   # persist the recovered links/titles so the heal is one-time
 
 
-def _new_session(warm=True):
+_NEW_SID = re.compile(r"^s(\d{1,9})$")
+
+
+def _new_session(warm=True, want=None):
+    """Make a chat. `want` is an id the page got from /sessions/reserve and
+    already shows; it is used when it is still free, so the page keeps its chat.
+    A taken id (a server restart forgot the reservation and another create got
+    the number) gets a fresh one, and the page moves to that."""
     global _counter
     # Under the meta lock: two concurrent creates (quick-entry + the UI button)
     # racing the unguarded counter could mint the same sid and silently overwrite
     # one conversation with the other.
     with _meta_lock:
-        _counter += 1
-        sid = f"s{_counter}"
+        m = _NEW_SID.match(want) if isinstance(want, str) else None
+        if m and want not in _sessions and int(m.group(1)) <= _counter + 100:
+            sid = want
+            _counter = max(_counter, int(m.group(1)))
+        else:
+            _counter += 1
+            sid = f"s{_counter}"
         # Every new chat starts at DEFAULT_PERMISSION_MODE (bypass), full stop.
         # Switching one chat to a stricter mode is a decision about THAT piece of
         # work, not a new global default, so it deliberately does not carry over.
@@ -1244,11 +1256,24 @@ def search_chats():
 
 @app.route("/sessions", methods=["POST"])
 def create_session():
-    sid = _new_session()
+    sid = _new_session(want=(request.get_json(silent=True) or {}).get("id"))
     s = _sessions[sid]
     return jsonify({"id": sid, "title": "New chat",
                     "model": s.model or "", "permission_mode": s.permission_mode or "",
                     "effort": s.effort or ""})
+
+
+@app.route("/sessions/reserve", methods=["POST"])
+def reserve_session():
+    """Hand the page the id and the defaults of its next new chat, so the New
+    chat button can show the chat before POST /sessions answers. Nothing is
+    made here: an id that is never used is a gap in the numbers."""
+    global _counter
+    with _meta_lock:
+        _counter += 1
+        sid = f"s{_counter}"
+    return jsonify({"id": sid, "title": "New chat", "model": _new_chat_model() or "",
+                    "permission_mode": DEFAULT_PERMISSION_MODE or "", "effort": ""})
 
 
 @app.route("/sessions/<sid>", methods=["DELETE"])
@@ -2574,7 +2599,7 @@ def fleet():
 
 # ---- Front-end beacons -> data/metrics.jsonl (read by bin/console-health) -----
 METRICS_PATH = os.path.join(DATA_DIR, "metrics.jsonl")
-_METRIC_KINDS = {"boot", "switch", "reconnect", "stale"}
+_METRIC_KINDS = {"boot", "switch", "newchat", "reconnect", "stale"}
 _metrics_lock = threading.Lock()
 
 

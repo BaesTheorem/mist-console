@@ -1635,6 +1635,13 @@ class Session {
 
   connect() {
     if (this.connected) return;   // idempotent — first view wins
+    if (this._creating) {   // a new chat the server does not have yet (createSession)
+      if (!this._connectWait) {
+        this._connectWait = true;
+        this._creating.then((t) => { this._connectWait = false; if (t === this && !this._createFailed) this.connect(); });
+      }
+      return;
+    }
     this.connected = true;
     // A suspended chat (see suspend()) still holds its log. Its stream reopens
     // from the last event it saw, through the same resume an auto-reconnect
@@ -3433,6 +3440,12 @@ class Session {
     // The user bubble is rendered from the broadcast user_text event (so it
     // also appears on replay); don't add it optimistically here.
     // `extra` merges into the request body (voice.js sends {voice: true}).
+    if (this._createFailed) requestCreate(this);   // the POST for this new chat failed; try again
+    if (this._creating) {
+      const t = await this._creating;
+      if (t !== this) return t.send(text, images, restoreOnFail, extra);
+      if (!this.connected && this.active && !this._createFailed) this.connect();
+    }
     this.stick = true;   // sending always returns us to the live bottom
     this.setStatus("thinking", "thinking");
     this.lastActivity = Date.now();
@@ -4633,17 +4646,95 @@ function switchTo(id) {
   updateJumpBtn();
   if (!isTouch()) input.focus();   // on a phone this would raise the keyboard on every switch
 }
-async function createSession() {
+// A new chat shows before the server answers. The page holds one chat id that
+// the server reserved in advance, with the defaults a new chat starts on, so
+// the click builds the chat and switches to it in the same task. The POST that
+// makes the chat real runs behind it: on the Mac that is a few ms, on the phone
+// it is a full network round trip that the button used to wait for. connect(),
+// send() and closeSession() wait on s._creating, so nothing reaches the server
+// for a chat it does not have yet. With no spare (first boot, an older server,
+// the reservation still in flight) the button takes the old path and waits.
+let _spare = null;
+function reserveSpare() {
+  _spare = null;
+  fetch("/sessions/reserve", { method: "POST" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => { if (j && j.id && !sessions.has(j.id)) _spare = j; })
+    .catch(() => {});
+}
+function requestCreate(s) {
+  s._createFailed = false;
+  const settle = () => { if (s._creating === p) s._creating = null; };
+  const p = fetch("/sessions", { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify({ id: s.id }) })
+    .then((r) => r.json())
+    .then((j) => {
+      settle();
+      if (!j || !j.id) throw new Error("no id");
+      if (j.id !== s.id) return replaceProvisional(s, j);   // the id was taken (server restart); rare
+      if (!s.init) {   // the reservation's defaults can be stale after a CLI update
+        s.model = j.model || s.model; s.permMode = j.permission_mode || s.permMode; s.effort = j.effort || "";
+      }
+      if (s.active) {
+        if (!s.init) {
+          $("#model").textContent = s.model || "model —";
+          $("#perm").textContent = "perm: " + (s.permMode || "—");
+          $("#think").textContent = "think: " + effortLabel(s.effort);
+        }
+        saveLastChat(s.id); reportActiveChat();   // both were sent before the server knew the id
+      }
+      return s;
+    })
+    .catch(() => { settle(); s._createFailed = true; return s; });   // send() tries again
+  s._creating = p;
+  return p;
+}
+// The server made the chat under another id: move the reader and the draft to it.
+function replaceProvisional(s, j) {
+  let n = sessions.get(j.id);
+  if (!n) { n = new Session(j.id, j.title, j); sessions.set(j.id, n); }
+  const wasActive = s.active;
+  n.draft = wasActive ? input.value : (s.draft || "");
+  n.draftImages = wasActive ? pendingImages.slice() : s.draftImages;
+  if (wasActive) switchTo(n.id);
+  sessions.delete(s.id);
+  s.destroy();
+  renderTabs();
+  return n;
+}
+async function createSession(ev) {
+  const clickAt = ev && ev.timeStamp > 0 ? ev.timeStamp : null;
+  const t0 = clickAt != null ? clickAt : performance.now();
+  // "in" is how long the click waited for the main thread before this ran.
+  const beacon = (how) => requestAnimationFrame(() => metric("newchat", performance.now() - t0,
+    how + (clickAt != null ? " in=" + Math.round(Math.max(0, performance.now() - clickAt)) : "")));
+  const info = _spare;
+  if (info && !sessions.has(info.id)) {
+    _spare = null;
+    const s = new Session(info.id, "New chat", info);
+    requestCreate(s);
+    sessions.set(s.id, s);
+    switchTo(s.id);
+    beacon("fast");
+    reserveSpare();
+    return s;
+  }
   const r = await fetch("/sessions", { method: "POST" });
   const j = await r.json();
   const s = new Session(j.id, j.title, j);   // j carries the inherited model + perm mode
   sessions.set(j.id, s);
   switchTo(j.id);
+  beacon("post");
+  reserveSpare();
   return s;
 }
 async function closeSession(id) {
   const s = sessions.get(id);
   if (!s) return;
+  if (s._creating) {   // wait until the server has the chat, or the DELETE finds nothing
+    const t = await s._creating;
+    if (t !== s) return closeSession(t.id);
+  }
   await fetch("/sessions/" + id, { method: "DELETE" }).catch(() => {});
   s.destroy();
   sessions.delete(id);
@@ -7476,6 +7567,7 @@ async function boot() {
     await createSession();
   }
   bootGreeting();
+  if (!_spare) reserveSpare();   // the id the next New chat click uses
   UI_RELOAD.afterBoot();   // a watchdog or shell reload restores the chat and the draft
   if (!isTouch()) input.focus();   // a phone would open with the keyboard up
   shellReady();
@@ -7552,7 +7644,8 @@ async function syncSessions() {
   const connect = () => {
     if (es) es.close();
     es = new EventSource("/events");
-    es.onopen = () => { if (opens++) { syncSessions(); metric("reconnect", null, "events"); } };
+    // A reopened feed can mean a restarted server, which forgot the reserved id.
+    es.onopen = () => { if (opens++) { syncSessions(); reserveSpare(); metric("reconnect", null, "events"); } };
     es.onmessage = (m) => {
       let ev;
       try { ev = JSON.parse(m.data); } catch (_) { return; }
