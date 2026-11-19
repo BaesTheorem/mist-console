@@ -254,12 +254,15 @@ body.tab-dragging, body.tab-dragging .tab { cursor: grabbing; }
 .tab .dot.thinking { background: var(--violet); animation: dot-breathe 1.15s ease-in-out infinite; }
 .tab .dot.working { background: var(--teal); animation: dot-breathe 1.15s ease-in-out infinite; }
 .tab .dot.error { background: var(--err); }
-/* MIST's crystal (static/anims, optional): the header mark, the spinner glyph and the
-   markers of LIVE chats are animated WebPs; idle chats keep the flat rhombus above.
+/* MIST's crystal (static/anims, optional): the header mark, the spinner glyph and every
+   chat's rail marker are animated WebPs (the idle clip at rest, dimmed so the chats at
+   work stand out). The flat rhombus above shows when the pack is missing or turned off.
    The <img> is drawn larger than its box so the crystal itself matches the rhombus. */
 .tab .dot { width: 16px; height: 16px; flex-basis: 16px; clip-path: polygon(50% 8%, 75% 50%, 50% 92%, 25% 50%); }
 .tab .dot.live, #phoneStatus .ps-dot.live { clip-path: none; background: none !important; animation: none !important; overflow: visible; }
 .tab .dot.live img, #phoneStatus .ps-dot.live img { width: 26px; height: 26px; margin: -5px; display: block; }
+.tab .dot.idle.live img { opacity: .65; }
+.tab.active .dot.idle.live img { opacity: 1; }
 .crystal-hdr { width: 36px; height: 36px; display: block; margin: -6px 0; }
 .crystal-slot { display: block; }
 /* the animated wallpaper, when on: one <img> per clip, shown by display toggle (app.js slotShow) */

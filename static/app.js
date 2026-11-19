@@ -1296,7 +1296,7 @@ const crystalSrc = (anim, look) => "anims/" + (look || crystal.look) + "/" + ani
    Opacity is measured, not eyeballed, like the still one: composited over black the
    clips peak at luma 204-250 (celebrate the brightest), and .22 keeps the painted peak
    near the still logo's (#112635 at .40), so the contrast figures in style.css hold. */
-const WALL_DEFAULT_ON = false;   // the 256 px wallpaper is the largest animated surface; see the memory note above
+const WALL_KEY = "crystalWallOn";   // not the old "crystalWall": that key was opt-in while the wallpaper was off (2026-10-12 to 2026-11-19)
 const WALL_OPACITY = 0.22;
 const wallSrc = (src) => src.replace(/^anims\//, "anims/256/");
 /* Memory. Each animated WebP the page points at is decoded into frame buffers
@@ -1307,9 +1307,10 @@ const wallSrc = (src) => src.replace(/^anims\//, "anims/256/");
    graphics category of `footprint`). So no element ever changes its src again:
    a slot holds one <img> per clip it has shown, created on first use and kept,
    and showing a clip is a display toggle. The set is bounded by the number of
-   clips (11 states, a look or two). The wallpaper is the biggest surface and
-   is off unless crystalWall=1 in localStorage (see renderCrystalList). */
-crystal.wall = (() => { try { return localStorage.getItem("crystalWall") === "1"; } catch (_) { return WALL_DEFAULT_ON; } })();
+   clips (11 states, a look or two). The wallpaper is the biggest surface (a
+   256 px clip is 19-31 MB decoded) and is on unless Settings > crystal turns
+   it off (see renderCrystalList). */
+crystal.wall = (() => { try { return localStorage.getItem(WALL_KEY) !== "0"; } catch (_) { return true; } })();
 function slotShow(slot, src, cls, title) {
   if (!slot) return null;
   let want = null;
@@ -1402,34 +1403,41 @@ function crystalOneshot(anim) {
   crystal._oneshotUntil = Date.now() + (CRYSTAL_ONESHOT_MS[anim] || 2000);
   setTimeout(() => { crystal._oneshotUntil = 0; crystalRefresh(); }, CRYSTAL_ONESHOT_MS[anim] || 2000);
 }
-// A rail marker (or the phone chip's) for a chat in `state`: the flat rhombus for idle
-// chats (there can be a thousand of them), the animated crystal for the few that are live.
+// A rail marker for a chat in `state`: the animated crystal for every chat, the
+// idle clip at rest and the thinking clip while the chat works. The flat rhombus
+// stays as the mark when the pack is missing or animation is off.
+// The marker is a slot like the header (see the memory note above): one <img> per
+// clip it has shown, toggled by display, and renderTabs keeps each chat's marker
+// node across rebuilds, so no state flip and no rail rebuild decodes a clip again.
+// Every marker points at the same few URLs, which the web view decodes once each.
 function crystalDot(dot, state) {
-  const live = crystal.avail && crystal.on && (state === "thinking" || state === "working" || state === "bg" || state === "error");
-  let img = dot.querySelector("img");
-  if (!live) { if (img) img.remove(); dot.classList.remove("live"); return; }
-  // One clip for every live state at 26 px (thinking and loading are not told
-  // apart at that size), so a turn's tool-call flips never re-point the image.
-  const anim = state === "error" ? "error" : "thinking";
-  const src = crystalSrc(anim, state === "error" ? "ember" : crystal.look);
-  if (img && img.getAttribute("src") !== src) { img.remove(); img = null; }
-  if (!img) { img = el("img"); img.alt = ""; img.draggable = false; img.src = src; dot.appendChild(img); }
+  if (!(crystal.avail && crystal.on)) { dot.querySelectorAll("img").forEach((im) => im.remove()); dot.classList.remove("live"); return; }
+  // One clip for every busy state at 26 px (thinking and loading are not told
+  // apart at that size), so a turn's tool-call flips never change the clip.
+  const busy = state === "thinking" || state === "working" || state === "bg";
+  const anim = state === "error" ? "error" : busy ? "thinking" : "idle";
+  slotShow(dot, crystalSrc(anim, state === "error" ? "ember" : crystal.look));
   dot.classList.add("live");   // every time: setStatus rewrites className around this call
 }
 function crystalGlyph(state) {
   if (!crystal.avail || !crystal.on) return MIST_MARK;
   return '<img class="crystal-sp" alt="" draggable="false" src="' + crystalSrc("thinking") + '">';   // one clip: a src swap per tool call leaked frames
 }
-function setCrystalLook(look, on) {
-  if (look) crystal.look = CRYSTAL_LOOKS[look] ? look : "classic";
-  if (on != null) crystal.on = !!on;
-  try { localStorage.setItem("crystalLook", crystal.look); localStorage.setItem("crystalAnim", crystal.on ? "1" : "0"); } catch (_) {}
-  crystal.cur = ""; crystalRefresh();
+// Every rail marker again, from the state its classes carry: after the pack probe
+// answers (the rail renders before it) and after a look or on/off change.
+function crystalDotsRefresh() {
   document.querySelectorAll(".tab .dot").forEach((d) => {
     const st = d.classList.contains("bg") ? "bg" : d.classList.contains("thinking") ? "thinking"
       : d.classList.contains("working") ? "working" : d.classList.contains("error") ? "error" : "idle";
     crystalDot(d, st);
   });
+}
+function setCrystalLook(look, on) {
+  if (look) crystal.look = CRYSTAL_LOOKS[look] ? look : "classic";
+  if (on != null) crystal.on = !!on;
+  try { localStorage.setItem("crystalLook", crystal.look); localStorage.setItem("crystalAnim", crystal.on ? "1" : "0"); } catch (_) {}
+  crystal.cur = ""; crystalRefresh();
+  crystalDotsRefresh();
   document.querySelectorAll(".spinner .sv-glyph").forEach((g) => { g.innerHTML = crystalGlyph("thinking"); });
   if (typeof renderCrystalList === "function") renderCrystalList();
 }
@@ -2608,14 +2616,14 @@ class Session {
   // The rail rebuilds only on structural change, so this chat's marker is moved
   // in place: on a status flip, and when background work (tasks or live
   // progress bars) starts or stops. Untouched when the state is unchanged, so a
-  // live dot keeps its animated <img> (see the leak note in renderTabs).
+  // dot keeps its animated <img> (see the leak note in renderTabs).
   refreshDot() {
     const d = document.querySelector('.tab[data-sid="' + this.id + '"] .dot');
     if (!d) return;
     const n = this.activeCount();
     const st = n > 0 ? "bg" : this.statusState;
     const cls = "dot " + (n > 0 ? "working bg" : this.statusState);
-    if (d.className !== cls) { d.className = cls; crystalDot(d, st); }
+    if (d.className.replace(" live", "") !== cls) { d.className = cls; crystalDot(d, st); }
     d.title = n > 0 ? n + " running in background" : "";
   }
   // Background work the chat is doing right now: SDK background tasks plus
@@ -4201,9 +4209,10 @@ function renderTabs() {
       if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); switchTo(s.id); }
     });
     const bg = s.activeCount();
-    const dot = el("span", "dot " + (bg > 0 ? "working bg" : s.statusState));
+    const dot = s._dot || (s._dot = el("span"));   // kept across rebuilds: a new node is a new <img> (see crystalDot)
+    dot.className = "dot " + (bg > 0 ? "working bg" : s.statusState);
     crystalDot(dot, bg > 0 ? "bg" : s.statusState);
-    if (bg > 0) dot.title = bg + " running in background";
+    dot.title = bg > 0 ? bg + " running in background" : "";
     t.appendChild(dot);
     t.appendChild(el("span", "ttitle", esc(s.title)));
     if (!s.archived) {
@@ -5892,10 +5901,10 @@ function renderCrystalList() {
   list.appendChild(tog);
   if (crystal.wallAvail) {
     const wall = el("div", "modelrow" + (crystal.wall ? " sel" : ""),
-      crystal.wall ? "Animated wallpaper · on (uses graphics memory) · click for the still one" : "Wallpaper · still · click to animate it");
+      crystal.wall ? "Animated wallpaper · on · click for the still one" : "Wallpaper · still · click to animate it");
     wall.addEventListener("click", () => {
       crystal.wall = !crystal.wall;
-      try { localStorage.setItem("crystalWall", crystal.wall ? "1" : "0"); } catch (_) {}
+      try { localStorage.setItem(WALL_KEY, crystal.wall ? "1" : "0"); } catch (_) {}
       crystal.cur = ""; crystal.wallCur = ""; crystalRefresh(); renderCrystalList();
     });
     list.appendChild(wall);
@@ -5920,6 +5929,7 @@ function renderCrystalList() {
     crystal.avail = true;
     renderCrystalList();
     crystalRefresh();
+    crystalDotsRefresh();
     crystalOneshot("appear");
     setInterval(crystalRefresh, 1000);   // moods and holds expire on their own clock
   };
