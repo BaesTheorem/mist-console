@@ -1403,9 +1403,9 @@ function crystalOneshot(anim) {
   crystal._oneshotUntil = Date.now() + (CRYSTAL_ONESHOT_MS[anim] || 2000);
   setTimeout(() => { crystal._oneshotUntil = 0; crystalRefresh(); }, CRYSTAL_ONESHOT_MS[anim] || 2000);
 }
-// A rail marker for a chat in `state`: the animated crystal for every chat, the
-// idle clip at rest and the thinking clip while the chat works. The flat rhombus
-// stays as the mark when the pack is missing or animation is off.
+// A rail marker for a chat in `state`: the animated crystal while the chat works
+// or shows an error, the still flat rhombus for a chat at rest (Alex, 2026-11-19:
+// inactive chats do not animate) and when the pack is missing or animation is off.
 // The marker is a slot like the header (see the memory note above): one <img> per
 // clip it has shown, toggled by display, and renderTabs keeps each chat's marker
 // node across rebuilds, so no state flip and no rail rebuild decodes a clip again.
@@ -1415,8 +1415,8 @@ function crystalDot(dot, state) {
   // One clip for every busy state at 26 px (thinking and loading are not told
   // apart at that size), so a turn's tool-call flips never change the clip.
   const busy = state === "thinking" || state === "working" || state === "bg";
-  const anim = state === "error" ? "error" : busy ? "thinking" : "idle";
-  slotShow(dot, crystalSrc(anim, state === "error" ? "ember" : crystal.look));
+  if (!busy && state !== "error") { slotHide(dot); dot.classList.remove("live"); return; }   // hidden, not removed: the clip stays decoded for the next turn
+  slotShow(dot, crystalSrc(state === "error" ? "error" : "thinking", state === "error" ? "ember" : crystal.look));
   dot.classList.add("live");   // every time: setStatus rewrites className around this call
 }
 function crystalGlyph(state) {
